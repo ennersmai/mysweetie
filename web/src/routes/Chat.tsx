@@ -270,7 +270,15 @@ export default function Chat() {
     try {
 		const res = await authFetch('/chat', {
         method: 'POST',
-			body: JSON.stringify({ characterId, conversationId: conversationToUse, message: userMsg.content, voice: voiceEnabled, modelKey, voiceKey, fantasyMode }),
+			body: JSON.stringify({ 
+        characterId, 
+        conversationId: conversationToUse || null, 
+        message: userMsg.content, 
+        voice: voiceEnabled, 
+        modelKey, 
+        voiceKey, 
+        fantasyMode 
+      }),
       });
       if (res.status === 429) {
         const data = await res.json().catch(() => ({} as any));
@@ -494,7 +502,12 @@ export default function Chat() {
                           setPlayingIndex(i);
                           const res = await authFetch('/tts', {
                             method: 'POST',
-                            body: JSON.stringify({ text: m.content, voiceKey, characterId, conversationId: currentConversationId }),
+                            body: JSON.stringify({ 
+                              text: m.content, 
+                              voiceKey, 
+                              characterId, 
+                              conversationId: currentConversationId || null 
+                            }),
                           });
                           const json = await res.json();
                           if (json?.audioBase64) {
