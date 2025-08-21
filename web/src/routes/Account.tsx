@@ -191,10 +191,10 @@ export default function Account() {
                     <img
                       src={conv.character.avatar_url}
                       alt={conv.character.name}
-                      className="h-10 w-10 rounded-full object-cover ring-2 ring-pink-500/30"
+                      className="h-12 w-16 rounded-lg object-cover ring-2 ring-pink-500/30"
                     />
                   ) : (
-                    <div className="h-10 w-10 rounded-full bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/30" />
+                    <div className="h-12 w-16 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/30" />
                   )}
                   <div className="flex-1">
                     <div className="flex items-center justify-between">

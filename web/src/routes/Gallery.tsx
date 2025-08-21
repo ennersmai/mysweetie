@@ -63,9 +63,9 @@ export default function Gallery() {
             }`}
           >
             {c.avatar_url ? (
-              <img src={c.avatar_url} alt={c.name} className="h-16 w-16 rounded-full object-cover" />
+              <img src={c.avatar_url} alt={c.name} className="h-16 w-20 rounded-lg object-cover" />
             ) : (
-              <div className="h-16 w-16 rounded-full bg-gradient-to-br from-pink-400 to-purple-600" />
+              <div className="h-16 w-20 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600" />
             )}
             <div className="flex-1">
               <div className="font-medium text-white">{c.name}</div>

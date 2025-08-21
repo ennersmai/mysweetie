@@ -345,9 +345,9 @@ export default function Chat() {
           {/* Character card */}
           <div className="mb-4 flex items-center gap-3">
             {character?.avatar_url ? (
-              <img src={character.avatar_url} alt={character.name} className="h-12 w-12 rounded-full object-cover ring-2 ring-pink-500/40" />
+              <img src={character.avatar_url} alt={character.name} className="h-16 w-20 rounded-lg object-cover ring-2 ring-pink-500/40" />
             ) : (
-              <div className="h-12 w-12 rounded-full bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
+              <div className="h-16 w-20 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
             )}
             <div>
               <div className="font-medium text-white">{character?.name ?? 'Character'}</div>
