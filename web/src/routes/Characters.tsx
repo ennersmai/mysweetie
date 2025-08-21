@@ -42,17 +42,17 @@ export default function Characters() {
               <div className="relative">
                 {c.avatar_url ? (
                   <>
-                    <img src={c.avatar_url} alt={c.name} className="h-24 w-32 rounded-lg object-cover ring-2 ring-pink-500/40" />
+                    <img src={c.avatar_url} alt={c.name} className="h-32 w-40 rounded-lg object-cover ring-2 ring-pink-500/40" />
                     <img
                       src={c.avatar_url}
                       alt={c.name}
-                      className="pointer-events-none absolute -top-6 left-20 hidden h-44 w-56 rounded-2xl object-cover ring-2 ring-pink-500/40 opacity-0 shadow-2xl transition duration-200 group-hover:opacity-100 sm:block z-20"
+                      className="pointer-events-none absolute -top-8 left-24 hidden h-52 w-64 rounded-2xl object-cover ring-2 ring-pink-500/40 opacity-0 shadow-2xl transition duration-200 group-hover:opacity-100 sm:block z-20"
                     />
                   </>
                 ) : (
                   <>
-                    <div className="h-24 w-32 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
-                    <div className="pointer-events-none absolute -top-6 left-20 hidden h-44 w-56 rounded-2xl bg-gradient-to-br from-pink-400 to-purple-600 opacity-0 ring-2 ring-pink-500/40 shadow-2xl transition duration-200 group-hover:opacity-100 sm:block z-20" />
+                    <div className="h-32 w-40 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
+                    <div className="pointer-events-none absolute -top-8 left-24 hidden h-52 w-64 rounded-2xl bg-gradient-to-br from-pink-400 to-purple-600 opacity-0 ring-2 ring-pink-500/40 shadow-2xl transition duration-200 group-hover:opacity-100 sm:block z-20" />
                   </>
                 )}
               </div>
