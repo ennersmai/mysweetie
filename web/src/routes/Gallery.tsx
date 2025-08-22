@@ -96,7 +96,7 @@ export default function Gallery() {
             disabled={!it.url}
           >
             {it.url ? (
-              <img src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-cover transition hover:brightness-110" />
+              <img src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-contain bg-white/5 transition hover:brightness-110" />
             ) : (
               <div className="flex w-full aspect-[3/4] items-center justify-center bg-white/10 text-xs text-white/70">Premium</div>
             )}

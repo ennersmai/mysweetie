@@ -13,6 +13,7 @@ import Admin from './routes/Admin';
 import Tos from './routes/Tos';
 import Footer from './components/Footer';
 import AgeGate from './components/AgeGate';
+import ProtectedRoute from './components/ProtectedRoute';
 
 function HeaderNav() {
   const { user } = useAuth();
@@ -56,19 +57,19 @@ export default function App() {
             <HeaderNav />
             <div className="mx-auto w-full max-w-7xl px-2 py-4 sm:px-4">
               <main className="pb-8">
-                <Routes>
-                  <Route path="/" element={<Home />} />
-                  <Route path="/login" element={<Login />} />
-                  <Route path="/characters" element={<Characters />} />
-                  <Route path="/characters/new" element={<NewCharacter />} />
-                  <Route path="/chat/:characterId" element={<Chat />} />
-                  <Route path="/chat/:characterId/:conversationId" element={<Chat />} />
-                  <Route path="/gallery" element={<Gallery />} />
-                  <Route path="/subscribe" element={<Subscribe />} />
-                  <Route path="/account" element={<Account />} />
-                  <Route path="/admin" element={<Admin />} />
-                  <Route path="/tos" element={<Tos />} />
-                </Routes>
+                              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/login" element={<Login />} />
+                <Route path="/tos" element={<Tos />} />
+                <Route path="/characters" element={<ProtectedRoute><Characters /></ProtectedRoute>} />
+                <Route path="/characters/new" element={<ProtectedRoute><NewCharacter /></ProtectedRoute>} />
+                <Route path="/chat/:characterId" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+                <Route path="/chat/:characterId/:conversationId" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+                <Route path="/gallery" element={<ProtectedRoute><Gallery /></ProtectedRoute>} />
+                <Route path="/subscribe" element={<ProtectedRoute><Subscribe /></ProtectedRoute>} />
+                <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
+                <Route path="/admin" element={<ProtectedRoute><Admin /></ProtectedRoute>} />
+              </Routes>
               </main>
             </div>
             <Footer />
