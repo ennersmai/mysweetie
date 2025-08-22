@@ -35,40 +35,38 @@ export default function Characters() {
       </div>
       {loading && <p className="text-gray-300">Loading…</p>}
       {error && <p className="text-red-400">{error}</p>}
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
         {characters.map((c) => (
           <div key={c.id} className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/5 shadow-lg transition hover:bg-white/10 hover:shadow-xl">
-            <div className="flex flex-col h-full">
+            <div className="flex flex-col">
               {/* Character Image Container */}
-              <div className="relative overflow-hidden rounded-t-xl bg-white/5 p-3">
+              <div className="relative overflow-hidden bg-white/5 p-2">
                 {c.avatar_url ? (
                   <img 
                     src={c.avatar_url} 
                     alt={c.name} 
-                    className="w-full h-64 object-contain rounded-lg ring-2 ring-pink-500/40" 
+                    className="w-full aspect-[3/4] object-contain rounded-lg ring-2 ring-pink-500/40" 
                   />
                 ) : (
-                  <div className="w-full h-64 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
+                  <div className="w-full aspect-[3/4] rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
                 )}
               </div>
               
               {/* Character Info */}
-              <div className="flex-1 p-4 flex flex-col">
-                <div className="flex-1">
-                  <h3 className="font-semibold text-white text-lg mb-2 text-center">{c.name}</h3>
-                  {c.description && (
-                    <p className="text-sm text-gray-300 line-clamp-3 leading-relaxed text-center mb-4">
-                      {c.description}
-                    </p>
-                  )}
-                </div>
+              <div className="p-3 flex flex-col">
+                <h3 className="font-medium text-white text-sm mb-2 text-center line-clamp-1">{c.name}</h3>
+                {c.description && (
+                  <p className="text-xs text-gray-300 line-clamp-2 leading-relaxed text-center mb-3">
+                    {c.description}
+                  </p>
+                )}
                 
                 {/* Chat Button */}
                 <Link 
                   to={`/chat/${c.id}`} 
-                  className="w-full rounded-lg bg-gradient-to-r from-pink-500 to-purple-600 px-4 py-3 text-white font-medium shadow transition hover:brightness-110 hover:shadow-lg text-center transform hover:scale-105"
+                  className="w-full rounded-lg bg-gradient-to-r from-pink-500 to-purple-600 px-3 py-2 text-white text-sm font-medium shadow transition hover:brightness-110 text-center"
                 >
-                  💬 Start Chat
+                  Chat
                 </Link>
               </div>
             </div>
