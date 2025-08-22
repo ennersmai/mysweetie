@@ -87,7 +87,29 @@ ELEVENLABS_API_KEY=your_elevenlabs_api_key
 1. Clone the repository
 2. Install dependencies: `cd web && npm install`
 3. Set up environment variables
-4. Run development server: `npm run dev`
+4. Set up Supabase storage buckets (see Storage Setup below)
+5. Run development server: `npm run dev`
+
+## Storage Setup
+
+To set up the gallery feature, you need to create storage buckets in Supabase:
+
+1. Go to your Supabase Dashboard → Storage
+2. Create two buckets:
+   - `avatars` (for character profile pictures)
+   - `galleries` (for character gallery images)
+3. Set both buckets to **public** (or configure appropriate policies)
+
+### Gallery Upload
+
+1. Navigate to `/admin` in your app (requires login)
+2. Select a character from the dropdown
+3. Choose image files to upload
+4. Add optional captions
+5. Mark as preview if needed (non-premium users only see preview images)
+6. Upload the images
+
+The gallery will automatically display uploaded images with proper access control.
 
 ## License
 

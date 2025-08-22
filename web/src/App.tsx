@@ -8,6 +8,7 @@ import Gallery from './routes/Gallery';
 import Subscribe from './routes/Subscribe';
 import Account from './routes/Account';
 import NewCharacter from './routes/NewCharacter';
+import Admin from './routes/Admin';
 import Tos from './routes/Tos';
 import Footer from './components/Footer';
 
@@ -28,7 +29,10 @@ function HeaderNav() {
             <span className="rounded-full bg-gradient-to-r from-pink-500 to-purple-600 px-3 py-1 text-white shadow">Upgrade</span>
           </NavLink>
           {user ? (
-            <NavLink to="/account" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Account</NavLink>
+            <>
+              <NavLink to="/account" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Account</NavLink>
+              <NavLink to="/admin" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Admin</NavLink>
+            </>
           ) : (
             <NavLink to="/login" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Login</NavLink>
           )}
@@ -55,6 +59,7 @@ export default function App() {
               <Route path="/gallery" element={<Gallery />} />
               <Route path="/subscribe" element={<Subscribe />} />
               <Route path="/account" element={<Account />} />
+              <Route path="/admin" element={<Admin />} />
               <Route path="/tos" element={<Tos />} />
             </Routes>
           </main>
