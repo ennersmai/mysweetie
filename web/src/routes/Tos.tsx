@@ -138,6 +138,96 @@ export default function Tos() {
             </a>
           </p>
         </section>
+
+        <div className="border-t-2 border-pink-500/30 pt-8 mt-12"></div>
+
+        {/* Refund & Cancellation Policy Section */}
+        <div className="space-y-8">
+          <div>
+            <h1 className="mb-4 text-3xl font-semibold text-white">Refund & Cancellation Policy</h1>
+            <p className="mb-6 text-sm text-gray-300">Effective Date: {new Date().toLocaleDateString()}</p>
+            
+            <div className="text-gray-300 mb-8">
+              <p>
+                At MySweetie.AI, we are committed to providing our users with a high-quality, engaging service. This Refund & Cancellation Policy outlines how payments, renewals, cancellations, and refunds are handled. By subscribing to or purchasing from MySweetie.AI, you agree to this policy.
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">1. Subscriptions & Billing</h2>
+            <div className="space-y-2 ml-4">
+              <p>• All subscriptions (Basic and Premium) are billed automatically on a recurring basis (monthly, unless otherwise stated).</p>
+              <p>• Subscriptions will auto-renew at the end of each billing cycle unless cancelled in advance.</p>
+              <p>• Your payment method on file will be charged automatically by our payment processor (Stripe).</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">2. Cancellations</h2>
+            <div className="space-y-2 ml-4">
+              <p>• You may cancel your subscription at any time through your account settings.</p>
+              <p>• Cancellation will stop the next billing cycle. You will continue to have access until the end of your current paid period.</p>
+              <p>• To avoid being charged for the next period, you must cancel before the renewal date.</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">3. Refunds</h2>
+            <div className="space-y-2 ml-4">
+              <p>• Digital services are non-refundable once accessed or used (including AI chat, voice, or gallery features).</p>
+              <p>• We do not offer partial refunds for unused time in a billing cycle.</p>
+              <p className="mt-3 mb-2">• Refunds may only be considered in the following cases:</p>
+              <div className="ml-4 space-y-1">
+                <p>• Duplicate payment/accidental double charge.</p>
+                <p>• Technical issues on our side that prevent you from accessing the service (and cannot be resolved within a reasonable time).</p>
+                <p>• Fraudulent or unauthorized transactions (must be verified with Stripe or your bank).</p>
+              </div>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">4. One-Time Purchases</h2>
+            <div className="space-y-2 ml-4">
+              <p>• Unlocks (such as galleries, voice add-ons, or bonus features) are final and non-refundable once delivered.</p>
+              <p>• Please review carefully before purchasing.</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">5. Chargebacks & Disputes</h2>
+            <div className="space-y-2 ml-4">
+              <p>• Filing a chargeback with your bank without contacting us first may result in suspension or termination of your account.</p>
+              <p>• We encourage users to contact our support team at{' '}
+                <a href="mailto:support@mysweetie.ai" className="text-pink-400 hover:text-pink-300 underline">
+                  support@mysweetie.ai
+                </a>
+                {' '}before escalating a dispute.</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">6. Contact Us</h2>
+            <p>
+              If you believe you are entitled to a refund under this policy, or wish to cancel, please contact us at:{' '}
+              <a href="mailto:support@mysweetie.ai" className="text-pink-400 hover:text-pink-300 underline">
+                support@mysweetie.ai
+              </a>
+            </p>
+          </section>
+        </div>
       </div>
     </section>
   );
