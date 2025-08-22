@@ -71,9 +71,9 @@ export default function Gallery() {
             }`}
           >
             {c.avatar_url ? (
-              <img src={c.avatar_url} alt={c.name} className="h-16 w-20 rounded-lg object-cover" />
+              <img src={c.avatar_url} alt={c.name} className="w-16 aspect-[3/4] rounded-lg object-contain bg-white/5 ring-2 ring-pink-500/40" />
             ) : (
-              <div className="h-16 w-20 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600" />
+              <div className="w-16 aspect-[3/4] rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
             )}
             <div className="flex-1">
               <div className="font-medium text-white">{c.name}</div>
@@ -82,12 +82,12 @@ export default function Gallery() {
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {items.map((it, i) => (
           <button
             key={i}
             type="button"
-            className="overflow-hidden rounded border border-white/10 focus:outline-none"
+            className="overflow-hidden rounded-xl border border-white/10 bg-white/5 shadow-lg transition hover:bg-white/10 hover:shadow-xl focus:outline-none"
             onClick={() => {
               if (!it.url) return;
               setLightboxUrl(it.url);
@@ -95,11 +95,13 @@ export default function Gallery() {
             }}
             disabled={!it.url}
           >
-            {it.url ? (
-              <img src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-contain bg-white/5 transition hover:brightness-110" />
-            ) : (
-              <div className="flex w-full aspect-[3/4] items-center justify-center bg-white/10 text-xs text-white/70">Premium</div>
-            )}
+            <div className="p-3">
+              {it.url ? (
+                <img src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-contain bg-white/5 rounded-lg ring-2 ring-pink-500/40 transition hover:brightness-110" />
+              ) : (
+                <div className="flex w-full aspect-[3/4] items-center justify-center bg-white/10 rounded-lg text-xs text-white/70">Premium</div>
+              )}
+            </div>
           </button>
         ))}
       </div>
