@@ -1,4 +1,5 @@
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
+import { useState } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Home from './routes/Home';
 import Login from './routes/Login';
@@ -11,6 +12,7 @@ import NewCharacter from './routes/NewCharacter';
 import Admin from './routes/Admin';
 import Tos from './routes/Tos';
 import Footer from './components/Footer';
+import AgeGate from './components/AgeGate';
 
 function HeaderNav() {
   const { user } = useAuth();
@@ -40,9 +42,15 @@ function HeaderNav() {
 }
 
 export default function App() {
+  const [ageGateAccepted, setAgeGateAccepted] = useState(false);
+
   return (
     <AuthProvider>
-m      <div className="text-gray-100">
+      <div className="text-gray-100">
+        {/* Age Gate Overlay */}
+        <AgeGate onAccept={() => setAgeGateAccepted(true)} />
+        
+        {/* Main App Content */}
         <HeaderNav />
         <div className="mx-auto w-full max-w-7xl px-2 py-4 sm:px-4">
           <main className="pb-8">

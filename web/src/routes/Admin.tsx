@@ -9,6 +9,15 @@ type Character = {
   avatar_url: string | null;
 };
 
+type GalleryImage = {
+  id: string;
+  character_id: string;
+  image_path: string;
+  caption: string | null;
+  is_preview: boolean;
+  url: string;
+};
+
 export default function Admin() {
   const { user } = useAuth();
   const [characters, setCharacters] = useState<Character[]>([]);
@@ -19,6 +28,9 @@ export default function Admin() {
   const [uploading, setUploading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [galleryImages, setGalleryImages] = useState<GalleryImage[]>([]);
+  const [loadingGallery, setLoadingGallery] = useState<boolean>(false);
+  const [selectedManageCharacterId, setSelectedManageCharacterId] = useState<string>('');
 
   useEffect(() => {
     const loadCharacters = async () => {
@@ -33,12 +45,73 @@ export default function Admin() {
         setCharacters(data || []);
         if (data && data.length > 0) {
           setSelectedCharacterId(data[0].id);
+          setSelectedManageCharacterId(data[0].id);
         }
       }
     };
 
     loadCharacters();
   }, []);
+
+  const loadGalleryImages = async (characterId: string) => {
+    if (!characterId) return;
+    
+    setLoadingGallery(true);
+    try {
+      const { data, error } = await supabase
+        .from('character_galleries')
+        .select('*')
+        .eq('character_id', characterId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const imagesWithUrls = (data || []).map(img => ({
+        ...img,
+        url: supabase.storage.from('galleries').getPublicUrl(img.image_path).data.publicUrl
+      }));
+
+      setGalleryImages(imagesWithUrls);
+    } catch (err: any) {
+      setError(`Failed to load gallery images: ${err.message}`);
+    } finally {
+      setLoadingGallery(false);
+    }
+  };
+
+  const deleteGalleryImage = async (imageId: string, imagePath: string) => {
+    try {
+      // Delete from storage
+      const { error: storageError } = await supabase.storage
+        .from('galleries')
+        .remove([imagePath]);
+
+      if (storageError) throw storageError;
+
+      // Delete from database
+      const { error: dbError } = await supabase
+        .from('character_galleries')
+        .delete()
+        .eq('id', imageId);
+
+      if (dbError) throw dbError;
+
+      setMessage('Image deleted successfully!');
+      
+      // Reload gallery images
+      if (selectedManageCharacterId) {
+        loadGalleryImages(selectedManageCharacterId);
+      }
+    } catch (err: any) {
+      setError(`Failed to delete image: ${err.message}`);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedManageCharacterId) {
+      loadGalleryImages(selectedManageCharacterId);
+    }
+  }, [selectedManageCharacterId]);
 
   const handleUpload = async (e: FormEvent) => {
     e.preventDefault();
@@ -225,6 +298,73 @@ export default function Admin() {
           <li>• Check "Mark as preview" if these should be preview images</li>
           <li>• Click "Upload Images" to add them to the gallery</li>
         </ul>
+      </div>
+
+      {/* Gallery Management Section */}
+      <div className="mt-12 border-t border-white/10 pt-8">
+        <h3 className="mb-4 text-xl font-semibold text-white">Manage Gallery Images</h3>
+        
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-white mb-2">
+            Select Character to Manage
+          </label>
+          <select
+            value={selectedManageCharacterId}
+            onChange={(e) => setSelectedManageCharacterId(e.target.value)}
+            className="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-white focus:border-pink-500 focus:outline-none"
+          >
+            <option value="">Select a character...</option>
+            {characters.map((char) => (
+              <option key={char.id} value={char.id} className="bg-gray-900">
+                {char.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {loadingGallery && (
+          <p className="text-gray-300">Loading gallery images...</p>
+        )}
+
+        {selectedManageCharacterId && !loadingGallery && (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+            {galleryImages.map((image) => (
+              <div key={image.id} className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/5">
+                <img 
+                  src={image.url} 
+                  alt={image.caption || 'Gallery image'} 
+                  className="w-full aspect-[3/4] object-cover"
+                />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center">
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Are you sure you want to delete this image?')) {
+                        deleteGalleryImage(image.id, image.image_path);
+                      }
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-lg text-sm font-medium"
+                  >
+                    Delete
+                  </button>
+                </div>
+                {image.caption && (
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-2">
+                    <p className="text-xs text-white truncate">{image.caption}</p>
+                  </div>
+                )}
+                {image.is_preview && (
+                  <div className="absolute top-2 left-2 bg-pink-500 text-white px-2 py-1 rounded text-xs font-medium">
+                    Preview
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {selectedManageCharacterId && !loadingGallery && galleryImages.length === 0 && (
+          <p className="text-gray-300">No gallery images found for this character.</p>
+        )}
       </div>
     </section>
   );
