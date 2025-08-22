@@ -88,9 +88,9 @@ export default function Gallery() {
             disabled={!it.url}
           >
             {it.url ? (
-              <img src={it.url} className="h-40 w-full cursor-zoom-in object-cover transition hover:brightness-110" />
+              <img src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-cover transition hover:brightness-110" />
             ) : (
-              <div className="flex h-40 w-full items-center justify-center bg-white/10 text-xs text-white/70">Premium</div>
+              <div className="flex w-full aspect-[3/4] items-center justify-center bg-white/10 text-xs text-white/70">Premium</div>
             )}
           </button>
         ))}
@@ -104,8 +104,8 @@ export default function Gallery() {
             setLightboxCaption(null);
           }}
         >
-          <div className="max-h-[90vh] max-w-[95vw]" onClick={(e) => e.stopPropagation()}>
-            <img src={lightboxUrl} alt={lightboxCaption ?? ''} className="max-h-[90vh] max-w-[95vw] rounded-lg object-contain" />
+          <div className="max-h-[70vh] max-w-[95vw]" onClick={(e) => e.stopPropagation()}>
+            <img src={lightboxUrl} alt={lightboxCaption ?? ''} className="max-h-[70vh] max-w-[95vw] rounded-lg object-contain" />
             {lightboxCaption && (
               <div className="mt-2 text-center text-sm text-white/80">{lightboxCaption}</div>
             )}

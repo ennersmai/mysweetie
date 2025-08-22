@@ -29,10 +29,7 @@ function HeaderNav() {
             <span className="rounded-full bg-gradient-to-r from-pink-500 to-purple-600 px-3 py-1 text-white shadow">Upgrade</span>
           </NavLink>
           {user ? (
-            <>
-              <NavLink to="/account" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Account</NavLink>
-              <NavLink to="/admin" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Admin</NavLink>
-            </>
+            <NavLink to="/account" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Account</NavLink>
           ) : (
             <NavLink to="/login" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Login</NavLink>
           )}
@@ -45,9 +42,9 @@ function HeaderNav() {
 export default function App() {
   return (
     <AuthProvider>
-      <div className="min-h-screen text-gray-100 flex flex-col">
+m      <div className="text-gray-100">
         <HeaderNav />
-        <div className="mx-auto w-full max-w-7xl px-2 py-1 sm:px-4 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-7xl px-2 py-4 sm:px-4">
           <main className="pb-8">
             <Routes>
               <Route path="/" element={<Home />} />

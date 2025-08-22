@@ -35,7 +35,7 @@ export default function Characters() {
       </div>
       {loading && <p className="text-gray-300">Loading…</p>}
       {error && <p className="text-red-400">{error}</p>}
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 pb-8">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 mb-20">
         {characters.map((c) => (
           <div key={c.id} className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/5 shadow-lg transition hover:bg-white/10 hover:shadow-xl">
             <div className="flex flex-col">

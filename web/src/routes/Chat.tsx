@@ -338,18 +338,19 @@ export default function Chat() {
   };
 
   return (
+    <div className="w-full">
     <section className="rounded-2xl border border-white/10 bg-transparent text-white">
       <div className="grid grid-cols-1 gap-2 md:grid-cols-[240px_1fr]">
         {/* Sidebar with selectors */}
-        <aside className="rounded-2xl border border-white/10 bg-white/5 p-2 backdrop-blur h-auto md:h-[75vh] overflow-hidden md:flex md:flex-col">
+        <aside className="rounded-2xl border border-white/10 bg-white/5 p-2 backdrop-blur h-auto md:h-[800px] overflow-hidden md:flex md:flex-col">
           {/* Character card */}
-          <div className="mb-4 flex items-center gap-3">
+          <div className="mb-4 flex items-start gap-3">
             {character?.avatar_url ? (
-              <img src={character.avatar_url} alt={character.name} className="h-16 w-20 rounded-lg object-cover ring-2 ring-pink-500/40" />
+              <img src={character.avatar_url} alt={character.name} className="w-16 aspect-[3/4] rounded-lg object-contain ring-2 ring-pink-500/40 bg-white/5" />
             ) : (
-              <div className="h-16 w-20 rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
+              <div className="w-16 aspect-[3/4] rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
             )}
-            <div>
+            <div className="flex-1">
               <div className="font-medium text-white">{character?.name ?? 'Character'}</div>
               {character?.description && <div className="text-xs text-gray-300 line-clamp-2">{character.description}</div>}
             </div>
@@ -485,7 +486,7 @@ export default function Chat() {
         {/* Chat panel */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-2 shadow-xl backdrop-blur" onClick={() => isDesktop && inputRef.current?.focus()}>
           <h2 className="mb-1 text-lg font-semibold">Chat</h2>
-          <div className="flex h-[50vh] md:h-[55vh] flex-col overflow-hidden">
+          <div className="flex h-[700px] md:h-[700px] flex-col overflow-hidden">
             <div className="flex-1 space-y-2 overflow-y-auto pr-1">
           {messages.map((m, i) => (
             <div key={i} className={m.role === 'user' ? 'text-right' : 'text-left'}>
@@ -564,6 +565,7 @@ export default function Chat() {
         </div>
       </div>
     </section>
+    </div>
   );
 }
 

@@ -28,16 +28,10 @@
 .wavebar:nth-child(4) { animation-delay: 360ms; }
 .wavebar:nth-child(5) { animation-delay: 240ms; }
 
-/* Prevent document-level scrolling */
+/* Allow document-level scrolling */
 html, body, #root {
   height: 100%;
 }
 html, body {
-  overflow: hidden;
-}
-
-@media (max-width: 640px) {
-  html, body {
-    overflow: auto;
-  }
+  overflow: auto;
 }
