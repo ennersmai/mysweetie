@@ -71,7 +71,15 @@ export default function Subscribe() {
           </button>
         </div>
       </div>
-      <p className="mt-6 text-xs text-white/60">Voice allowances refresh monthly. Free plan includes 3 voice trials.</p>
+      
+      {/* AI Disclaimer */}
+      <div className="mt-6 p-4 rounded-lg bg-white/5 border border-white/10">
+        <p className="text-sm text-gray-300 text-center italic">
+          <strong>By subscribing, you acknowledge that all content is AI-generated and that MySweetie.ai does not feature real individuals.</strong>
+        </p>
+      </div>
+      
+      <p className="mt-4 text-xs text-white/60">Voice allowances refresh monthly. Free plan includes 3 voice trials.</p>
     </section>
   );
 }

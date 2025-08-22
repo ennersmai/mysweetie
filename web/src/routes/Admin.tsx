@@ -31,6 +31,7 @@ export default function Admin() {
   const [galleryImages, setGalleryImages] = useState<GalleryImage[]>([]);
   const [loadingGallery, setLoadingGallery] = useState<boolean>(false);
   const [selectedManageCharacterId, setSelectedManageCharacterId] = useState<string>('');
+  const [deleteConfirm, setDeleteConfirm] = useState<{imageId: string, imagePath: string} | null>(null);
 
   useEffect(() => {
     const loadCharacters = async () => {
@@ -97,6 +98,7 @@ export default function Admin() {
       if (dbError) throw dbError;
 
       setMessage('Image deleted successfully!');
+      setDeleteConfirm(null);
       
       // Reload gallery images
       if (selectedManageCharacterId) {
@@ -104,6 +106,7 @@ export default function Admin() {
       }
     } catch (err: any) {
       setError(`Failed to delete image: ${err.message}`);
+      setDeleteConfirm(null);
     }
   };
 
@@ -337,11 +340,7 @@ export default function Admin() {
                 />
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center">
                   <button
-                    onClick={() => {
-                      if (window.confirm('Are you sure you want to delete this image?')) {
-                        deleteGalleryImage(image.id, image.image_path);
-                      }
-                    }}
+                    onClick={() => setDeleteConfirm({imageId: image.id, imagePath: image.image_path})}
                     className="opacity-0 group-hover:opacity-100 transition-opacity bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-lg text-sm font-medium"
                   >
                     Delete
@@ -366,6 +365,39 @@ export default function Admin() {
           <p className="text-gray-300">No gallery images found for this character.</p>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setDeleteConfirm(null)}
+        >
+          <div 
+            className="mx-4 w-full max-w-md rounded-2xl border border-white/20 bg-gray-900/95 p-6 shadow-2xl backdrop-blur-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-4 text-xl font-semibold text-white">Confirm Delete</h3>
+            <p className="mb-6 text-gray-300">
+              Are you sure you want to delete this image? This action cannot be undone.
+            </p>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => deleteGalleryImage(deleteConfirm.imageId, deleteConfirm.imagePath)}
+                className="flex-1 rounded-lg bg-red-500 hover:bg-red-600 px-4 py-2 text-white font-medium transition"
+              >
+                Delete
+              </button>
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 px-4 py-2 text-white font-medium transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

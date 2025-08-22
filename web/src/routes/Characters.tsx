@@ -57,6 +57,12 @@ export default function Characters() {
               {/* Character Info */}
               <div className="p-4 flex flex-col">
                 <h3 className="font-semibold text-white text-lg mb-3 text-center">{c.name}</h3>
+                
+                {/* AI Disclaimer */}
+                <p className="text-xs text-gray-400 text-center mb-3 italic">
+                  AI-generated character. Not a real person.
+                </p>
+                
                 {c.description && (
                   <div 
                     className="text-sm text-gray-300 line-clamp-4 leading-relaxed text-center mb-4 cursor-pointer hover:text-white transition-colors relative group"
@@ -65,9 +71,6 @@ export default function Characters() {
                   >
                     {c.description}
                     <div className="absolute inset-0 bg-transparent group-hover:bg-white/5 rounded transition-colors"></div>
-                    <div className="absolute bottom-1 right-1 opacity-50 group-hover:opacity-100 transition-opacity text-xs">
-                      ⓘ
-                    </div>
                   </div>
                 )}
                 

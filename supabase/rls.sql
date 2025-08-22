@@ -50,7 +50,7 @@ on public.characters for insert
 to authenticated
 with check (true);
 
--- Character galleries: readable by anyone, authenticated users can create
+-- Character galleries: readable by anyone, authenticated users can create/delete
 drop policy if exists character_galleries_read_all on public.character_galleries;
 create policy character_galleries_read_all
 on public.character_galleries for select using (true);
@@ -60,6 +60,12 @@ create policy character_galleries_insert_authenticated
 on public.character_galleries for insert
 to authenticated
 with check (true);
+
+drop policy if exists character_galleries_delete_authenticated on public.character_galleries;
+create policy character_galleries_delete_authenticated
+on public.character_galleries for delete
+to authenticated
+using (true);
 
 -- Trigger phrases: readable by anyone
 drop policy if exists trigger_phrases_read_all on public.trigger_phrases;
@@ -89,9 +95,16 @@ insert into storage.buckets (id, name, public)
 values ('avatars', 'avatars', true)
 on conflict (id) do nothing;
 
+drop policy if exists "Anyone can view avatars" on storage.objects;
 create policy "Anyone can view avatars" on storage.objects for select using (bucket_id = 'avatars');
+
+drop policy if exists "Authenticated users can upload avatars" on storage.objects;
 create policy "Authenticated users can upload avatars" on storage.objects for insert with check (bucket_id = 'avatars' and auth.role() = 'authenticated');
+
+drop policy if exists "Users can update own avatars" on storage.objects;
 create policy "Users can update own avatars" on storage.objects for update using (bucket_id = 'avatars' and auth.role() = 'authenticated');
+
+drop policy if exists "Users can delete own avatars" on storage.objects;
 create policy "Users can delete own avatars" on storage.objects for delete using (bucket_id = 'avatars' and auth.role() = 'authenticated');
 
 -- Storage policies for galleries bucket
@@ -99,9 +112,16 @@ insert into storage.buckets (id, name, public)
 values ('galleries', 'galleries', true)
 on conflict (id) do nothing;
 
+drop policy if exists "Anyone can view galleries" on storage.objects;
 create policy "Anyone can view galleries" on storage.objects for select using (bucket_id = 'galleries');
+
+drop policy if exists "Authenticated users can upload galleries" on storage.objects;
 create policy "Authenticated users can upload galleries" on storage.objects for insert with check (bucket_id = 'galleries' and auth.role() = 'authenticated');
+
+drop policy if exists "Users can update galleries" on storage.objects;
 create policy "Users can update galleries" on storage.objects for update using (bucket_id = 'galleries' and auth.role() = 'authenticated');
+
+drop policy if exists "Users can delete galleries" on storage.objects;
 create policy "Users can delete galleries" on storage.objects for delete using (bucket_id = 'galleries' and auth.role() = 'authenticated');
 
 

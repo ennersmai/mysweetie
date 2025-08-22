@@ -486,6 +486,13 @@ export default function Chat() {
         {/* Chat panel */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-2 shadow-xl backdrop-blur" onClick={() => isDesktop && inputRef.current?.focus()}>
           <h2 className="mb-1 text-lg font-semibold">Chat</h2>
+          
+          {/* AI Disclaimer */}
+          <div className="mb-2 px-2 py-1 rounded bg-white/5 border border-white/10">
+            <p className="text-xs text-gray-400 text-center italic">
+              Conversations are simulated with AI characters and are for entertainment purposes only.
+            </p>
+          </div>
           <div className="flex h-[700px] md:h-[700px] flex-col overflow-hidden">
             <div className="flex-1 space-y-2 overflow-y-auto pr-1">
           {messages.map((m, i) => (

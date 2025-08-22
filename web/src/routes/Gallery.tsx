@@ -41,6 +41,14 @@ export default function Gallery() {
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-xl backdrop-blur">
       <h2 className="mb-4 text-xl font-semibold text-white">Gallery</h2>
+      
+      {/* AI Disclaimer */}
+      <div className="mb-6 p-3 rounded-lg bg-white/5 border border-white/10">
+        <p className="text-sm text-gray-300 text-center italic">
+          <strong>Disclaimer:</strong> All images are AI-generated and do not depict real people.
+        </p>
+      </div>
+      
       {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
         {characters.map((c, i) => (
