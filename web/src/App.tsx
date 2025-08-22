@@ -48,28 +48,32 @@ export default function App() {
     <AuthProvider>
       <div className="text-gray-100">
         {/* Age Gate Overlay */}
-        <AgeGate onAccept={() => setAgeGateAccepted(true)} />
+        {!ageGateAccepted && <AgeGate onAccept={() => setAgeGateAccepted(true)} />}
         
-        {/* Main App Content */}
-        <HeaderNav />
-        <div className="mx-auto w-full max-w-7xl px-2 py-4 sm:px-4">
-          <main className="pb-8">
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/characters" element={<Characters />} />
-              <Route path="/characters/new" element={<NewCharacter />} />
-              <Route path="/chat/:characterId" element={<Chat />} />
-              <Route path="/chat/:characterId/:conversationId" element={<Chat />} />
-              <Route path="/gallery" element={<Gallery />} />
-              <Route path="/subscribe" element={<Subscribe />} />
-              <Route path="/account" element={<Account />} />
-              <Route path="/admin" element={<Admin />} />
-              <Route path="/tos" element={<Tos />} />
-            </Routes>
-          </main>
-        </div>
-        <Footer />
+        {/* Main App Content - only show when age gate is accepted */}
+        {ageGateAccepted && (
+          <>
+            <HeaderNav />
+            <div className="mx-auto w-full max-w-7xl px-2 py-4 sm:px-4">
+              <main className="pb-8">
+                <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/characters" element={<Characters />} />
+                  <Route path="/characters/new" element={<NewCharacter />} />
+                  <Route path="/chat/:characterId" element={<Chat />} />
+                  <Route path="/chat/:characterId/:conversationId" element={<Chat />} />
+                  <Route path="/gallery" element={<Gallery />} />
+                  <Route path="/subscribe" element={<Subscribe />} />
+                  <Route path="/account" element={<Account />} />
+                  <Route path="/admin" element={<Admin />} />
+                  <Route path="/tos" element={<Tos />} />
+                </Routes>
+              </main>
+            </div>
+            <Footer />
+          </>
+        )}
       </div>
     </AuthProvider>
   );
