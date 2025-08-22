@@ -47,8 +47,8 @@ export default function App() {
     <AuthProvider>
       <div className="min-h-screen text-gray-100 flex flex-col">
         <HeaderNav />
-        <div className="mx-auto flex-1 w-full max-w-7xl px-2 py-1 sm:px-4 flex flex-col">
-          <main className="flex-1">
+        <div className="mx-auto w-full max-w-7xl px-2 py-1 sm:px-4 flex-1 overflow-y-auto">
+          <main className="pb-8">
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/login" element={<Login />} />
