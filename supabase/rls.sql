@@ -39,15 +39,27 @@ on public.chat_history for insert
 to authenticated
 with check (user_id = auth.uid());
 
--- Characters: readable by anyone
+-- Characters: readable by anyone, authenticated users can create
 drop policy if exists characters_read_all on public.characters;
 create policy characters_read_all
 on public.characters for select using (true);
 
--- Character galleries: readable by anyone (signed URLs will gate asset access)
+drop policy if exists characters_insert_authenticated on public.characters;
+create policy characters_insert_authenticated
+on public.characters for insert
+to authenticated
+with check (true);
+
+-- Character galleries: readable by anyone, authenticated users can create
 drop policy if exists character_galleries_read_all on public.character_galleries;
 create policy character_galleries_read_all
 on public.character_galleries for select using (true);
+
+drop policy if exists character_galleries_insert_authenticated on public.character_galleries;
+create policy character_galleries_insert_authenticated
+on public.character_galleries for insert
+to authenticated
+with check (true);
 
 -- Trigger phrases: readable by anyone
 drop policy if exists trigger_phrases_read_all on public.trigger_phrases;
@@ -71,5 +83,25 @@ create policy conversations_update_own
 on public.conversations for update
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
+
+-- Storage policies for avatars bucket
+insert into storage.buckets (id, name, public) 
+values ('avatars', 'avatars', true)
+on conflict (id) do nothing;
+
+create policy "Anyone can view avatars" on storage.objects for select using (bucket_id = 'avatars');
+create policy "Authenticated users can upload avatars" on storage.objects for insert with check (bucket_id = 'avatars' and auth.role() = 'authenticated');
+create policy "Users can update own avatars" on storage.objects for update using (bucket_id = 'avatars' and auth.role() = 'authenticated');
+create policy "Users can delete own avatars" on storage.objects for delete using (bucket_id = 'avatars' and auth.role() = 'authenticated');
+
+-- Storage policies for galleries bucket
+insert into storage.buckets (id, name, public) 
+values ('galleries', 'galleries', true)
+on conflict (id) do nothing;
+
+create policy "Anyone can view galleries" on storage.objects for select using (bucket_id = 'galleries');
+create policy "Authenticated users can upload galleries" on storage.objects for insert with check (bucket_id = 'galleries' and auth.role() = 'authenticated');
+create policy "Users can update galleries" on storage.objects for update using (bucket_id = 'galleries' and auth.role() = 'authenticated');
+create policy "Users can delete galleries" on storage.objects for delete using (bucket_id = 'galleries' and auth.role() = 'authenticated');
 
 
