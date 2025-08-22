@@ -78,8 +78,8 @@ export default function Admin() {
           throw uploadError;
         }
 
-        // Get public URL
-        const { data: urlData } = supabase.storage
+        // Get public URL (for reference, stored in database as image_path)
+        supabase.storage
           .from('galleries')
           .getPublicUrl(filePath);
 
