@@ -74,13 +74,45 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
     { key: 'Silver Whisper', desc: 'Euryale 70B — advanced storytelling with rich detail.', premium: true },
   ];
   const ALLOWED_VOICES = [
+    // Popular existing voices
     'luna',
-    'celeste',
-    'ursa',
     'astra',
-    'esther',
-    'estelle',
     'andromeda',
+    
+    // New Arcana v2 flagship voices
+    'thalassa',
+    'vespera',
+    'lyra',
+    
+    // Conversational voices
+    'amber martinez',
+    'ana silva',
+    'angelica santos',
+    'anjali singh',
+    'asha johnson',
+    'carla rodriguez',
+    'daniela gomez',
+    'elijah johnson',
+    'elise montgomery',
+    'emily anderson',
+    'emily bennett',
+    'emily levine',
+    'emily novak',
+    'emily watson',
+    'emma dubois',
+    'emma wilson',
+    'hannah murphy',
+    'heather smith',
+    'isabel gomez',
+    'isabela rodriguez',
+    'katie bruno',
+    'kelsey miller',
+    
+    // IVR voices
+    'akari miyamoto',
+    'emily collins',
+    'giulia ricci',
+    'jennifer kelly',
   ];
   // HTTP PCM TTS via Arcana
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -799,13 +831,45 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
               value={voiceKey}
               onChange={(e) => setVoiceKey(e.target.value)}
             >
-              <option className="bg-gray-900 text-white" value="luna">luna (female, gen-z optimist)</option>
-              <option className="bg-gray-900 text-white" value="celeste">celeste (female, laid-back)</option>
-              <option className="bg-gray-900 text-white" value="ursa">ursa (male, 2000s emo)</option>
-              <option className="bg-gray-900 text-white" value="astra">astra (female, wide-eyed)</option>
-              <option className="bg-gray-900 text-white" value="esther">esther (female, older)</option>
-              <option className="bg-gray-900 text-white" value="estelle">estelle (female, middle-aged)</option>
-              <option className="bg-gray-900 text-white" value="andromeda">andromeda (female, yoga vibes)</option>
+              {/* Popular Voices */}
+              <option className="bg-gray-900 text-white" value="luna">Luna (female, flagship)</option>
+              <option className="bg-gray-900 text-white" value="astra">Astra (female, flagship)</option>
+              <option className="bg-gray-900 text-white" value="andromeda">Andromeda (female, flagship)</option>
+              
+              {/* New Flagship Voices */}
+              <option className="bg-gray-900 text-white" value="thalassa">Thalassa (female, flagship)</option>
+              <option className="bg-gray-900 text-white" value="vespera">Vespera (female, flagship)</option>
+              <option className="bg-gray-900 text-white" value="lyra">Lyra (female, flagship)</option>
+              
+              {/* Conversational Voices */}
+              <option className="bg-gray-900 text-white" value="emily anderson">Emily Anderson (female, versatile)</option>
+              <option className="bg-gray-900 text-white" value="emma wilson">Emma Wilson (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="elijah johnson">Elijah Johnson (male, conversational)</option>
+              <option className="bg-gray-900 text-white" value="amber martinez">Amber Martinez (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="ana silva">Ana Silva (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="angelica santos">Angelica Santos (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="anjali singh">Anjali Singh (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="asha johnson">Asha Johnson (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="carla rodriguez">Carla Rodriguez (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="daniela gomez">Daniela Gomez (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="elise montgomery">Elise Montgomery (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="emily bennett">Emily Bennett (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="emily levine">Emily Levine (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="emily novak">Emily Novak (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="emily watson">Emily Watson (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="emma dubois">Emma Dubois (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="hannah murphy">Hannah Murphy (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="heather smith">Heather Smith (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="isabel gomez">Isabel Gomez (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="isabela rodriguez">Isabela Rodriguez (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="katie bruno">Katie Bruno (female, conversational)</option>
+              <option className="bg-gray-900 text-white" value="kelsey miller">Kelsey Miller (female, conversational)</option>
+              
+              {/* IVR Voices */}
+              <option className="bg-gray-900 text-white" value="akari miyamoto">Akari Miyamoto (female, IVR)</option>
+              <option className="bg-gray-900 text-white" value="emily collins">Emily Collins (female, IVR)</option>
+              <option className="bg-gray-900 text-white" value="giulia ricci">Giulia Ricci (female, IVR)</option>
+              <option className="bg-gray-900 text-white" value="jennifer kelly">Jennifer Kelly (female, IVR)</option>
             </select>
             <svg
               xmlns="http://www.w3.org/2000/svg"

@@ -398,7 +398,7 @@ export class CallService {
 
       // Use the same payload structure as the existing TTS controller
       const payload = {
-        speaker: 'mabel',
+        speaker: 'luna',
         text: text,
         modelId: 'arcana',
         repetition_penalty: 1.5,
