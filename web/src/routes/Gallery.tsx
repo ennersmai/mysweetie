@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { authFetch } from '../lib/functionsClient';
 import { supabase } from '../lib/supabaseClient';
+import AnimatedSection from '../components/AnimatedSection';
 
 type Item = { url: string | null; caption: string | null; is_preview: boolean };
 
@@ -39,7 +40,7 @@ export default function Gallery() {
   }, []);
 
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-xl backdrop-blur">
+    <AnimatedSection className="p-6">
       <h2 className="mb-4 text-xl font-semibold text-white">Gallery</h2>
       
       {/* AI Disclaimer */}
@@ -134,7 +135,7 @@ export default function Gallery() {
           </div>
         </div>
       )}
-    </section>
+    </AnimatedSection>
   );
 }
 

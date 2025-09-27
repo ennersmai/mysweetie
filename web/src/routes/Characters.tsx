@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Link } from 'react-router-dom';
+import AnimatedSection from '../components/AnimatedSection';
 
 type Character = {
   id: string;
@@ -30,7 +31,7 @@ export default function Characters() {
   }, []);
 
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-xl backdrop-blur max-w-none">
+    <AnimatedSection className="p-6 max-w-none">
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-2xl font-semibold text-white">Choose Your Companion</h2>
         <Link to="/characters/new" className="rounded-full bg-gradient-to-r from-pink-500 to-purple-600 px-3 py-1 text-sm text-white shadow">New Character</Link>
@@ -161,7 +162,7 @@ export default function Characters() {
           </div>
         </div>
       )}
-    </section>
+    </AnimatedSection>
   );
 }
 

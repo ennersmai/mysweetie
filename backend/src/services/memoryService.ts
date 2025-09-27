@@ -1,0 +1,25 @@
+import { supabase, supabaseAdmin } from '../config/database';
+
+export const fetchUserMemories = async (userId: string, characterId: string) => {
+  // Use supabaseAdmin to bypass RLS, as the user is already authenticated by middleware.
+  // Include legacy rows where character_id may be NULL (pre-migration)
+  const { data, error } = await supabaseAdmin
+    .from('user_memories')
+    .select('*')
+    .eq('user_id', userId)
+    .or(`character_id.eq.${characterId},character_id.is.null`)
+    .order('last_accessed', { ascending: false });
+
+  return { data, error };
+};
+
+export const deleteUserMemory = async (userId: string, memoryId: string) => {
+  // Use supabaseAdmin here as well to ensure users can delete their own memories
+  const { error } = await supabaseAdmin
+    .from('user_memories')
+    .delete()
+    .eq('id', memoryId)
+    .eq('user_id', userId);
+
+  return { error };
+};

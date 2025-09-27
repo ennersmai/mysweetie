@@ -1,7 +1,7 @@
-import { Link, NavLink, Route, Routes } from 'react-router-dom';
-import { useState } from 'react';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import Home from './routes/Home';
+import { Routes, Route, useLocation } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { AuthProvider } from './contexts/AuthContext';
+import Landing from './routes/Landing';
 import Login from './routes/Login';
 import Characters from './routes/Characters';
 import Chat from './routes/Chat';
@@ -12,70 +12,46 @@ import NewCharacter from './routes/NewCharacter';
 import Admin from './routes/Admin';
 import Tos from './routes/Tos';
 import Footer from './components/Footer';
-import AgeGate from './components/AgeGate';
 import ProtectedRoute from './components/ProtectedRoute';
+import Navbar from './components/Navbar';
 
-function HeaderNav() {
-  const { user } = useAuth();
-  return (
-    <header className="w-full border-b border-white/10 bg-white/5 backdrop-blur">
-      <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-        <Link to="/" className="text-2xl font-semibold tracking-tight text-white">
-          <span className="bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent">mysweetie.ai</span>
-        </Link>
-        <nav className="flex items-center gap-4 text-sm text-gray-300">
-          <NavLink to="/characters" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>
-            Characters
-          </NavLink>
-          <NavLink to="/gallery" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Gallery</NavLink>
-          <NavLink to="/subscribe" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>
-            <span className="rounded-full bg-gradient-to-r from-pink-500 to-purple-600 px-3 py-1 text-white shadow">Upgrade</span>
-          </NavLink>
-          {user ? (
-            <NavLink to="/account" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Account</NavLink>
-          ) : (
-            <NavLink to="/login" className={({ isActive }) => (isActive ? 'font-medium text-white' : '')}>Login</NavLink>
-          )}
-        </nav>
-      </div>
-    </header>
-  );
-}
+function App() {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
+  const isChatPage = location.pathname.startsWith('/chat');
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
-export default function App() {
-  const [ageGateAccepted, setAgeGateAccepted] = useState(false);
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
 
   return (
-    <AuthProvider>
-      <div className="text-gray-100">
-        {/* Age Gate Overlay */}
-        {!ageGateAccepted && <AgeGate onAccept={() => setAgeGateAccepted(true)} />}
-        
-        {/* Main App Content - only show when age gate is accepted */}
-        {ageGateAccepted && (
-          <>
-            <HeaderNav />
-            <div className="mx-auto w-full max-w-7xl px-2 py-4 sm:px-4">
-              <main className="pb-8">
-                              <Routes>
-                <Route path="/" element={<Home />} />
+      <AuthProvider>
+        <Navbar menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
+        <main className={`container mx-auto px-4 ${isChatPage ? '' : 'py-[3px]'}`}>
+          <Routes>
+                <Route path="/" element={<Landing />} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/tos" element={<Tos />} />
                 <Route path="/characters" element={<ProtectedRoute><Characters /></ProtectedRoute>} />
                 <Route path="/characters/new" element={<ProtectedRoute><NewCharacter /></ProtectedRoute>} />
-                <Route path="/chat/:characterId" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
-                <Route path="/chat/:characterId/:conversationId" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+                <Route path="/chat/:characterId" element={<ProtectedRoute><Chat menuOpen={menuOpen} /></ProtectedRoute>} />
+                <Route path="/chat/:characterId/:conversationId" element={<ProtectedRoute><Chat menuOpen={menuOpen} /></ProtectedRoute>} />
                 <Route path="/gallery" element={<ProtectedRoute><Gallery /></ProtectedRoute>} />
                 <Route path="/subscribe" element={<ProtectedRoute><Subscribe /></ProtectedRoute>} />
                 <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
                 <Route path="/admin" element={<ProtectedRoute><Admin /></ProtectedRoute>} />
               </Routes>
-              </main>
-            </div>
-            <Footer />
-          </>
-        )}
-      </div>
-    </AuthProvider>
-  );
-}
+            </main>
+            {isChatPage && isMobile ? null : <Footer />}
+          </AuthProvider>
+    );
+  }
+
+export default App;

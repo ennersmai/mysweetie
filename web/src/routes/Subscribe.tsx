@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { authFetch } from '../lib/functionsClient';
+import { apiClient } from '../lib/apiClient';
 
 export default function Subscribe() {
   const [loading, setLoading] = useState<'basic' | 'premium' | null>(null);
@@ -9,15 +9,25 @@ export default function Subscribe() {
     setLoading(tier);
     setError(null);
     try {
-      const res = await authFetch('/create-checkout-session', {
-        method: 'POST',
-        body: JSON.stringify({ tier }),
-      });
+      const res = await apiClient.post('/stripe/create-checkout-session', { tier });
+      
+      if (!res.ok) {
+        const errorData = await res.json();
+        if (res.status === 503) {
+          throw new Error('Payment system not available in development mode');
+        }
+        throw new Error(errorData?.error || 'Checkout error');
+      }
+      
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || 'Checkout error');
-      if (json.url) window.location.href = json.url as string;
+      if (json.url) {
+        window.location.href = json.url as string;
+      } else {
+        throw new Error('No checkout URL received');
+      }
     } catch (e: any) {
       setError(e.message || String(e));
+      console.error('Checkout error:', e);
     } finally {
       setLoading(null);
     }
