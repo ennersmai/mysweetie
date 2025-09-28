@@ -28,9 +28,34 @@ testConnection();
 redis.connect();
 
 // CORS configuration - Should be one of the first middleware
+function buildAllowedOrigins(): string[] {
+  const defaults = ['http://localhost:5173', 'http://localhost:3000'];
+  const fromEnv = `${process.env.CORS_ORIGIN || ''},${process.env.CORS_ORIGINS || ''}`
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const explicit = process.env.PUBLIC_WEB_ORIGIN ? [process.env.PUBLIC_WEB_ORIGIN] : [];
+  return Array.from(new Set([...defaults, ...fromEnv, ...explicit]));
+}
+
+const allowedOrigins = buildAllowedOrigins();
+
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-  credentials: process.env.CORS_CREDENTIALS === 'true',
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow non-browser requests (no origin) e.g. curl, server-to-server
+    if (!origin) return callback(null, true);
+    const o = origin.toLowerCase();
+    const isAllowed =
+      allowedOrigins.some(a => a.toLowerCase() === o) ||
+      // Allow all Vercel preview deployments
+      o.endsWith('.vercel.app') ||
+      // Allow localhost variations
+      o.startsWith('http://localhost:');
+
+    if (isAllowed) return callback(null, true);
+    return callback(new Error(`CORS not allowed for origin: ${origin}`));
+  },
+  credentials: process.env.CORS_CREDENTIALS ? process.env.CORS_CREDENTIALS === 'true' : true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 };
@@ -45,7 +70,8 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "https:", "ws:", "wss:"],
+      // Allow both http and https for dev/prod APIs; and ws/wss for realtime
+      connectSrc: ["'self'", "http:", "https:", "ws:", "wss:"],
       fontSrc: ["'self'", "https:", "data:"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'", "blob:"],
