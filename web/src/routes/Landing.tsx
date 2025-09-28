@@ -55,27 +55,53 @@ export default function Landing() {
   const featuresRef = useRef<HTMLDivElement>(null);
   const faqRef = useRef<HTMLDivElement>(null);
 
+  // Load characters for current style (newest first) and auto-refresh via realtime
   useEffect(() => {
+    let isCancelled = false;
+
     const loadCharacters = async () => {
-      const { data } = await supabase
+      // Show newest characters first; include null style as realistic for backwards-compat
+      let query = supabase
         .from('characters')
         .select('id, name, description, avatar_url, style')
-        .order('created_at', { ascending: true })
-        .limit(6);
-      setCharacters(data || []);
+        .order('created_at', { ascending: false })
+        .limit(12);
+
+      if (styleFilter === 'anime') {
+        query = query.eq('style', 'anime');
+      } else {
+        // realistic or null for older rows
+        query = query.or('style.eq.realistic,style.is.null');
+      }
+
+      const { data } = await query;
+      if (!isCancelled) setCharacters(data || []);
     };
+
     loadCharacters();
-  }, []);
+
+    const channel = supabase
+      .channel('realtime:characters')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'characters' }, () => {
+        // On any character insert/update/delete, refresh the current style list
+        loadCharacters();
+      })
+      .subscribe();
+
+    return () => {
+      isCancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [styleFilter]);
 
   useEffect(() => {
-    const filtered = characters.filter(c => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic');
-    if (filtered.length > 0 && !isSliderHovered) {
+    if (characters.length > 0 && !isSliderHovered) {
       const interval = setInterval(() => {
-        setCurrentSlide((prev) => (prev + 1) % filtered.length);
+        setCurrentSlide((prev) => (prev + 1) % characters.length);
       }, 7000);
       return () => clearInterval(interval);
     }
-  }, [characters, styleFilter, isSliderHovered]);
+  }, [characters, isSliderHovered]);
 
   // Reset slide on filter change
   useEffect(() => { setCurrentSlide(0); }, [styleFilter]);
@@ -266,7 +292,7 @@ export default function Landing() {
                 className="flex transition-transform duration-700 ease-in-out"
                 style={{ transform: `translateX(-${currentSlide * 100}%)` }}
               >
-                {characters.filter(c => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic').map((character) => (
+                {characters.map((character) => (
                   <div key={character.id} className="w-full flex-shrink-0 flex items-center justify-center p-8">
                     <div className="flex flex-col md:flex-row items-center gap-8 max-w-4xl">
                       <div className="flex-shrink-0">
@@ -319,7 +345,7 @@ export default function Landing() {
               </button>
               {/* Slide Indicators */}
               <div className="flex justify-center space-x-2 mt-8">
-                {characters.filter(c => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic').map((_, index) => (
+                {characters.map((_, index) => (
                   <button
                     key={index}
                     aria-label={`Go to slide ${index + 1}`}

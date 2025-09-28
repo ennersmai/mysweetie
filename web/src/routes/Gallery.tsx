@@ -117,7 +117,7 @@ export default function Gallery() {
             }`}
           >
             {c.avatar_url ? (
-              <img src={c.avatar_url} alt={c.name} className="w-16 aspect-[3/4] rounded-lg object-contain bg-white/5 ring-2 ring-pink-500/40" />
+              <img loading="lazy" src={c.avatar_url} alt={c.name} className="w-16 aspect-[3/4] rounded-lg object-contain bg-white/5 ring-2 ring-pink-500/40" />
             ) : (
               <div className="w-16 aspect-[3/4] rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
             )}
@@ -143,7 +143,7 @@ export default function Gallery() {
           >
             <div className="p-3">
               {it.url ? (
-                <img src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-contain bg-white/5 rounded-lg ring-2 ring-pink-500/40 transition hover:brightness-110" />
+                <img loading="lazy" src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-contain bg-white/5 rounded-lg ring-2 ring-pink-500/40 transition hover:brightness-110" />
               ) : (
                 <div className="flex w-full aspect-[3/4] items-center justify-center bg-white/10 rounded-lg text-xs text-white/70">Premium</div>
               )}
