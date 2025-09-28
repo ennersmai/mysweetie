@@ -7,6 +7,7 @@ type Character = {
   id: string;
   name: string;
   avatar_url: string | null;
+  style?: 'realistic' | 'anime';
 };
 
 type GalleryImage = {
@@ -37,7 +38,7 @@ export default function Admin() {
     const loadCharacters = async () => {
       const { data, error } = await supabase
         .from('characters')
-        .select('id, name, avatar_url')
+        .select('id, name, avatar_url, style')
         .order('created_at', { ascending: true });
       
       if (error) {
@@ -233,7 +234,7 @@ export default function Admin() {
             <option value="">Select a character...</option>
             {characters.map((char) => (
               <option key={char.id} value={char.id} className="bg-gray-900">
-                {char.name}
+                {char.name} {char.style ? `(${char.style})` : ''}
               </option>
             ))}
           </select>
@@ -319,7 +320,7 @@ export default function Admin() {
             <option value="">Select a character...</option>
             {characters.map((char) => (
               <option key={char.id} value={char.id} className="bg-gray-900">
-                {char.name}
+                {char.name} {char.style ? `(${char.style})` : ''}
               </option>
             ))}
           </select>

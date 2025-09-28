@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { processChat, fetchChatHistory } from '../services/chatService';
 import { logger } from '../utils/logger';
+import { supabaseAdmin } from '../config/database';
 
 export const getChatHistory = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -89,5 +90,96 @@ export const handleChat = async (req: Request, res: Response): Promise<void> => 
     } else {
       res.end();
     }
+  }
+};
+
+export const deleteChatMessage = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { messageId } = req.params as { messageId: string };
+    // @ts-ignore
+    const userId = req.user.id as string;
+
+    if (!messageId) {
+      res.status(400).json({ error: 'Message ID is required.' });
+      return;
+    }
+
+    const { data: msg, error: fetchErr } = await supabaseAdmin
+      .from('chat_history')
+      .select('id, user_id')
+      .eq('id', messageId)
+      .maybeSingle();
+
+    if (fetchErr || !msg) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+    if (msg.user_id !== userId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+
+    const { error: delErr } = await supabaseAdmin
+      .from('chat_history')
+      .delete()
+      .eq('id', messageId);
+
+    if (delErr) {
+      res.status(500).json({ error: 'Failed to delete message' });
+      return;
+    }
+    res.status(204).end();
+  } catch (error: any) {
+    logger.error({ message: 'Error deleting chat message', error: error.message, stack: error.stack });
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+export const updateChatMessage = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { messageId } = req.params as { messageId: string };
+    const { content } = req.body as { content?: string };
+    // @ts-ignore
+    const userId = req.user.id as string;
+
+    if (!messageId || typeof content !== 'string' || !content.trim()) {
+      res.status(400).json({ error: 'Message ID and non-empty content are required.' });
+      return;
+    }
+
+    const { data: msg, error: fetchErr } = await supabaseAdmin
+      .from('chat_history')
+      .select('id, user_id, role')
+      .eq('id', messageId)
+      .maybeSingle();
+
+    if (fetchErr || !msg) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+    if (msg.user_id !== userId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    if (msg.role !== 'user') {
+      res.status(400).json({ error: 'Only user messages can be edited.' });
+      return;
+    }
+
+    const { data, error: updErr } = await supabaseAdmin
+      .from('chat_history')
+      .update({ content })
+      .eq('id', messageId)
+      .select('id, role, content, created_at')
+      .maybeSingle();
+
+    if (updErr || !data) {
+      res.status(500).json({ error: 'Failed to update message' });
+      return;
+    }
+    res.status(200).json(data);
+  } catch (error: any) {
+    logger.error({ message: 'Error updating chat message', error: error.message, stack: error.stack });
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 };

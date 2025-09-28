@@ -9,6 +9,7 @@ type Character = {
   name: string;
   description: string | null;
   avatar_url: string | null;
+  style?: 'realistic' | 'anime';
 };
 
 type FAQItem = {
@@ -19,6 +20,7 @@ type FAQItem = {
 
 export default function Landing() {
   const [characters, setCharacters] = useState<Character[]>([]);
+  const [styleFilter, setStyleFilter] = useState<'realistic' | 'anime'>('realistic');
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isSliderHovered, setIsSliderHovered] = useState(false);
   const [faqs, setFaqs] = useState<FAQItem[]>([
@@ -57,7 +59,7 @@ export default function Landing() {
     const loadCharacters = async () => {
       const { data } = await supabase
         .from('characters')
-        .select('id, name, description, avatar_url')
+        .select('id, name, description, avatar_url, style')
         .order('created_at', { ascending: true })
         .limit(6);
       setCharacters(data || []);
@@ -66,13 +68,17 @@ export default function Landing() {
   }, []);
 
   useEffect(() => {
-    if (characters.length > 0 && !isSliderHovered) {
+    const filtered = characters.filter(c => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic');
+    if (filtered.length > 0 && !isSliderHovered) {
       const interval = setInterval(() => {
-        setCurrentSlide((prev) => (prev + 1) % characters.length);
+        setCurrentSlide((prev) => (prev + 1) % filtered.length);
       }, 7000);
       return () => clearInterval(interval);
     }
-  }, [characters.length, isSliderHovered]);
+  }, [characters, styleFilter, isSliderHovered]);
+
+  // Reset slide on filter change
+  useEffect(() => { setCurrentSlide(0); }, [styleFilter]);
 
   useEffect(() => {
     const observerOptions = {
@@ -158,6 +164,25 @@ export default function Landing() {
       {characters.length > 0 && (
         <AnimatedSection className="mx-6 mb-20">
           <div className="relative p-8 pt-20 md:pt-24">
+            {/* Style Toggle */}
+            <div className="mb-6 flex justify-center">
+              <div className="inline-flex rounded-full border border-white/20 bg-white/5 p-1">
+                <button
+                  type="button"
+                  className={`px-4 py-1.5 text-sm rounded-full transition ${styleFilter === 'realistic' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'text-white/80 hover:bg-white/10'}`}
+                  onClick={() => setStyleFilter('realistic')}
+                >
+                  Realistic
+                </button>
+                <button
+                  type="button"
+                  className={`px-4 py-1.5 text-sm rounded-full transition ${styleFilter === 'anime' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'text-white/80 hover:bg-white/10'}`}
+                  onClick={() => setStyleFilter('anime')}
+                >
+                  Anime
+                </button>
+              </div>
+            </div>
             {/* Sugar glaze top overlay - full card width with melting drips */}
             <div className="pointer-events-none absolute top-0 inset-x-0 z-10 rounded-t-2xl overflow-hidden">
               <svg viewBox="0 0 1440 120" preserveAspectRatio="none" className="w-full h-24 md:h-28 rounded-t-2xl">
@@ -241,7 +266,7 @@ export default function Landing() {
                 className="flex transition-transform duration-700 ease-in-out"
                 style={{ transform: `translateX(-${currentSlide * 100}%)` }}
               >
-                {characters.map((character) => (
+                {characters.filter(c => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic').map((character) => (
                   <div key={character.id} className="w-full flex-shrink-0 flex items-center justify-center p-8">
                     <div className="flex flex-col md:flex-row items-center gap-8 max-w-4xl">
                       <div className="flex-shrink-0">
@@ -294,7 +319,7 @@ export default function Landing() {
               </button>
               {/* Slide Indicators */}
               <div className="flex justify-center space-x-2 mt-8">
-                {characters.map((_, index) => (
+                {characters.filter(c => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic').map((_, index) => (
                   <button
                     key={index}
                     aria-label={`Go to slide ${index + 1}`}

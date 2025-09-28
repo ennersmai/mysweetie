@@ -15,6 +15,7 @@ create table if not exists public.characters (
   avatar_url text,
   system_prompt text not null,
   voice_id text,
+  style text not null default 'realistic' check (style in ('realistic','anime')),
   created_at timestamptz not null default now()
 );
 

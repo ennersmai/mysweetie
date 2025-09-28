@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
+import { ALLOWED_VOICES } from '../lib/voices';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function NewCharacter() {
@@ -11,8 +12,10 @@ export default function NewCharacter() {
   const [name, setName] = useState('');
   const [shortDescription, setShortDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [voiceKey, setVoiceKey] = useState('Aria Velvet');
+  const [voiceKey, setVoiceKey] = useState('luna');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [style, setStyle] = useState<'realistic' | 'anime'>('realistic');
+  const [galleryFiles, setGalleryFiles] = useState<FileList | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,23 +45,27 @@ export default function NewCharacter() {
         avatarUrl = pub?.publicUrl ?? null;
       }
 
-      // Map artistic voice names to IDs (keep in sync with backend VOICE_MAP)
-      const VOICE_MAP: Record<string, string> = {
-        'Aria Velvet': 'wrxvN1LZJIfL3HHvffqe',
-        'Nova Azure': 'EXAVITQu4vr4xnSDxMaL',
-        'Mira Whisper': '21m00Tcm4TlvDq8ikWAM',
-        'Zara Ember': '4tRn1lSkEn13EVTuqb0g',
-        'Luna Aurora': 'gE0owC0H9C8SzfDyIUtB',
-      };
-
-      const { error: insErr } = await supabase.from('characters').insert({
+      const { data: inserted, error: insErr } = await supabase.from('characters').insert({
         name,
         description: shortDescription,
         avatar_url: avatarUrl,
         system_prompt: systemPrompt,
-        voice_id: VOICE_MAP[voiceKey] || null,
-      });
+        voice_id: voiceKey || 'luna',
+        style,
+      }).select('id').single();
       if (insErr) throw insErr;
+
+      // Optional gallery uploads
+      if (inserted?.id && galleryFiles && galleryFiles.length > 0) {
+        for (let i = 0; i < galleryFiles.length; i++) {
+          const file = galleryFiles[i];
+          const ext = file.name.split('.').pop() || 'jpg';
+          const path = `galleries/${crypto.randomUUID()}.${ext}`;
+          const { error: upErr } = await supabase.storage.from('galleries').upload(path, file, { cacheControl: '3600', upsert: false });
+          if (upErr) continue;
+          await supabase.from('character_galleries').insert({ character_id: inserted.id, image_path: path, caption: null, is_preview: false });
+        }
+      }
       navigate('/characters');
     } catch (e: any) {
       setError(e.message || String(e));
@@ -72,6 +79,14 @@ export default function NewCharacter() {
       <h2 className="mb-4 text-2xl font-semibold text-white">Create Character</h2>
       {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
       <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Style selector */}
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-300">Style</label>
+          <div className="inline-flex rounded-full border border-white/20 bg-white/5 p-1">
+            <button type="button" className={`px-4 py-1.5 text-sm rounded-full transition ${style === 'realistic' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'text-white/80 hover:bg-white/10'}`} onClick={() => setStyle('realistic')}>Realistic</button>
+            <button type="button" className={`px-4 py-1.5 text-sm rounded-full transition ${style === 'anime' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'text-white/80 hover:bg-white/10'}`} onClick={() => setStyle('anime')}>Anime</button>
+          </div>
+        </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-300">Name</label>
           <input
@@ -110,11 +125,11 @@ export default function NewCharacter() {
               value={voiceKey}
               onChange={(e) => setVoiceKey(e.target.value)}
             >
-              <option className="bg-gray-900 text-white">Aria Velvet</option>
-              <option className="bg-gray-900 text-white">Nova Azure</option>
-              <option className="bg-gray-900 text-white">Mira Whisper</option>
-              <option className="bg-gray-900 text-white">Zara Ember</option>
-              <option className="bg-gray-900 text-white">Luna Aurora</option>
+              {ALLOWED_VOICES.map((v) => (
+                <option key={v} className="bg-gray-900 text-white" value={v}>
+                  {v.charAt(0).toUpperCase() + v.slice(1)}
+                </option>
+              ))}
             </select>
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -134,6 +149,17 @@ export default function NewCharacter() {
             onChange={(e) => setAvatarFile(e.target.files?.[0] ?? null)}
             className="block w-full text-sm text-gray-300 file:mr-4 file:rounded-full file:border-0 file:bg-white/10 file:px-4 file:py-2 file:text-white hover:file:bg-white/20"
           />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-300">Gallery images (optional)</label>
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(e) => setGalleryFiles(e.target.files)}
+            className="block w-full text-sm text-gray-300 file:mr-4 file:rounded-full file:border-0 file:bg-white/10 file:px-4 file:py-2 file:text-white hover:file:bg-white/20"
+          />
+          <p className="text-xs text-gray-400 mt-1">You can upload multiple images. They will appear in the character's gallery.</p>
         </div>
         <div className="pt-2">
           <button

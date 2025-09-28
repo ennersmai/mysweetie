@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type FormEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, useLayoutEffect, type FormEvent } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import { apiClient } from '../lib/apiClient';
@@ -8,7 +8,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
 import Modal from '../components/Modal';
 import VoiceCallButton from '../components/VoiceCallButton';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type Message = { id?: string; role: 'user' | 'assistant'; content: string };
 type Memory = { id: string; memory_text: string };
 
 function parseActions(text: string) {
@@ -26,9 +26,18 @@ const BouncingLoader = () => (
 );
 
 export default function Chat({ menuOpen }: { menuOpen: boolean }) {
+  useLayoutEffect(() => {
+    try {
+      if ('scrollRestoration' in window.history) {
+        (window.history as any).scrollRestoration = 'manual';
+      }
+    } catch {}
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, []);
   const { characterId, conversationId } = useParams();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
+  const messagesRef = useRef<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
 	const [modelKey, setModelKey] = useState(() => {
@@ -38,9 +47,10 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [fantasyMode, setFantasyMode] = useState(false);
   const [nsfwMode, setNsfwMode] = useState(false); // Add nsfwMode state
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const messagesListRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const isInitialMount = useRef(true);
+  const firstTurnRef = useRef<boolean>(false);
+  const stickToBottomRef = useRef(true);
   const [character, setCharacter] = useState<{ id: string; name: string; avatar_url: string | null; description: string | null; system_prompt: string | null; } | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(conversationId || null);
   const [isPremium, setIsPremium] = useState(false);
@@ -51,6 +61,8 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoriesLoading, setMemoriesLoading] = useState(false);
+  const [confirmMemoryId, setConfirmMemoryId] = useState<string | null>(null);
+  const [confirmChatId, setConfirmChatId] = useState<string | null>(null);
   const [isNsfwModalOpen, setIsNsfwModalOpen] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
@@ -65,6 +77,10 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
   const wordBufferRef = useRef('');
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const currentAssistantIndexRef = useRef<number | null>(null);
+  const [editTarget, setEditTarget] = useState<{ index: number; id?: string; text: string } | null>(null);
+  const [editText, setEditText] = useState('');
+  const [longPressMessage, setLongPressMessage] = useState<{ index: number; isUser: boolean } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
 
   const MODEL_OPTIONS: { key: string; desc: string; premium?: boolean }[] = [
     { key: 'Sweet Myth', desc: 'Grok-4 Fast — quick, capable general model (free).' },
@@ -243,6 +259,10 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
         ttsStreamingRef.current = true;
         await speakPcm(speaker, text);
         ttsStreamingRef.current = false;
+        if (stickToBottomRef.current) {
+          const el = messagesListRef.current;
+          if (el) el.scrollTop = el.scrollHeight;
+        }
         // Add small gap to avoid clicks between sentences
         await new Promise(r => setTimeout(r, 80));
       }
@@ -250,13 +270,6 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
       ttsProcessingRef.current = false;
     }
   }, [speakPcm]);
-
-  // Ensure input refocuses when streaming ends (after any send)
-  useEffect(() => {
-    if (!streaming) {
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-  }, [streaming]);
 
   const enqueueTts = useCallback((speaker: string, text: string, force: boolean = false) => {
     const trimmed = cleanTtsText(text);
@@ -329,16 +342,23 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
   }, []);
 
   useEffect(() => {
-    // Ensure we scroll when the first message(s) appear so they don't jump out of view
-    if (isInitialMount.current) {
-      if (messages.length > 0) {
-        isInitialMount.current = false;
-        scrollRef.current?.scrollIntoView({ behavior: 'auto' });
-      }
-    } else {
-      scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
+    const el = messagesListRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const nearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 80;
+      stickToBottomRef.current = nearBottom;
+    };
+    onScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const el = messagesListRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length, streaming]);
 
   useEffect(() => {
     // Track desktop breakpoint for autofocus behavior
@@ -355,6 +375,19 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
       return () => clearTimeout(t);
     }
   }, [isDesktop]);
+
+  // Ensure input refocuses right after streaming completes (desktop/mobile)
+  useEffect(() => {
+    if (streaming) return;
+    const t = setTimeout(() => {
+      try {
+        (inputRef.current as any)?.focus?.({ preventScroll: true });
+      } catch {
+        inputRef.current?.focus?.();
+      }
+    }, 50);
+    return () => clearTimeout(t);
+  }, [streaming, isDesktop]);
 
   useEffect(() => {
     // Initial focus on mount for desktop
@@ -382,6 +415,11 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
     loadCharacter();
   }, [characterId]);
 
+  // Keep live reference to messages to avoid stale closures
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   useEffect(() => {
     const loadHistory = async () => {
       if (!currentConversationId) {
@@ -399,14 +437,19 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
             return;
           }
           const data = await res.json();
-          // An empty array is valid history for a new conversation
-          const mapped = (data || []).map((m: any) => ({ role: m.role as 'user' | 'assistant', content: m.content as string }));
-          setMessages(mapped);
+          // Only replace messages if not currently streaming. Avoid wiping the assistant placeholder mid-stream.
+          const mapped = (data || []).map((m: any) => ({ id: m.id as string, role: m.role as 'user' | 'assistant', content: m.content as string }));
+          if (!streaming) {
+            if (Array.isArray(data) && data.length > 0) {
+              setMessages(mapped);
+            } else {
+              setMessages([]);
+            }
+          }
           didLoadHistoryRef.current = true;
         } else if (res.status === 404) {
-          // A 404 means it's a new conversation with no history yet.
-          // This is expected, so we just clear the messages.
-          setMessages([]);
+          // New conversation with no history yet; avoid clearing during streaming
+          if (!streaming) setMessages([]);
           didLoadHistoryRef.current = true;
         } else {
           // For other errors (like 500), log it but don't redirect
@@ -561,10 +604,18 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
   };
 
   const onSubmit = async (e?: FormEvent, regeneratedInput?: string) => {
-    if (e) e.preventDefault();
-    if (isDesktop) {
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    // Snapshot and restore window scroll to avoid footer jumping
+    const prevScrollY = window.scrollY;
+    // Keep input focused immediately on submit
+    setTimeout(() => {
+      try {
+        (inputRef.current as any)?.focus?.({ preventScroll: true });
+      } catch {
+        inputRef.current?.focus();
+      }
+    }, 0);
+    setTimeout(() => window.scrollTo({ top: prevScrollY, left: window.scrollX, behavior: 'auto' }), 0);
     const raw = regeneratedInput ?? input;
     const isAutoContinue = !regeneratedInput && (raw?.trim()?.length ?? 0) === 0;
     const messageToSend = isAutoContinue ? 'Continue' : raw;
@@ -573,6 +624,8 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
     // Create new conversation if none exists
     let conversationToUse = currentConversationId;
     if (!conversationToUse) {
+      // Mark first turn for scroll behavior
+      firstTurnRef.current = true;
       const { data: userData } = await supabase.auth.getUser();
       if (!userData.user) return;
 
@@ -618,7 +671,8 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
     }
     setMessages((m) => {
       const additions: Message[] = [];
-      if (!isAutoContinue) additions.push(userMsg);
+      // If regenerating, do NOT add the user bubble again; keep the existing one
+      if (!isAutoContinue && !regeneratedInput) additions.push(userMsg);
       additions.push({ role: 'assistant', content: '' });
       addedCountRef.current = additions.length;
       assistantIndex = m.length + additions.length - 1;
@@ -647,10 +701,13 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
       // New API call to the Node.js backend
       // Ensure the input stays in view right after we add the placeholder assistant message
       // so the user's first message doesn't jump off-screen on new conversations
-      scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+      // Do not auto-scroll; avoid bringing footer into view
+      const baseHistory = messagesRef.current;
+      // If regenerating, drop the last assistant message in the history we send
+      const historyForApi = regeneratedInput ? baseHistory.slice(0, Math.max(0, baseHistory.length - 1)) : baseHistory;
       const res = await apiClient.stream('/chat', {
         character: { ...character, model: modelKey },
-        messages: isAutoContinue ? [...messages, { role: 'user', content: 'Continue' }] : [...messages, userMsg],
+        messages: isAutoContinue ? [...historyForApi, { role: 'user', content: 'Continue' }] : [...historyForApi, userMsg],
         nsfwMode,
         conversationId: conversationToUse,
         autoContinue: isAutoContinue,
@@ -709,33 +766,59 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                 }
 
                 setMessages(prev => {
-                  if (prev.length === 0) {
-                    return [{ role: 'assistant', content: assistantMessageRef.current } as any];
-                  }
-                  const last = prev[prev.length - 1];
-                  if (!last || last.role !== 'assistant') {
-                    return [...prev, { role: 'assistant', content: assistantMessageRef.current } as any];
-                  }
                   const next = [...prev];
-                  next[next.length - 1] = { ...last, content: assistantMessageRef.current } as any;
+                  let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
+                  if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
+                    // Try to use the last message if it's assistant
+                    if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
+                      idx = next.length - 1;
+                      currentAssistantIndexRef.current = idx;
+                    } else {
+                      // Create a single assistant placeholder if none exists
+                      next.push({ role: 'assistant', content: '' } as any);
+                      idx = next.length - 1;
+                      currentAssistantIndexRef.current = idx;
+                    }
+                  }
+                  const target = next[idx] as any;
+                  next[idx] = { ...target, content: assistantMessageRef.current } as any;
                   return next;
                 });
+                // Scroll the messages container during streaming if user is near bottom
+                setTimeout(() => {
+                  if (!stickToBottomRef.current) return;
+                  const el = messagesListRef.current;
+                  if (!el) return;
+                  el.scrollTop = el.scrollHeight;
+                }, 0);
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 if (!assistantMessageRef.current) {
                   assistantMessageRef.current = finalText;
                   setMessages(prev => {
-                    if (prev.length === 0) {
-                      return [{ role: 'assistant', content: assistantMessageRef.current } as any];
-                    }
-                    const last = prev[prev.length - 1];
-                    if (!last || last.role !== 'assistant') {
-                      return [...prev, { role: 'assistant', content: assistantMessageRef.current } as any];
-                    }
                     const next = [...prev];
-                    next[next.length - 1] = { ...last, content: assistantMessageRef.current } as any;
+                    let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
+                    if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
+                      if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
+                        idx = next.length - 1;
+                        currentAssistantIndexRef.current = idx;
+                      } else {
+                        next.push({ role: 'assistant', content: '' } as any);
+                        idx = next.length - 1;
+                        currentAssistantIndexRef.current = idx;
+                      }
+                    }
+                    const target = next[idx] as any;
+                    next[idx] = { ...target, content: assistantMessageRef.current } as any;
                     return next;
                   });
+                  // Ensure final chunk leaves us scrolled to bottom if appropriate
+                  setTimeout(() => {
+                    if (!stickToBottomRef.current) return;
+                    const el = messagesListRef.current;
+                    if (!el) return;
+                    el.scrollTop = el.scrollHeight;
+                  }, 0);
                   if (voiceEnabled) {
                     // Enqueue full text if no chunks were processed
                     enqueueTts((voiceKey || 'luna').toLowerCase(), finalText, true);
@@ -753,9 +836,29 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
     } finally {
       setStreaming(false);
       loadMemories(); // Refresh memories after conversation turn
-      if (isDesktop) {
-        setTimeout(() => inputRef.current?.focus(), 50);
+      // Always refocus quickly so user can type next message immediately without scrolling the page
+      setTimeout(() => {
+        try {
+          (inputRef.current as any)?.focus?.({ preventScroll: true });
+        } catch {
+          inputRef.current?.focus();
+        }
+      }, 0);
+    // Refresh history so latest messages receive their persisted IDs
+    try {
+      if (currentConversationId) {
+        const res = await apiClient.get(`/chat/history/${currentConversationId}`);
+        if (res.ok) {
+          const data = await res.json();
+          const mapped = (data || []).map((m: any) => ({ id: m.id as string, role: m.role as 'user' | 'assistant', content: m.content as string }));
+          setMessages(mapped);
+        }
       }
+    } catch {}
+      // Restore scroll
+      setTimeout(() => window.scrollTo({ top: prevScrollY, left: window.scrollX, behavior: 'auto' }), 0);
+      // Reset first-turn flag once streaming completes
+      firstTurnRef.current = false;
     }
   };
 
@@ -763,7 +866,7 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
     <div className="w-full animated-gradient-subtle text-white">
       <div className="relative grid grid-cols-1 md:grid-cols-[240px_1fr_240px] gap-2 h-[calc(100vh-100px)]">
         {/* Left Sidebar with selectors */}
-        <aside className={`fixed md:relative top-0 left-0 h-full w-64 md:w-auto bg-gray-900 md:bg-transparent z-20 transform ${isLeftSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out md:flex flex-col rounded-r-2xl md:rounded-2xl border border-white/10 p-2 backdrop-blur overflow-hidden`}>
+        <aside className={`fixed md:relative top-0 left-0 h-full w-64 md:w-auto bg-gray-900 md:bg-transparent z-20 transform ${isLeftSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out flex flex-col rounded-r-2xl md:rounded-2xl border border-white/10 p-2 backdrop-blur overflow-y-auto md:overflow-hidden`}>
           <button onClick={() => setIsLeftSidebarOpen(false)} className="md:hidden self-start mb-2 p-2 rounded-full bg-red-500/50 text-white">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
@@ -927,15 +1030,122 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
           </div>
           
           <div className="flex h-[700px] md:h-[700px] flex-col overflow-hidden">
-            <div className="flex-1 space-y-2 overflow-y-auto pr-1">
-          {messages.map((m, i) => (
-            <div key={i} className={`my-2 ${m.role === 'user' ? 'text-right' : 'text-left'}`}>
-              <div className={`relative inline-block max-w-[80%] rounded-2xl ${m.role === 'user' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'bg-white/10 text-white/90'} px-4 py-2 text-sm`}>
+            <div ref={messagesListRef} className="flex-1 space-y-2 overflow-y-auto pr-1 pb-24 md:pb-0 will-change-scroll overscroll-contain" style={{ overflowAnchor: 'none' }} onWheel={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()}>
+            {messages.map((m, i) => (
+            <div key={m.id || i} className={`group my-2 ${m.role === 'user' ? 'md:text-right text-left' : 'md:text-left text-left'}`}>
+              <div 
+                className={`relative inline-block max-w-[80%] md:ml-0 ${m.role === 'user' ? 'ml-auto' : 'ml-0'} rounded-2xl ${m.role === 'user' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'bg-white/10 text-white/90'} px-4 py-2 text-sm`}
+                onTouchStart={() => {
+                  if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
+                  longPressTimerRef.current = window.setTimeout(() => {
+                    setLongPressMessage({ index: i, isUser: m.role === 'user' });
+                  }, 600);
+                }}
+                onTouchEnd={() => { if (longPressTimerRef.current) { window.clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; } }}
+                onTouchMove={() => { if (longPressTimerRef.current) { window.clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; } }}
+              >
                 {/* Bouncing loader for assistant's empty message */}
                 {m.role === 'assistant' && m.content === '' && streaming && (
                   <div className="p-2">
                     <BouncingLoader />
                   </div>
+                )}
+                {/* User controls above bubble; assistant delete inside bubble */}
+                {m.role === 'user' && (
+                  <div className={`absolute -top-3 right-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1`}>
+                    <button
+                      type="button"
+                      title="Delete message"
+                      className="p-1 rounded-full bg-white/10 hover:bg-white/20"
+                      onClick={async () => {
+                      const tryDelete = async (id: string | undefined) => {
+                        if (!id) return false;
+                        try {
+                          const res = await apiClient.delete(`/chat/message/${id}`);
+                          return res.ok || res.status === 204;
+                        } catch (e) {
+                          console.error('Failed to delete message', e);
+                          return false;
+                        }
+                      };
+                      if (await tryDelete(m.id)) {
+                        setMessages(prev => prev.filter((_, idx) => idx !== i));
+                        return;
+                      }
+                      try {
+                        if (currentConversationId) {
+                          const res = await apiClient.get(`/chat/history/${currentConversationId}`);
+                          if (res.ok) {
+                            const data = await res.json();
+                            const mapped = (data || []).map((mm: any) => ({ id: mm.id as string, role: mm.role as 'user' | 'assistant', content: mm.content as string }));
+                            setMessages(mapped);
+                            const match = mapped.find((mm: any) => mm.role === m.role && mm.content === m.content);
+                            if (match && await tryDelete(match.id)) {
+                              setMessages(prev => prev.filter(pm => pm.id !== match.id));
+                              return;
+                            }
+                          }
+                        }
+                      } catch {}
+                      setMessages(prev => prev.filter((_, idx) => idx !== i));
+                    }}
+                    >
+                      <DeleteIcon className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Edit message"
+                      className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
+                      onClick={() => {
+                        setEditTarget({ index: i, id: m.id, text: m.content });
+                        setEditText(m.content);
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </div>
+                )}
+
+                {m.role === 'assistant' && (
+                  <button
+                    type="button"
+                    title="Delete message"
+                    className="absolute top-1 right-1 p-1 rounded-full bg-white/10 hover:bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={async () => {
+                      const tryDelete = async (id: string | undefined) => {
+                        if (!id) return false;
+                        try {
+                          const res = await apiClient.delete(`/chat/message/${id}`);
+                          return res.ok || res.status === 204;
+                        } catch (e) {
+                          console.error('Failed to delete message', e);
+                          return false;
+                        }
+                      };
+                      if (await tryDelete(m.id)) {
+                        setMessages(prev => prev.filter((_, idx) => idx !== i));
+                        return;
+                      }
+                      try {
+                        if (currentConversationId) {
+                          const res = await apiClient.get(`/chat/history/${currentConversationId}`);
+                          if (res.ok) {
+                            const data = await res.json();
+                            const mapped = (data || []).map((mm: any) => ({ id: mm.id as string, role: mm.role as 'user' | 'assistant', content: mm.content as string }));
+                            setMessages(mapped);
+                            const match = mapped.find((mm: any) => mm.role === m.role && mm.content === m.content);
+                            if (match && await tryDelete(match.id)) {
+                              setMessages(prev => prev.filter(pm => pm.id !== match.id));
+                              return;
+                            }
+                          }
+                        }
+                      } catch {}
+                      setMessages(prev => prev.filter((_, idx) => idx !== i));
+                    }}
+                  >
+                    <DeleteIcon className="w-4 h-4" />
+                  </button>
                 )}
                 
                 {/* Top-left controls row (icon + waveform) */}
@@ -970,10 +1180,12 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                 {m.role === 'assistant' && i === messages.length - 1 && !streaming && (
                   <button 
                     onClick={() => {
-                      const lastUserMessage = messages[messages.length - 2];
+                      const snap = messagesRef.current;
+                      const lastUserMessage = snap[snap.length - 2];
                       if (lastUserMessage && lastUserMessage.role === 'user') {
-                        setMessages(prev => prev.slice(0, -2));
-                        // Re-submit the last user message
+                        // Remove only the last assistant bubble locally; keep the user message
+                        setMessages(prev => prev.slice(0, -1));
+                        // Re-submit the last user message; API history will exclude old assistant
                         onSubmit(undefined, lastUserMessage.content);
                       }
                     }}
@@ -991,7 +1203,6 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
               </div>
             </div>
           ))}
-              <div ref={scrollRef} />
             </div>
             {cooldownMsg && (
               <div className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
@@ -999,13 +1210,24 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
               </div>
             )}
             <div className="hidden md:block">
-              <form onSubmit={onSubmit} className="relative mt-1 flex items-center gap-2">
+              <form onSubmit={(e) => { e.preventDefault(); e.stopPropagation(); onSubmit(); }} className="relative mt-1 flex items-center gap-2" onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onSubmit();
+                  // Scroll only the messages list to the last bubble
+                  setTimeout(() => {
+                    const ml = messagesListRef.current;
+                    if (ml) ml.scrollTop = ml.scrollHeight;
+                  }, 0);
+                }
+              }}>
                 <input
                   className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500"
                   placeholder="Type a message"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  ref={inputRef}
+                  ref={isDesktop ? inputRef : null}
                   autoFocus={isDesktop}
                   disabled={streaming || Boolean(cooldownMsg)}
                 />
@@ -1017,7 +1239,9 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                       character={{
                         id: character.id,
                         name: character.name,
-                        avatar_url: character.avatar_url || undefined
+                        avatar_url: character.avatar_url || undefined,
+                        voice: (character as any).voice_id && ALLOWED_VOICES.includes(((character as any).voice_id || '').toLowerCase()) ? ((character as any).voice_id as string).toLowerCase() : (ALLOWED_VOICES.includes(character.name.toLowerCase()) ? character.name.toLowerCase() : 'luna'),
+                        prompt: character.system_prompt || ''
                       }}
                       conversationId={currentConversationId || undefined}
                       onError={(error) => {
@@ -1054,44 +1278,39 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
         </main>
 
         {/* Right Sidebar for History and Memories */}
-        <aside className={`fixed md:relative top-0 right-0 h-full w-64 md:w-auto bg-gray-900 md:bg-transparent z-20 transform ${isRightSidebarOpen ? 'translate-x-0' : 'translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out md:flex flex-col rounded-l-2xl md:rounded-2xl border border-white/10 p-2 backdrop-blur overflow-hidden`}>
+        <aside className={`fixed md:relative top-0 right-0 h-full w-64 md:w-auto bg-gray-900 md:bg-transparent z-20 transform ${isRightSidebarOpen ? 'translate-x-0' : 'translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out flex flex-col rounded-l-2xl md:rounded-2xl border border-white/10 p-2 backdrop-blur overflow-y-auto`}>
           <button onClick={() => setIsRightSidebarOpen(false)} className="md:hidden self-end mb-2 p-2 rounded-full bg-red-500/50 text-white">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
-          <div className="flex-1 overflow-y-auto space-y-2 no-scrollbar">
+          <div className="space-y-2 no-scrollbar">
             <div className="flex justify-between items-center mb-2">
               <h3 className="text-md font-semibold text-white">Memories</h3>
               <button onClick={loadMemories} className="p-1 mr-2 rounded-full hover:bg-white/10" title="Refresh memories">
                 <RefreshIcon className="h-4 w-4" />
               </button>
             </div>
-            {memoriesLoading ? (
-              <p className="text-sm text-white/70 text-center">Loading memories...</p>
-            ) : memories.length === 0 ? (
-              <p className="text-sm text-white/70 text-center">No memories yet.</p>
-            ) : (
-              memories.map((mem: any) => (
-                <div key={mem.id} className="group relative p-2 rounded-lg bg-white/5">
-                  <p className="text-xs text-white/80">{mem.memory_text}</p>
-                  <button
-                    onClick={async () => {
-                      if (!window.confirm('Are you sure you want to delete this memory?')) return;
-                      try {
-                        await apiClient.delete(`/memories/${mem.id}`);
-                        setMemories(m => m.filter(m => m.id !== mem.id));
-                      } catch (e) {
-                        console.error('Failed to delete memory:', e);
-                      }
-                    }}
-                    className="absolute top-1 right-1 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-red-500/50 hover:bg-red-500/80 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs"
-                  >
-                    <DeleteIcon className="h-3 w-3" />
-                  </button>
-                </div>
-              ))
-            )}
+            {/* Fixed-height, scrollable memories list */}
+            <div className="h-64 md:h-72 overflow-y-auto pr-1 no-scrollbar rounded-lg">
+              {memoriesLoading ? (
+                <p className="text-sm text-white/70 text-center">Loading memories...</p>
+              ) : memories.length === 0 ? (
+                <p className="text-sm text-white/70 text-center">No memories yet.</p>
+              ) : (
+                memories.map((mem: any) => (
+                  <div key={mem.id} className="group relative p-2 mb-2 rounded-lg bg-white/5">
+                    <p className="text-xs text-white/80">{mem.memory_text}</p>
+                    <button
+                      onClick={() => setConfirmMemoryId(mem.id)}
+                      className="absolute top-1 right-1 p-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity bg-red-500/50 hover:bg-red-500/80 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs"
+                    >
+                      <DeleteIcon className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
-          <div className="flex-1 overflow-y-auto space-y-2 mt-4 border-t border-white/10 pt-2">
+          <div className="space-y-2 mt-4 border-t border-white/10 pt-2">
             <h3 className="mb-2 text-md font-semibold text-white">Recent Chats</h3>
             {conversationsLoading ? (
               <p className="text-sm text-white/70 text-center">Loading...</p>
@@ -1112,22 +1331,8 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                     </div>
                   </div>
                   <button
-                    onClick={async (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (!window.confirm('Are you sure you want to delete this chat history? This will also delete all associated memories.')) return;
-                      try {
-                        await apiClient.delete(`/conversations/${conv.id}`);
-                        setRecentConversations(rc => rc.filter(c => c.id !== conv.id));
-                        // If the deleted conversation is the current one, navigate away
-                        if (currentConversationId === conv.id) {
-                          navigate('/characters');
-                        }
-                      } catch (err) {
-                        console.error('Failed to delete conversation:', err);
-                      }
-                    }}
-                    className="absolute top-1/2 -translate-y-1/2 right-2 p-1 rounded-full bg-red-500/50 hover:bg-red-500/80 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setConfirmChatId(conv.id); }}
+                    className="absolute top-1/2 -translate-y-1/2 right-2 p-1 rounded-full bg-red-500/50 hover:bg-red-500/80 text-white opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
                   >
                     <DeleteIcon className="h-4 w-4" />
                   </button>
@@ -1184,13 +1389,30 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
           {/* Chat Input */}
           <div className="fixed bottom-0 left-0 right-0 p-2 bg-gray-900 border-t border-white/10 rounded-t-2xl">
             <div className="relative">
-              <form onSubmit={onSubmit} className="flex items-center gap-2">
+              <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} className="flex items-center gap-2" onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onSubmit();
+                  setTimeout(() => {
+                    const ml = messagesListRef.current;
+                    if (ml) ml.scrollTop = ml.scrollHeight;
+                  }, 0);
+                }
+              }}>
                 <input
                   className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500"
                   placeholder="Type a message"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  ref={inputRef}
+                  ref={!isDesktop ? inputRef : null}
+                  autoFocus={!isDesktop}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }
+                  }}
                   disabled={streaming || Boolean(cooldownMsg)}
                 />
                 {/* Voice Call Button */}
@@ -1201,7 +1423,9 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                       character={{
                         id: character.id,
                         name: character.name,
-                        avatar_url: character.avatar_url || undefined
+                        avatar_url: character.avatar_url || undefined,
+                        voice: (character as any).voice_id && ALLOWED_VOICES.includes(((character as any).voice_id || '').toLowerCase()) ? ((character as any).voice_id as string).toLowerCase() : (ALLOWED_VOICES.includes(character.name.toLowerCase()) ? character.name.toLowerCase() : 'luna'),
+                        prompt: character.system_prompt || ''
                       }}
                       conversationId={currentConversationId || undefined}
                       onError={(error) => {
@@ -1237,6 +1461,61 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
           </div>
         </div>
 
+        {/* Confirm delete memory modal */}
+        <Modal
+          isOpen={!!confirmMemoryId}
+          onClose={() => setConfirmMemoryId(null)}
+          title="Delete memory?"
+        >
+          <p className="text-sm text-white/80 mb-4">This action cannot be undone.</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmMemoryId(null)} className="px-3 py-1 rounded bg-white/10 text-white">Cancel</button>
+            <button
+              onClick={async () => {
+                const id = confirmMemoryId!;
+                setConfirmMemoryId(null);
+                try {
+                  await apiClient.delete(`/memories/${id}`);
+                  setMemories(m => m.filter(mem => mem.id !== id));
+                } catch (e) {
+                  console.error('Failed to delete memory:', e);
+                }
+              }}
+              className="px-3 py-1 rounded bg-red-600 text-white"
+            >
+              Delete
+            </button>
+          </div>
+        </Modal>
+
+        {/* Confirm delete conversation modal */}
+        <Modal
+          isOpen={!!confirmChatId}
+          onClose={() => setConfirmChatId(null)}
+          title="Delete chat history?"
+        >
+          <p className="text-sm text-white/80 mb-4">This will remove the conversation and its history.</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmChatId(null)} className="px-3 py-1 rounded bg-white/10 text-white">Cancel</button>
+            <button
+              onClick={async () => {
+                const id = confirmChatId!;
+                setConfirmChatId(null);
+                try {
+                  await apiClient.delete(`/conversations/${id}`);
+                  setRecentConversations(rc => rc.filter(c => c.id !== id));
+                  if (currentConversationId === id) navigate('/characters');
+                } catch (e) {
+                  console.error('Failed to delete conversation:', e);
+                }
+              }}
+              className="px-3 py-1 rounded bg-red-600 text-white"
+            >
+              Delete
+            </button>
+          </div>
+        </Modal>
+
         {/* Overlay to close sidebars */}
         {(isLeftSidebarOpen || isRightSidebarOpen) && (
           <div
@@ -1260,6 +1539,99 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
               Upgrade
             </Link>
           </div>
+        </div>
+      </Modal>
+
+      {/* Edit message modal */}
+      <Modal
+        isOpen={!!editTarget}
+        onClose={() => { setEditTarget(null); setEditText(''); }}
+        title="Edit your message"
+        size="md"
+      >
+        <div className="text-white">
+          <textarea
+            className="w-full rounded-lg border border-white/20 bg-black/40 p-2 text-sm"
+            rows={4}
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            autoFocus
+          />
+          <div className="mt-3 flex justify-end gap-2">
+            <button className="px-3 py-1 rounded bg-white/10 text-white" onClick={() => { setEditTarget(null); setEditText(''); }}>Cancel</button>
+            <button
+              className="px-3 py-1 rounded bg-pink-600 text-white"
+              onClick={async () => {
+                if (!editTarget) return;
+                const trimmed = (editText || '').trim();
+                const idx = editTarget.index;
+                const prevText = editTarget.text;
+                if (!trimmed || trimmed === prevText) { setEditTarget(null); return; }
+                setMessages(prev => prev.map((mm, ii) => ii === idx ? { ...mm, content: trimmed } : mm));
+                try {
+                  if (editTarget.id) {
+                    const res = await apiClient.put(`/chat/message/${editTarget.id}`, { content: trimmed });
+                    if (!res.ok) throw new Error('Failed to update on server');
+                  }
+                } catch (e) {
+                  console.error('Failed to update message', e);
+                  setMessages(prev => prev.map((mm, ii) => ii === idx ? { ...mm, content: prevText } : mm));
+                } finally {
+                  setEditTarget(null);
+                  setEditText('');
+                }
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Mobile long-press action sheet */}
+      <Modal
+        isOpen={!!longPressMessage}
+        onClose={() => setLongPressMessage(null)}
+        title="Message actions"
+        size="sm"
+      >
+        <div className="flex flex-col gap-2 text-white">
+          {longPressMessage && longPressMessage.isUser && (
+            <button
+              className="w-full px-3 py-2 rounded bg-white/10 hover:bg-white/20 text-left"
+              onClick={() => {
+                const idx = longPressMessage.index;
+                const msg = messages[idx];
+                if (!msg) return;
+                setEditTarget({ index: idx, id: msg.id, text: msg.content });
+                setEditText(msg.content);
+                setLongPressMessage(null);
+              }}
+            >
+              Edit
+            </button>
+          )}
+          <button
+            className="w-full px-3 py-2 rounded bg-red-600/80 hover:bg-red-600 text-left"
+            onClick={async () => {
+              if (!longPressMessage) return;
+              const idx = longPressMessage.index;
+              const msg = messages[idx];
+              const tryDelete = async (id: string | undefined) => {
+                if (!id) return false;
+                try { const res = await apiClient.delete(`/chat/message/${id}`); return res.ok || res.status === 204; } catch { return false; }
+              };
+              if (await tryDelete(msg?.id)) {
+                setMessages(prev => prev.filter((_, ii) => ii !== idx));
+              } else {
+                setMessages(prev => prev.filter((_, ii) => ii !== idx));
+              }
+              setLongPressMessage(null);
+            }}
+          >
+            Delete
+          </button>
+          <button className="w-full px-3 py-2 rounded bg-white/10 hover:bg-white/20" onClick={() => setLongPressMessage(null)}>Cancel</button>
         </div>
       </Modal>
     </div>

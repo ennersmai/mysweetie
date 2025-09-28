@@ -6,13 +6,15 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { AudioManager } from '../lib/audioUtils';
+import { ProductionAudioManager } from '../lib/productionAudioManager';
+import Modal from './Modal';
 import { isWebAudioSupported, isMediaStreamSupported } from '../lib/audioUtils';
 import { apiClient } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
 
 export interface CallState {
   IDLE: 'IDLE';
+  LISTENING: 'LISTENING';
   USER_SPEAKING: 'USER_SPEAKING'; 
   AI_PROCESSING: 'AI_PROCESSING';
   AI_SPEAKING: 'AI_SPEAKING';
@@ -24,6 +26,8 @@ export interface VoiceCallButtonProps {
     id: string;
     name: string;
     avatar_url?: string;
+    voice?: string;
+    prompt?: string;
   };
   conversationId?: string;
   onError?: (error: string) => void;
@@ -33,7 +37,7 @@ export interface VoiceCallButtonProps {
 }
 
 export interface CallMessage {
-  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response';
+  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'tts_finished' | 'tts_stream_end';
   command?: string;
   text?: string;
   is_final?: boolean;
@@ -57,11 +61,15 @@ export default function VoiceCallButton({
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
   const [voiceLevel, setVoiceLevel] = useState(0); // 0-1 for animation
   const [currentTranscript, setCurrentTranscript] = useState('');
+  const [creditsModalOpen, setCreditsModalOpen] = useState(false);
 
-  const audioManagerRef = useRef<AudioManager | null>(null);
+  const audioManagerRef = useRef<ProductionAudioManager | null>(null);
   const websocketRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const serverConversationIdRef = useRef<string | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const shouldSendAudioRef = useRef<boolean>(true);
+  const callStateRef = useRef<keyof CallState>('IDLE');
 
   // Check audio support on mount
   useEffect(() => {
@@ -112,22 +120,51 @@ export default function VoiceCallButton({
       if (event.data instanceof ArrayBuffer) {
         // Binary audio data from AI
         if (audioManagerRef.current) {
-          audioManagerRef.current.queueAudioData(event.data);
+          audioManagerRef.current.playAudio(event.data);
         }
         return;
       }
 
-      // JSON messages
-      const message: CallMessage = JSON.parse(event.data);
+      // Handle Blob data (audio from Rime.ai)
+      if (event.data instanceof Blob) {
+        event.data.arrayBuffer().then(buffer => {
+          if (audioManagerRef.current) {
+            audioManagerRef.current.playAudio(buffer);
+          }
+        });
+        return;
+      }
+
+      // Try to parse as JSON
+      let message: CallMessage;
+      try {
+        message = JSON.parse(event.data);
+      } catch (error) {
+        console.warn('Received non-JSON WebSocket message:', event.data);
+        return;
+      }
       
       switch (message.type) {
         case 'state_change':
           if (message.state) {
+            console.log(`[FRONTEND STATE] Received state change: ${message.state}`);
             setCallState(message.state);
+            callStateRef.current = message.state;
+            // Send audio when in LISTENING or USER_SPEAKING
+            shouldSendAudioRef.current = message.state === 'LISTENING' || message.state === 'USER_SPEAKING';
+            console.log(`[FRONTEND STATE] State changed to ${message.state}, shouldSendAudio: ${shouldSendAudioRef.current}`);
+            
+            // Debug state transitions
+            if (message.state === 'LISTENING') {
+              console.log(`[FRONTEND STATE] ✅ Now in LISTENING mode - ready to accept user input`);
+            }
+          } else {
+            console.warn(`[FRONTEND STATE] Received state_change message with no state:`, message);
           }
           break;
           
         case 'transcript_update':
+          console.log('Transcript update received:', message.text, 'is_final:', message.is_final);
           if (message.text) {
             setCurrentTranscript(message.text);
             // Send transcript to parent to add as chat message
@@ -143,10 +180,34 @@ export default function VoiceCallButton({
           }
           break;
           
+        // Removed tts_finished case - we rely on tts_stream_end instead
+          
         case 'ai_response':
           if (message.text && onAIResponse) {
             onAIResponse(message.text);
           }
+          break;
+          
+        case 'tts_stream_end':
+          console.log('TTS stream ended - flushing remaining PCM data');
+          // Flush any remaining PCM data when TTS stream ends
+          if (audioManagerRef.current && 'flushRemainingPCM' in audioManagerRef.current) {
+            (audioManagerRef.current as any).flushRemainingPCM();
+            console.log('Flushed remaining PCM data - waiting for audio manager completion callback');
+          }
+          
+          // Fallback: If audio manager doesn't call completion callback within 1 second, send manually
+          setTimeout(() => {
+            console.log(`[FALLBACK] Checking if fallback needed - callState: ${callStateRef.current}, WebSocket ready: ${websocketRef.current?.readyState === WebSocket.OPEN}`);
+            if (callStateRef.current === 'AI_SPEAKING' && websocketRef.current?.readyState === WebSocket.OPEN) {
+              console.log('[FALLBACK] Audio manager callback timeout - manually sending tts_playback_finished');
+              const message = { type: 'tts_playback_finished' };
+              websocketRef.current.send(JSON.stringify(message));
+              console.log('[FALLBACK] Manual tts_playback_finished sent');
+            } else {
+              console.log('[FALLBACK] No fallback needed - either not in AI_SPEAKING state or WebSocket not open');
+            }
+          }, 1000);
           break;
           
         case 'error':
@@ -185,27 +246,61 @@ export default function VoiceCallButton({
       });
       console.log('initializeCall: Backend response status:', response.status);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('initializeCall: Backend error:', errorText);
+        if (!response.ok) {
+        let parsed: any = null;
+        try {
+          const text = await response.text();
+          parsed = text ? JSON.parse(text) : null;
+        } catch {}
+        if (parsed?.error === 'INSUFFICIENT_CREDITS') {
+            setCreditsModalOpen(true);
+            setConnectionStatus('disconnected');
+            return false;
+        }
+        console.error('initializeCall: Backend error:', parsed || response.statusText);
         throw new Error(`Failed to initiate call: ${response.statusText}`);
       }
 
       const responseData = await response.json();
-      const { sessionId } = responseData;
+      const { sessionId, conversationId: serverConversationId } = responseData;
       sessionIdRef.current = sessionId;
+      serverConversationIdRef.current = serverConversationId || null;
 
       // Initialize audio manager
-      audioManagerRef.current = new AudioManager();
+      audioManagerRef.current = new ProductionAudioManager();
       
-      const captureInitialized = await audioManagerRef.current.initializeCapture();
-      const playbackInitialized = await audioManagerRef.current.initializePlayback();
+      const initialized = await audioManagerRef.current.initialize();
       
-      if (!captureInitialized || !playbackInitialized) {
+      if (!initialized) {
         onError?.('Failed to initialize audio system. Please check your browser settings.');
         setConnectionStatus('disconnected');
         return false;
       }
+
+      // Set up audio manager callback to notify backend when TTS is actually done playing
+      audioManagerRef.current.setPlaybackCompleteCallback(() => {
+        console.log('Audio manager: All TTS audio finished playing');
+        console.log(`[FRONTEND] WebSocket state: ${websocketRef.current?.readyState} (OPEN=${WebSocket.OPEN})`);
+        console.log(`[FRONTEND] WebSocket exists: ${!!websocketRef.current}`);
+        // Optimistically allow mic to send while we await server LISTENING state
+        shouldSendAudioRef.current = true;
+        console.log('[FRONTEND] Optimistically enabling audio send after playback complete');
+        
+        if (websocketRef.current?.readyState === WebSocket.OPEN) {
+          const message = { type: 'tts_playback_finished' };
+          const messageStr = JSON.stringify(message);
+          console.log('[FRONTEND] Sending to backend:', messageStr);
+          
+          try {
+            websocketRef.current.send(messageStr);
+            console.log('[FRONTEND] TTS playback finished message sent successfully');
+          } catch (error) {
+            console.error('[FRONTEND] Error sending WebSocket message:', error);
+          }
+        } else {
+          console.warn(`[FRONTEND] WebSocket not open, cannot send tts_playback_finished. State: ${websocketRef.current?.readyState}`);
+        }
+      });
 
       // Establish WebSocket connection
       const { data: { session } } = await supabase.auth.getSession();
@@ -218,7 +313,14 @@ export default function VoiceCallButton({
 
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = process.env.NODE_ENV === 'development' ? 'localhost:3001' : window.location.host;
-      const wsUrl_full = `${wsProtocol}//${wsHost}/ws/call/${sessionId}?token=${token}`;
+      // Include characterId and conversationId so backend can bind correct session context
+      const urlParams = new URLSearchParams({
+        token,
+        characterId,
+        voice: character.voice || 'luna',
+        conversationId: (serverConversationIdRef.current || conversationId || '')
+      });
+      const wsUrl_full = `${wsProtocol}//${wsHost}/ws/call/${sessionId}?${urlParams.toString()}`;
 
       console.log('initializeCall: Connecting to WebSocket:', wsUrl_full);
       websocketRef.current = new WebSocket(wsUrl_full);
@@ -230,10 +332,14 @@ export default function VoiceCallButton({
           console.log('WebSocket connected');
           setConnectionStatus('connected');
           
-          // Start audio capture
+          // Initialize in listening mode (backend starts with LISTENING state)
+          shouldSendAudioRef.current = true;
+          
+          // Start audio recording
           if (audioManagerRef.current) {
-            audioManagerRef.current.startCapture((audioData) => {
-              if (ws.readyState === WebSocket.OPEN) {
+            audioManagerRef.current.startRecording((audioData) => {
+              // Only send audio when we should be listening
+              if (ws.readyState === WebSocket.OPEN && shouldSendAudioRef.current) {
                 ws.send(audioData);
               }
             });
@@ -296,6 +402,11 @@ export default function VoiceCallButton({
     setIsCallActive(false);
     setCallState('IDLE');
     setCurrentTranscript('');
+    shouldSendAudioRef.current = false;
+    // Stop playback immediately
+    if (audioManagerRef.current) {
+      audioManagerRef.current.stopPlayback();
+    }
     
     // Close WebSocket
     if (websocketRef.current) {
@@ -329,7 +440,8 @@ export default function VoiceCallButton({
     if (!isCallActive) return 'bg-green-600 hover:bg-green-700';
     
     switch (callState) {
-      case 'IDLE': return 'bg-blue-500';
+      case 'IDLE': return 'bg-gray-500';
+      case 'LISTENING': return 'bg-blue-500';
       case 'USER_SPEAKING': return 'bg-green-500 animate-pulse';
       case 'AI_PROCESSING': return 'bg-yellow-500 animate-pulse';
       case 'AI_SPEAKING': return 'bg-purple-500 animate-pulse';
@@ -343,7 +455,8 @@ export default function VoiceCallButton({
     if (!isCallActive) return 'Start voice call';
     
     switch (callState) {
-      case 'IDLE': return 'Tap to speak, or just start talking';
+      case 'IDLE': return 'Call ended';
+      case 'LISTENING': return 'Listening... Start talking';
       case 'USER_SPEAKING': return 'Speaking... (tap to finish)';
       case 'AI_PROCESSING': return 'AI thinking...';
       case 'AI_SPEAKING': return `${character.name} is speaking`;
@@ -389,6 +502,7 @@ export default function VoiceCallButton({
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={handleButtonClick}
         disabled={disabled || connectionStatus === 'connecting' || micPermission === 'denied'}
         className={`w-10 h-10 rounded-full ${getButtonColor()} text-white flex items-center justify-center transition-all duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed shadow-lg`}
@@ -435,6 +549,15 @@ export default function VoiceCallButton({
           {currentTranscript}
         </div>
       )}
+
+      {/* Insufficient credits modal */}
+      <Modal isOpen={creditsModalOpen} onClose={() => setCreditsModalOpen(false)} title="Not enough voice credits" size="lg">
+        <p className="text-sm text-white/80 mb-4">You don't have enough voice credits to start a call.</p>
+        <div className="flex justify-end gap-2">
+          <button onClick={() => setCreditsModalOpen(false)} className="px-3 py-1 rounded bg-white/10 text-white">Close</button>
+          <a href="/account" className="px-3 py-1 rounded bg-indigo-600 text-white">Buy credits</a>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -23,6 +23,7 @@ export interface AuthRequest extends Request {
 export interface CallInitiationRequest {
   characterId: string;
   conversationId?: string;
+  nsfwMode?: boolean;
 }
 
 /**
@@ -30,7 +31,7 @@ export interface CallInitiationRequest {
  */
 export const initiateCall = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { characterId, conversationId } = req.body as CallInitiationRequest;
+    const { characterId, conversationId, nsfwMode } = req.body as CallInitiationRequest;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -40,6 +41,21 @@ export const initiateCall = async (req: AuthRequest, res: Response): Promise<voi
 
     if (!characterId) {
       res.status(400).json({ error: 'Character ID is required' });
+      return;
+    }
+
+    // Check voice credits before allowing call
+    const { data: profile, error: profileErr } = await supabaseAdmin
+      .from('profiles')
+      .select('voice_credits')
+      .eq('id', userId)
+      .maybeSingle();
+    if (profileErr || !profile) {
+      res.status(500).json({ error: 'Failed to verify credits' });
+      return;
+    }
+    if ((profile.voice_credits ?? 0) <= 0) {
+      res.status(402).json({ error: 'INSUFFICIENT_CREDITS', message: 'Not enough voice credits to start a call.' });
       return;
     }
 
@@ -214,6 +230,9 @@ export const handleWebSocketUpgrade = (server: any): void => {
   wss.on('connection', async (ws: WebSocket, req) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
     const sessionId = url.pathname.split('/')[3];
+    const queryCharacterId = url.searchParams.get('characterId') || undefined;
+    const queryConversationId = url.searchParams.get('conversationId') || undefined;
+    const queryVoice = url.searchParams.get('voice') || undefined;
 
     if (!sessionId) {
       logger.warn('WebSocket connection without session ID');
@@ -242,62 +261,146 @@ export const handleWebSocketUpgrade = (server: any): void => {
 
       logger.info(`WebSocket connected: session ${sessionId}, user ${user.id}`);
 
-      // For this demo, we'll create a default session
-      // In production, you'd want to validate the session was properly initiated
-      const { data: character } = await supabaseAdmin
-        .from('characters')
-        .select('*')
-        .limit(1)
-        .single();
+      // Fetch the intended character using query param if provided; fall back to any available character
+      let characterRecord: any | null = null;
+      if (queryCharacterId) {
+        const { data: c, error: ce } = await supabaseAdmin
+          .from('characters')
+          .select('*')
+          .eq('id', queryCharacterId)
+          .maybeSingle();
+        if (ce) {
+          logger.warn('Character fetch error:', ce);
+        }
+        characterRecord = c || null;
+      }
+      if (!characterRecord) {
+        const { data: character } = await supabaseAdmin
+          .from('characters')
+          .select('*')
+          .limit(1)
+          .single();
+        characterRecord = character || null;
+      }
 
-      if (!character) {
+      if (!characterRecord) {
         ws.close(1008, 'No characters available');
         return;
       }
 
-      // Create the call session
+      // Determine conversation id: use query if provided; otherwise reuse/initiate one for this user+character
+      let finalConversationId: string = queryConversationId || '';
+      if (!finalConversationId) {
+        // Try find the most recent conversation for this user+character
+        const { data: conv } = await supabaseAdmin
+          .from('conversations')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('character_id', characterRecord.id)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        finalConversationId = (conv?.id || `voice-${sessionId}`);
+      }
+
       const session = callService.createSession(
         sessionId,
         user.id,
-        character.id,
-        character,
-        'temp-conversation-id', // This should come from session initiation
-        ws
+        characterRecord.id,
+        { ...characterRecord, voice: queryVoice || characterRecord.voice },
+        finalConversationId,
+        ws,
+        false
       );
 
-      // Handle binary audio data from client
-      ws.on('message', async (data) => {
-        if (data instanceof Buffer) {
-          // Binary audio data
-          await callService.processAudioData(sessionId, data);
-        } else {
-          // JSON messages (for future extensions)
-          try {
-            const message = JSON.parse(data.toString());
-            logger.debug(`Received message from client:`, message);
-            
-            // Handle control messages if needed
-            if (message.type === 'ping') {
-              ws.send(JSON.stringify({ type: 'pong' }));
-            } else if (message.type === 'force_end_speech') {
-              // Manually trigger end of speech
-              const session = callService.getSession(sessionId);
-              if (session && session.state === 'USER_SPEAKING') {
-                logger.info(`Manual speech end triggered for session ${sessionId}`);
-                // Force transition to AI processing
-                await callService.forceTransitionToAIProcessing(sessionId);
-              }
-            } else if (message.type === 'interrupt') {
-              // Manual interruption
-              const session = callService.getSession(sessionId);
-              if (session) {
-                logger.info(`Manual interruption triggered for session ${sessionId}`);
-                await callService.forceInterruption(sessionId);
-              }
-            }
-          } catch (error) {
-            logger.warn('Invalid JSON message from client:', data.toString());
+      // Handle messages from client (audio and JSON control)
+      ws.on('message', async (data: WebSocket.Data, isBinary: boolean) => {
+        try {
+          logger.info(`[WEBSOCKET] ===== MESSAGE RECEIVED =====`);
+          logger.info(`[WEBSOCKET] Session: ${sessionId}`);
+          logger.info(`[WEBSOCKET] isBinary: ${isBinary}`);
+          const dataLen = ((): number => {
+            if (typeof data === 'string') return data.length;
+            if (Buffer.isBuffer(data)) return data.length;
+            if (Array.isArray(data)) return Buffer.concat(data as Buffer[]).length;
+            if (data instanceof ArrayBuffer) return data.byteLength;
+            // Node types: Buffer, ArrayBuffer, string, Array<Buffer>
+            return 0;
+          })();
+          logger.info(`[WEBSOCKET] Data length: ${dataLen}`);
+
+          if (isBinary) {
+            // Binary audio data
+            const audioBuffer: Buffer = Array.isArray(data)
+              ? Buffer.concat(data as Buffer[])
+              : Buffer.isBuffer(data)
+                ? data
+                : Buffer.from(data as ArrayBuffer);
+            logger.debug(`Received binary audio data: ${audioBuffer.length} bytes`);
+            await callService.processAudioData(sessionId, audioBuffer);
+            return;
           }
+
+          // Text message (may still come as Buffer in some cases)
+          const rawMessage = (typeof data === 'string') ? data : (data as Buffer).toString('utf8');
+          logger.info(`[WEBSOCKET] ===== INCOMING JSON MESSAGE =====`);
+          logger.info(`[WEBSOCKET] Session: ${sessionId}`);
+          logger.info(`[WEBSOCKET] Raw: ${rawMessage}`);
+
+          let message: any;
+          try {
+            message = JSON.parse(rawMessage);
+          } catch (e) {
+            logger.warn(`[WEBSOCKET] Non-JSON text message from ${sessionId}, ignoring.`);
+            return;
+          }
+
+          logger.info(`[WEBSOCKET] Parsed:`, JSON.stringify(message, null, 2));
+          logger.info(`[WEBSOCKET] Type: "${message.type}"`);
+          logger.info(`[WEBSOCKET] ===================================`);
+
+          if (message.type === 'ping') {
+            ws.send(JSON.stringify({ type: 'pong' }));
+            return;
+          }
+
+          if (message.type === 'force_end_speech') {
+            const session = callService.getSession(sessionId);
+            if (session && session.state === CallState.USER_SPEAKING) {
+              logger.info(`Manual speech end triggered for session ${sessionId}`);
+              await callService.forceTransitionToAIProcessing(sessionId);
+            }
+            return;
+          }
+
+          if (message.type === 'interrupt') {
+            const session = callService.getSession(sessionId);
+            if (session) {
+              logger.info(`Manual interruption triggered for session ${sessionId}`);
+              await callService.forceInterruption(sessionId);
+            }
+            return;
+          }
+
+          if (message.type === 'tts_playback_finished') {
+            logger.info(`[BACKEND] Received tts_playback_finished message for session ${sessionId}`);
+            const session = callService.getSession(sessionId);
+            if (session) {
+              logger.info(`[BACKEND] TTS playback finished for session ${sessionId}, current state: ${session.state}, isTTSStreamingComplete: ${session.isTTSStreamingComplete}`);
+              await callService.handleTTSPlaybackFinished(sessionId);
+              const updatedSession = callService.getSession(sessionId);
+              if (updatedSession) {
+                logger.info(`[BACKEND] After handling TTS playback finished - new state: ${updatedSession.state}`);
+              }
+            } else {
+              logger.warn(`Session ${sessionId} not found when processing tts_playback_finished`);
+            }
+            return;
+          }
+
+          logger.warn(`[WEBSOCKET] Unknown message type from ${sessionId}: ${message.type}`);
+        } catch (error) {
+          logger.error(`[WEBSOCKET] Error handling message for ${sessionId}:`, error);
         }
       });
 

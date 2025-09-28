@@ -9,7 +9,8 @@ export default function Gallery() {
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isPremium, setIsPremium] = useState(false);
-  const [characters, setCharacters] = useState<{ id: string; name: string; avatar_url: string | null }[]>([]);
+  const [characters, setCharacters] = useState<{ id: string; name: string; avatar_url: string | null; style?: 'realistic' | 'anime' }[]>([]);
+  const [styleFilter, setStyleFilter] = useState<'realistic' | 'anime'>('realistic');
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [lightboxCaption, setLightboxCaption] = useState<string | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
@@ -22,12 +23,13 @@ export default function Gallery() {
           const { data: p } = await supabase.from('profiles').select('is_premium').eq('id', u.user.id).maybeSingle();
           setIsPremium(Boolean(p?.is_premium));
         }
-        const { data: chars } = await supabase.from('characters').select('id, name, avatar_url').order('created_at', { ascending: true });
+        const { data: chars } = await supabase.from('characters').select('id, name, avatar_url, style').order('created_at', { ascending: true });
         setCharacters(chars || []);
-        if (chars && chars.length) {
+        const filtered = (chars || []).filter((c: any) => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic');
+        if (filtered && filtered.length) {
           // Load gallery for the first character by default
-          setSelectedCharacterId(chars[0].id);
-          const res = await authFetch(`/get-gallery?characterId=${chars[0].id}`);
+          setSelectedCharacterId(filtered[0].id);
+          const res = await authFetch(`/get-gallery?characterId=${filtered[0].id}`);
           const json = await res.json();
           if (!res.ok) throw new Error(json?.error || 'Error');
           setItems(json.items || []);
@@ -42,6 +44,49 @@ export default function Gallery() {
   return (
     <AnimatedSection className="p-6">
       <h2 className="mb-4 text-xl font-semibold text-white">Gallery</h2>
+      {/* Style toggle */}
+      <div className="mb-4 flex justify-center">
+        <div className="inline-flex rounded-full border border-white/20 bg-white/5 p-1">
+          <button
+            type="button"
+            className={`px-4 py-1.5 text-sm rounded-full transition ${styleFilter === 'realistic' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'text-white/80 hover:bg-white/10'}`}
+            onClick={async () => {
+              setStyleFilter('realistic');
+              const filtered = characters.filter(c => (c.style as any) ? c.style === 'realistic' : true);
+              if (filtered.length) {
+                setSelectedCharacterId(filtered[0].id);
+                const res = await authFetch(`/get-gallery?characterId=${filtered[0].id}`);
+                const json = await res.json();
+                if (res.ok) setItems(json.items || []);
+              } else {
+                setSelectedCharacterId(null);
+                setItems([]);
+              }
+            }}
+          >
+            Realistic
+          </button>
+          <button
+            type="button"
+            className={`px-4 py-1.5 text-sm rounded-full transition ${styleFilter === 'anime' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'text-white/80 hover:bg-white/10'}`}
+            onClick={async () => {
+              setStyleFilter('anime');
+              const filtered = characters.filter(c => (c.style as any) ? c.style === 'anime' : false);
+              if (filtered.length) {
+                setSelectedCharacterId(filtered[0].id);
+                const res = await authFetch(`/get-gallery?characterId=${filtered[0].id}`);
+                const json = await res.json();
+                if (res.ok) setItems(json.items || []);
+              } else {
+                setSelectedCharacterId(null);
+                setItems([]);
+              }
+            }}
+          >
+            Anime
+          </button>
+        </div>
+      </div>
       
       {/* AI Disclaimer */}
       <div className="mb-6 p-3 rounded-lg bg-white/5 border border-white/10">
@@ -52,7 +97,7 @@ export default function Gallery() {
       
       {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {characters.map((c, i) => (
+        {characters.filter(c => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic').map((c, i) => (
           <button
             key={c.id}
             type="button"

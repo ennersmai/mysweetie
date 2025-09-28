@@ -36,9 +36,10 @@ export async function fetchChatHistory(userId: string, conversationId: string) {
   // as the chat_history table should also have RLS policies.
   const { data, error } = await supabaseAdmin
     .from('chat_history')
-    .select('role, content, created_at')
+    .select('id, role, content, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
     .limit(200);
 
   return { data, error };
@@ -173,7 +174,7 @@ export async function* processChat(request: ChatRequest) {
       : "This is your first conversation.";
 
     const nsfwPrompt = nsfwAllowed ? JAILBREAK_PROMPT : '';
-    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- Speak ONLY in first person as the character.\n- NEVER write lines, actions, or internal thoughts for the user. Do not imitate, quote, or paraphrase the user as if you spoke it.\n- NEVER continue or complete the user's sentences, actions, or messages. React only to what the user actually sent.\n- If the user asks you to speak as them, politely refuse and continue speaking only as the character.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.`;
+    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- Speak ONLY in first person as the character.\n- NEVER write lines, actions, or internal thoughts for the user. Do not imitate, quote, or paraphrase the user as if you spoke it.\n- NEVER continue or complete the user's sentences, actions, or messages. React only to what the user actually sent.\n- If the user asks you to speak as them, politely refuse and continue speaking only as the character.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
     const fullSystemPrompt = `${nsfwPrompt}${character.system_prompt}\n\n${memoryContext}${responseStylePrompt}`;
 
     const openRouterMessages = [
@@ -207,6 +208,11 @@ export async function* processChat(request: ChatRequest) {
             messages: openRouterMessages,
             stream: true,
             max_tokens: MAX_RESPONSE_TOKENS,
+            temperature: 0.9,
+            top_p: 0.9,
+            // repetition controls (supported by many OpenRouter models)
+            frequency_penalty: 0.6,
+            presence_penalty: 0.4,
         }),
         signal: controller.signal,
     });
@@ -283,6 +289,10 @@ export async function* processChat(request: ChatRequest) {
             messages: openRouterMessages,
             stream: false,
             max_tokens: MAX_RESPONSE_TOKENS,
+            temperature: 0.9,
+            top_p: 0.9,
+            frequency_penalty: 0.6,
+            presence_penalty: 0.4,
           }),
         });
         if (nonStreamResp.ok) {
@@ -302,8 +312,36 @@ export async function* processChat(request: ChatRequest) {
 
     yield { type: 'final', fullResponse };
 
+    // Ensure conversation exists for this user; create if missing
+    if (conversationId) {
+      try {
+        const { data: conv, error: convErr } = await supabaseAdmin
+          .from('conversations')
+          .select('id, user_id')
+          .eq('id', conversationId)
+          .maybeSingle();
+        if (convErr || !conv) {
+          await supabaseAdmin
+            .from('conversations')
+            .insert({
+              id: conversationId,
+              user_id: userId,
+              character_id: character.id,
+              title: `Chat with ${character.name}`,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+        }
+      } catch (e) {
+        logger.warn({ message: 'Failed to ensure conversation exists before saving history', error: (e as any)?.message, conversationId });
+      }
+    }
+
     // Step 4: Save chat history (don't block user response)
     const lastUserMessage = messages[messages.length - 1];
+    const now = Date.now();
+    const userCreatedAt = new Date(now - 1).toISOString();
+    const assistantCreatedAt = new Date(now).toISOString();
     const rows: any[] = [];
     if (!request.autoContinue) {
       rows.push({
@@ -312,6 +350,7 @@ export async function* processChat(request: ChatRequest) {
         character_id: character.id, // Add character_id
         role: 'user',
         content: lastUserMessage.content,
+        created_at: userCreatedAt,
       });
     }
     rows.push({
@@ -320,6 +359,7 @@ export async function* processChat(request: ChatRequest) {
       character_id: character.id, // Add character_id
       role: 'assistant',
       content: fullResponse,
+      created_at: assistantCreatedAt,
     });
     supabaseAdmin.from('chat_history').insert(rows).then(({ error }) => {
       if (error) {
