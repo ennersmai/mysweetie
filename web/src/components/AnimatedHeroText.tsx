@@ -7,7 +7,17 @@ const phrases = [
   { prefix: "connection", suffix: "with an AI" },
 ];
 
-const AnimatedWord = ({ text, delay = 0, className = "" }: { text: string; delay?: number; className?: string }) => {
+const AnimatedWord = ({ 
+  text, 
+  delay = 0, 
+  className = "",
+  onComplete 
+}: { 
+  text: string; 
+  delay?: number; 
+  className?: string;
+  onComplete?: () => void;
+}) => {
   const [displayText, setDisplayText] = useState('');
   const [isComplete, setIsComplete] = useState(false);
 
@@ -26,6 +36,9 @@ const AnimatedWord = ({ text, delay = 0, className = "" }: { text: string; delay
         } else {
           setIsComplete(true);
           clearInterval(interval);
+          if (onComplete) {
+            onComplete();
+          }
         }
       }, 40);
 
@@ -33,7 +46,7 @@ const AnimatedWord = ({ text, delay = 0, className = "" }: { text: string; delay
     }, delay);
 
     return () => clearTimeout(timeout);
-  }, [text, delay]);
+  }, [text, delay, onComplete]);
 
   return (
     <span className={`${className} inline-block ${isComplete ? 'animate-subtle-pulse' : ''}`}>
@@ -46,11 +59,13 @@ const AnimatedWord = ({ text, delay = 0, className = "" }: { text: string; delay
 export default function AnimatedHeroText() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [key, setKey] = useState(0);
+  const [showSuffix, setShowSuffix] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentIndex((prev) => (prev + 1) % phrases.length);
       setKey((prev) => prev + 1);
+      setShowSuffix(false); // Reset suffix visibility on phrase change
     }, 5000);
 
     return () => clearInterval(interval);
@@ -75,16 +90,23 @@ export default function AnimatedHeroText() {
 
         {/* Animated prefix text with typewriter effect */}
         <span className="block text-3xl md:text-5xl lg:text-6xl font-medium min-h-[1.2em]">
-          <AnimatedWord key={`prefix-${key}`} text={currentPhrase.prefix} delay={100} />
+          <AnimatedWord 
+            key={`prefix-${key}`} 
+            text={currentPhrase.prefix} 
+            delay={100}
+            onComplete={() => setShowSuffix(true)}
+          />
         </span>
 
-        {/* Animated suffix text with typewriter effect */}
+        {/* Animated suffix text with typewriter effect - only shows after prefix completes */}
         <span className="block text-2xl md:text-4xl lg:text-5xl font-light text-gray-300 min-h-[1.2em]">
-          <AnimatedWord 
-            key={`suffix-${key}`} 
-            text={currentPhrase.suffix} 
-            delay={100 + currentPhrase.prefix.length * 40}
-          />
+          {showSuffix && (
+            <AnimatedWord 
+              key={`suffix-${key}`} 
+              text={currentPhrase.suffix} 
+              delay={50}
+            />
+          )}
         </span>
       </h1>
 
