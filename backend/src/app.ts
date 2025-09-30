@@ -24,6 +24,10 @@ import { authenticate } from './middleware/auth';
 
 // Initialize configurations
 const app = express();
+
+// Trust proxy for Fly.io (required for rate limiting to work correctly)
+app.set('trust proxy', true);
+
 testConnection();
 redis.connect();
 
