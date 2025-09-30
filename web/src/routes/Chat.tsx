@@ -7,6 +7,7 @@ import DeleteIcon from '../assets/delete.svg?react';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import Modal from '../components/Modal';
 import VoiceCallButton from '../components/VoiceCallButton';
+import MobileBottomNav from '../components/MobileBottomNav';
 
 type Message = { id?: string; role: 'user' | 'assistant'; content: string };
 type Memory = { id: string; memory_text: string };
@@ -25,7 +26,7 @@ const BouncingLoader = () => (
   </div>
 );
 
-export default function Chat({ menuOpen }: { menuOpen: boolean }) {
+export default function Chat() {
   useLayoutEffect(() => {
     try {
       if ('scrollRestoration' in window.history) {
@@ -1030,7 +1031,7 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
           </div>
           
           <div className="flex h-[700px] md:h-[700px] flex-col overflow-hidden">
-            <div ref={messagesListRef} className="flex-1 space-y-2 overflow-y-auto pr-1 pb-24 md:pb-0 will-change-scroll overscroll-contain" style={{ overflowAnchor: 'none' }} onWheel={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()}>
+            <div ref={messagesListRef} className="flex-1 space-y-2 overflow-y-auto pr-1 pb-36 md:pb-0 will-change-scroll overscroll-contain" style={{ overflowAnchor: 'none' }} onWheel={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()}>
             {messages.map((m, i) => (
             <div key={m.id || i} className={`group my-2 ${m.role === 'user' ? 'md:text-right text-left' : 'md:text-left text-left'}`}>
               <div 
@@ -1372,34 +1373,15 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
           </div>
         </aside>
 
-        {/* Mobile UI Elements */}
-        <div className={`md:hidden ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden' : ''}`}>
-          {/* Header */}
-          <div className={`fixed top-4 ${menuOpen ? 'mt-40' : 'mt-16'} left-4 right-4 z-30 flex justify-between items-center`}>
-            <button onClick={() => { setIsLeftSidebarOpen(true); setIsRightSidebarOpen(false); }} className="p-2 rounded-full bg-white/10 backdrop-blur">
-              {/* Model Icon */}
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
-            </button>
-            <button onClick={() => { setIsRightSidebarOpen(true); setIsLeftSidebarOpen(false); }} className="p-2 rounded-full bg-white/10 backdrop-blur">
-              {/* History Icon */}
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
-            </button>
-          </div>
-
-          {/* Chat Input */}
-          <div className="fixed bottom-0 left-0 right-0 p-2 bg-gray-900 border-t border-white/10 rounded-t-2xl">
+        {/* Mobile Bottom Navigation */}
+        {!isLeftSidebarOpen && !isRightSidebarOpen && (
+          <MobileBottomNav
+            onOpenLeftSidebar={() => { setIsLeftSidebarOpen(true); setIsRightSidebarOpen(false); }}
+            onOpenRightSidebar={() => { setIsRightSidebarOpen(true); setIsLeftSidebarOpen(false); }}
+            showInput={true}
+          >
             <div className="relative">
-              <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} className="flex items-center gap-2" onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onSubmit();
-                  setTimeout(() => {
-                    const ml = messagesListRef.current;
-                    if (ml) ml.scrollTop = ml.scrollHeight;
-                  }, 0);
-                }
-              }}>
+              <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} className="flex items-center gap-2">
                 <input
                   className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500"
                   placeholder="Type a message"
@@ -1411,6 +1393,11 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       e.stopPropagation();
+                      onSubmit();
+                      setTimeout(() => {
+                        const ml = messagesListRef.current;
+                        if (ml) ml.scrollTop = ml.scrollHeight;
+                      }, 0);
                     }
                   }}
                   disabled={streaming || Boolean(cooldownMsg)}
@@ -1433,12 +1420,10 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                         window.alert(`Voice call error: ${error}`);
                       }}
                       onTranscript={(transcript) => {
-                        // Add transcript as user message
                         console.log('Adding transcript to chat:', transcript);
                         setMessages(prev => [...prev, { role: 'user', content: transcript }]);
                       }}
                       onAIResponse={(response) => {
-                        // Add AI response as assistant message
                         console.log('Adding AI response to chat:', response);
                         setMessages(prev => [...prev, { role: 'assistant', content: response }]);
                       }}
@@ -1458,8 +1443,8 @@ export default function Chat({ menuOpen }: { menuOpen: boolean }) {
                 </button>
               </form>
             </div>
-          </div>
-        </div>
+          </MobileBottomNav>
+        )}
 
         {/* Confirm delete memory modal */}
         <Modal

@@ -49,7 +49,8 @@
     "stripe": "^18.5.0",
     "uuid": "^13.0.0",
     "winston": "^3.17.0",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "serverless-http": "^3.2.0"
   },
   "devDependencies": {
     "@types/compression": "^1.8.1",
@@ -62,6 +63,7 @@
     "nodemon": "^3.1.10",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "@types/serverless-http": "^2.7.3"
   }
 }

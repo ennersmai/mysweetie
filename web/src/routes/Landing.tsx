@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import AnimatedSection from '../components/AnimatedSection';
 import ParticleAnimation from '../components/ParticleAnimation';
+import AnimatedHeroText from '../components/AnimatedHeroText';
 
 type Character = {
   id: string;
@@ -157,15 +158,7 @@ export default function Landing() {
       <section ref={heroRef} className="relative py-24 md:py-32 px-6 min-h-[85vh] md:min-h-[95vh] overflow-hidden">
         <ParticleAnimation className="absolute inset-0 opacity-40" />
         <div className="relative z-10 max-w-6xl mx-auto text-center">
-          <h1 className="text-white mb-10 md:mb-12 leading-tight max-w-5xl mx-auto">
-            <span className="block text-4xl md:text-6xl lg:text-7xl font-light">The</span>
-            <span className="relative inline-block my-2">
-              <span className="absolute -inset-1 md:-inset-2 rounded-2xl bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 opacity-40 blur-2xl"></span>
-              <span className="relative block text-5xl md:text-7xl lg:text-8xl font-bold bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent drop-shadow-[0_10px_40px_rgba(236,72,153,0.35)]">SWEETEST</span>
-            </span>
-            <span className="block text-3xl md:text-5xl lg:text-6xl font-medium">AI companion</span>
-            <span className="block text-2xl md:text-4xl lg:text-5xl font-light">that you've ever met</span>
-          </h1>
+          <AnimatedHeroText />
           <p className="text-xl md:text-2xl text-gray-300 mb-12 max-w-4xl mx-auto leading-relaxed">
             Choose your perfect companion — Experience the future of AI companionship with lifelike conversations, persistent memory, and voice interactions that feel genuinely human. Chat, flirt, and unlock exclusive experiences anytime you want.
           </p>

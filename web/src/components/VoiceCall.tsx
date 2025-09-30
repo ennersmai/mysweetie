@@ -199,8 +199,18 @@ export default function VoiceCall({
         return false;
       }
 
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsHost = process.env.NODE_ENV === 'development' ? 'localhost:3001' : window.location.host;
+      // Derive WS origin from VITE_API_BASE_URL to support separate backend domain
+      const apiBase = (import.meta as any).env?.VITE_API_BASE_URL as string | undefined;
+      let wsProtocol = 'ws:';
+      let wsHost = 'localhost:3001';
+      if (apiBase && /^https?:\/\//i.test(apiBase)) {
+        const apiUrl = new URL(apiBase);
+        wsProtocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsHost = apiUrl.host;
+      } else if (typeof window !== 'undefined') {
+        wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsHost = process.env.NODE_ENV === 'development' ? 'localhost:3001' : window.location.host;
+      }
       const wsUrl_full = `${wsProtocol}//${wsHost}/ws/call/${sessionId}?token=${token}`;
 
       websocketRef.current = new WebSocket(wsUrl_full);

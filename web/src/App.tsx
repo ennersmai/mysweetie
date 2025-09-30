@@ -41,8 +41,8 @@ function App() {
                 <Route path="/tos" element={<Tos />} />
                 <Route path="/characters" element={<ProtectedRoute><Characters /></ProtectedRoute>} />
                 <Route path="/characters/new" element={<ProtectedRoute><NewCharacter /></ProtectedRoute>} />
-                <Route path="/chat/:characterId" element={<ProtectedRoute><Chat menuOpen={menuOpen} /></ProtectedRoute>} />
-                <Route path="/chat/:characterId/:conversationId" element={<ProtectedRoute><Chat menuOpen={menuOpen} /></ProtectedRoute>} />
+                <Route path="/chat/:characterId" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+                <Route path="/chat/:characterId/:conversationId" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
                 <Route path="/gallery" element={<ProtectedRoute><Gallery /></ProtectedRoute>} />
                 <Route path="/subscribe" element={<ProtectedRoute><Subscribe /></ProtectedRoute>} />
                 <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
