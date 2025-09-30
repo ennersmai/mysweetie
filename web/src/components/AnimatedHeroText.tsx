@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 const phrases = [
   { prefix: "AI companion", suffix: "that you've ever met" },
@@ -11,19 +11,25 @@ const AnimatedWord = ({
   text, 
   delay = 0, 
   className = "",
-  onComplete 
+  onComplete,
+  shouldStart = true
 }: { 
   text: string; 
   delay?: number; 
   className?: string;
   onComplete?: () => void;
+  shouldStart?: boolean;
 }) => {
   const [displayText, setDisplayText] = useState('');
   const [isComplete, setIsComplete] = useState(false);
+  const hasCompletedRef = useRef(false);
 
   useEffect(() => {
+    if (!shouldStart) return;
+    
     setDisplayText('');
     setIsComplete(false);
+    hasCompletedRef.current = false;
     
     const timeout = setTimeout(() => {
       const letters = text.split('');
@@ -36,8 +42,9 @@ const AnimatedWord = ({
         } else {
           setIsComplete(true);
           clearInterval(interval);
-          if (onComplete) {
-            onComplete();
+          if (onComplete && !hasCompletedRef.current) {
+            hasCompletedRef.current = true;
+            setTimeout(() => onComplete(), 50); // Small delay before triggering next animation
           }
         }
       }, 40);
@@ -46,33 +53,36 @@ const AnimatedWord = ({
     }, delay);
 
     return () => clearTimeout(timeout);
-  }, [text, delay, onComplete]);
+  }, [text, delay, shouldStart, onComplete]);
+
+  if (!shouldStart) return null;
 
   return (
     <span className={`${className} inline-block ${isComplete ? 'animate-subtle-pulse' : ''}`}>
       {displayText}
-      {!isComplete && <span className="inline-block w-[2px] h-[0.8em] bg-gradient-to-r from-pink-500 to-purple-500 ml-1 animate-pulse" />}
+      {!isComplete && displayText && <span className="inline-block w-[2px] h-[0.8em] bg-gradient-to-r from-pink-500 to-purple-500 ml-1 animate-pulse" />}
     </span>
   );
 };
 
 export default function AnimatedHeroText() {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [showSuffix, setShowSuffix] = useState(false);
+  const [prefixComplete, setPrefixComplete] = useState(false);
+  const [animationKey, setAnimationKey] = useState(0);
 
   // Handle phrase changes
   useEffect(() => {
-    // Reset suffix when phrase changes
-    setShowSuffix(false);
-    
     const interval = setInterval(() => {
-      setShowSuffix(false); // Hide suffix before changing phrase
-      setTimeout(() => {
-        setCurrentIndex((prev) => (prev + 1) % phrases.length);
-      }, 100); // Small delay to ensure clean transition
-    }, 6000); // 6 seconds per phrase
+      setPrefixComplete(false);
+      setAnimationKey(prev => prev + 1);
+      setCurrentIndex((prev) => (prev + 1) % phrases.length);
+    }, 7000); // 7 seconds per phrase
 
     return () => clearInterval(interval);
+  }, []);
+
+  const handlePrefixComplete = useCallback(() => {
+    setPrefixComplete(true);
   }, []);
 
   const currentPhrase = phrases[currentIndex];
@@ -95,22 +105,22 @@ export default function AnimatedHeroText() {
         {/* Animated prefix text with typewriter effect */}
         <span className="block text-3xl md:text-5xl lg:text-6xl font-medium min-h-[1.2em]">
           <AnimatedWord 
-            key={`prefix-${currentIndex}`} 
+            key={`prefix-${animationKey}`} 
             text={currentPhrase.prefix} 
             delay={200}
-            onComplete={() => setShowSuffix(true)}
+            shouldStart={true}
+            onComplete={handlePrefixComplete}
           />
         </span>
 
         {/* Animated suffix text with typewriter effect - only shows after prefix completes */}
         <span className="block text-2xl md:text-4xl lg:text-5xl font-light text-gray-300 min-h-[1.2em]">
-          {showSuffix && (
-            <AnimatedWord 
-              key={`suffix-${currentIndex}`} 
-              text={currentPhrase.suffix} 
-              delay={100}
-            />
-          )}
+          <AnimatedWord 
+            key={`suffix-${animationKey}`} 
+            text={currentPhrase.suffix} 
+            delay={150}
+            shouldStart={prefixComplete}
+          />
         </span>
       </h1>
 
