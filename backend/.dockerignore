@@ -15,6 +15,5 @@ README.md
 coverage
 .DS_Store
 test-tts.js
-tsconfig.json
 nodemon.json
 srcs
