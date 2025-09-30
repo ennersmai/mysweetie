@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabaseClient';
 import { apiClient } from '../lib/apiClient';
 import RefreshIcon from '../assets/refresh.svg?react';
 import DeleteIcon from '../assets/delete.svg?react';
+import PinIcon from '../assets/pin.svg?react';
+import SendIcon from '../assets/send.svg?react';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import Modal from '../components/Modal';
 import VoiceCallButton from '../components/VoiceCallButton';
@@ -64,6 +66,7 @@ export default function Chat() {
   const [memoriesLoading, setMemoriesLoading] = useState(false);
   const [confirmMemoryId, setConfirmMemoryId] = useState<string | null>(null);
   const [confirmChatId, setConfirmChatId] = useState<string | null>(null);
+  const [pinningMessageIndex, setPinningMessageIndex] = useState<number | null>(null);
   const [isNsfwModalOpen, setIsNsfwModalOpen] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
@@ -537,6 +540,33 @@ export default function Chat() {
       setMemoriesLoading(false);
     }
   }, [characterId]);
+
+  const pinMessageAsMemory = useCallback(async (messageIndex: number, role: 'user' | 'assistant', content: string) => {
+    if (!characterId || !content.trim()) return;
+    
+    setPinningMessageIndex(messageIndex);
+    try {
+      const res = await apiClient.post('/memories', {
+        characterId,
+        memoryText: content,
+        role
+      });
+      
+      if (res.ok) {
+        // Reload memories to show the new one
+        await loadMemories();
+        // Show success feedback (optional - could add a toast notification)
+        console.log('Message pinned as memory successfully');
+      } else {
+        const errorData = await res.json();
+        console.error('Failed to pin message:', errorData?.error || 'Unknown error');
+      }
+    } catch (e) {
+      console.error('Failed to pin message as memory:', e);
+    } finally {
+      setPinningMessageIndex(null);
+    }
+  }, [characterId, loadMemories]);
 
   useEffect(() => {
     loadMemories();
@@ -1033,9 +1063,9 @@ export default function Chat() {
           <div className="flex h-[700px] md:h-[700px] flex-col overflow-hidden">
             <div ref={messagesListRef} className="flex-1 space-y-2 overflow-y-auto pr-1 pb-36 md:pb-0 will-change-scroll overscroll-contain" style={{ overflowAnchor: 'none' }} onWheel={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()}>
             {messages.map((m, i) => (
-            <div key={m.id || i} className={`group my-2 ${m.role === 'user' ? 'md:text-right text-left' : 'md:text-left text-left'}`}>
+            <div key={m.id || i} className={`group my-3 ${m.role === 'user' ? 'md:text-right text-left' : 'md:text-left text-left'}`}>
               <div 
-                className={`relative inline-block max-w-[80%] md:ml-0 ${m.role === 'user' ? 'ml-auto' : 'ml-0'} rounded-2xl ${m.role === 'user' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'bg-white/10 text-white/90'} px-4 py-2 text-sm`}
+                className={`relative inline-block max-w-[80%] md:ml-0 ${m.role === 'user' ? 'ml-auto' : 'ml-0'} rounded-2xl ${m.role === 'user' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'bg-white/10 text-white/90'} px-4 py-3 text-sm`}
                 onTouchStart={() => {
                   if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
                   longPressTimerRef.current = window.setTimeout(() => {
@@ -1051,13 +1081,13 @@ export default function Chat() {
                     <BouncingLoader />
                   </div>
                 )}
-                {/* User controls above bubble; assistant delete inside bubble */}
+                {/* User controls above bubble */}
                 {m.role === 'user' && (
-                  <div className={`absolute -top-3 right-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1`}>
+                  <div className={`absolute -top-3 right-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2`}>
                     <button
                       type="button"
                       title="Delete message"
-                      className="p-1 rounded-full bg-white/10 hover:bg-white/20"
+                      className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-sm"
                       onClick={async () => {
                       const tryDelete = async (id: string | undefined) => {
                         if (!id) return false;
@@ -1096,7 +1126,7 @@ export default function Chat() {
                     <button
                       type="button"
                       title="Edit message"
-                      className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 backdrop-blur-sm text-xs font-medium"
                       onClick={() => {
                         setEditTarget({ index: i, id: m.id, text: m.content });
                         setEditText(m.content);
@@ -1107,46 +1137,60 @@ export default function Chat() {
                   </div>
                 )}
 
+                {/* Assistant controls above bubble */}
                 {m.role === 'assistant' && (
-                  <button
-                    type="button"
-                    title="Delete message"
-                    className="absolute top-1 right-1 p-1 rounded-full bg-white/10 hover:bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={async () => {
-                      const tryDelete = async (id: string | undefined) => {
-                        if (!id) return false;
-                        try {
-                          const res = await apiClient.delete(`/chat/message/${id}`);
-                          return res.ok || res.status === 204;
-                        } catch (e) {
-                          console.error('Failed to delete message', e);
-                          return false;
+                  <div className={`absolute -top-3 left-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2`}>
+                    <button
+                      type="button"
+                      title="Delete message"
+                      className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-sm"
+                      onClick={async () => {
+                        const tryDelete = async (id: string | undefined) => {
+                          if (!id) return false;
+                          try {
+                            const res = await apiClient.delete(`/chat/message/${id}`);
+                            return res.ok || res.status === 204;
+                          } catch (e) {
+                            console.error('Failed to delete message', e);
+                            return false;
+                          }
+                        };
+                        if (await tryDelete(m.id)) {
+                          setMessages(prev => prev.filter((_, idx) => idx !== i));
+                          return;
                         }
-                      };
-                      if (await tryDelete(m.id)) {
-                        setMessages(prev => prev.filter((_, idx) => idx !== i));
-                        return;
-                      }
-                      try {
-                        if (currentConversationId) {
-                          const res = await apiClient.get(`/chat/history/${currentConversationId}`);
-                          if (res.ok) {
-                            const data = await res.json();
-                            const mapped = (data || []).map((mm: any) => ({ id: mm.id as string, role: mm.role as 'user' | 'assistant', content: mm.content as string }));
-                            setMessages(mapped);
-                            const match = mapped.find((mm: any) => mm.role === m.role && mm.content === m.content);
-                            if (match && await tryDelete(match.id)) {
-                              setMessages(prev => prev.filter(pm => pm.id !== match.id));
-                              return;
+                        try {
+                          if (currentConversationId) {
+                            const res = await apiClient.get(`/chat/history/${currentConversationId}`);
+                            if (res.ok) {
+                              const data = await res.json();
+                              const mapped = (data || []).map((mm: any) => ({ id: mm.id as string, role: mm.role as 'user' | 'assistant', content: mm.content as string }));
+                              setMessages(mapped);
+                              const match = mapped.find((mm: any) => mm.role === m.role && mm.content === m.content);
+                              if (match && await tryDelete(match.id)) {
+                                setMessages(prev => prev.filter(pm => pm.id !== match.id));
+                                return;
+                              }
                             }
                           }
-                        }
-                      } catch {}
-                      setMessages(prev => prev.filter((_, idx) => idx !== i));
-                    }}
-                  >
-                    <DeleteIcon className="w-4 h-4" />
-                  </button>
+                        } catch {}
+                        setMessages(prev => prev.filter((_, idx) => idx !== i));
+                      }}
+                    >
+                      <DeleteIcon className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Edit message"
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 backdrop-blur-sm text-xs font-medium"
+                      onClick={() => {
+                        setEditTarget({ index: i, id: m.id, text: m.content });
+                        setEditText(m.content);
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </div>
                 )}
                 
                 {/* Top-left controls row (icon + waveform) */}
@@ -1190,10 +1234,22 @@ export default function Chat() {
                         onSubmit(undefined, lastUserMessage.content);
                       }
                     }}
-                    className="absolute -bottom-2 -right-2 p-1 rounded-full bg-white/10 hover:bg-white/20"
+                    className="absolute -bottom-3 -right-3 p-1.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-sm shadow-lg"
                     title="Regenerate response"
                   >
                     <RefreshIcon className="h-4 w-4" />
+                  </button>
+                )}
+
+                {/* Pin button - right for user, left for AI */}
+                {m.content && m.content.trim() && (
+                  <button
+                    onClick={() => pinMessageAsMemory(i, m.role, m.content)}
+                    disabled={pinningMessageIndex === i}
+                    className={`absolute -bottom-3 ${m.role === 'user' ? 'right-0' : 'left-0'} p-1.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50 shadow-md`}
+                    title="Pin as memory"
+                  >
+                    <PinIcon className="h-4 w-4" />
                   </button>
                 )}
 
@@ -1264,13 +1320,11 @@ export default function Chat() {
                   )}
                 </div>
                 {/* Send Button */}
-                <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 p-2 text-white shadow transition hover:brightness-110 disabled:opacity-50" disabled={streaming || Boolean(cooldownMsg)}>
+                <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-lg transition hover:brightness-110 disabled:opacity-50 flex items-center justify-center" disabled={streaming || Boolean(cooldownMsg)}>
                   {streaming ? (
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-                    </svg>
+                    <SendIcon className="h-5 w-5" />
                   )}
                 </button>
               </form>
@@ -1432,13 +1486,11 @@ export default function Chat() {
                   )}
                 </div>
                 {/* Send Button */}
-                <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 p-2 text-white shadow transition hover:brightness-110 disabled:opacity-50" disabled={streaming || Boolean(cooldownMsg)}>
+                <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-lg transition hover:brightness-110 disabled:opacity-50 flex items-center justify-center" disabled={streaming || Boolean(cooldownMsg)}>
                   {streaming ? (
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-                    </svg>
+                    <SendIcon className="h-5 w-5" />
                   )}
                 </button>
               </form>
@@ -1581,21 +1633,33 @@ export default function Chat() {
         size="sm"
       >
         <div className="flex flex-col gap-2 text-white">
-          {longPressMessage && longPressMessage.isUser && (
-            <button
-              className="w-full px-3 py-2 rounded bg-white/10 hover:bg-white/20 text-left"
-              onClick={() => {
-                const idx = longPressMessage.index;
-                const msg = messages[idx];
-                if (!msg) return;
-                setEditTarget({ index: idx, id: msg.id, text: msg.content });
-                setEditText(msg.content);
-                setLongPressMessage(null);
-              }}
-            >
-              Edit
-            </button>
-          )}
+          <button
+            className="w-full px-3 py-2 rounded bg-white/10 hover:bg-white/20 text-left"
+            onClick={() => {
+              if (!longPressMessage) return;
+              const idx = longPressMessage.index;
+              const msg = messages[idx];
+              if (!msg) return;
+              setEditTarget({ index: idx, id: msg.id, text: msg.content });
+              setEditText(msg.content);
+              setLongPressMessage(null);
+            }}
+          >
+            Edit
+          </button>
+          <button
+            className="w-full px-3 py-2 rounded bg-white/10 hover:bg-white/20 text-left"
+            onClick={() => {
+              if (!longPressMessage) return;
+              const idx = longPressMessage.index;
+              const msg = messages[idx];
+              if (!msg) return;
+              pinMessageAsMemory(idx, msg.role, msg.content);
+              setLongPressMessage(null);
+            }}
+          >
+            📌 Pin as Memory
+          </button>
           <button
             className="w-full px-3 py-2 rounded bg-red-600/80 hover:bg-red-600 text-left"
             onClick={async () => {
