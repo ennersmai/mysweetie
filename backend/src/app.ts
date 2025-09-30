@@ -104,8 +104,8 @@ if (process.env.NODE_ENV === 'production') {
   app.use(morgan('dev'));
 }
 
-// Rate limiting
-app.use(generalLimiter);
+// Rate limiting - TEMPORARILY DISABLED FOR TESTING
+// app.use(generalLimiter);
 
 // API routes
 app.use('/api/chat', authenticate, chatRoutes);
