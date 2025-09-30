@@ -87,6 +87,7 @@ interface Memory {
 interface UserProfile {
   nsfw_enabled: boolean;
   subscription_tier: string;
+  display_name?: string | null;
 }
 
 // This is a placeholder for the actual jailbreak prompt
@@ -132,9 +133,9 @@ async function getRelevantMemories(userId: string, characterId: string, conversa
 }
 
 async function getUserProfile(userId: string): Promise<UserProfile | null> {
-  const { data, error } = await supabaseAdmin
+  const { data, error} = await supabaseAdmin
     .from('profiles')
-    .select('nsfw_enabled, subscription_tier')
+    .select('nsfw_enabled, subscription_tier, display_name')
     .eq('id', userId);
 
   if (error) {
@@ -173,9 +174,14 @@ export async function* processChat(request: ChatRequest) {
       ? `You remember the following about your relationship:\n${memories.map(m => `- ${m.memory_text}`).join('\n')}`
       : "This is your first conversation.";
 
+    // Add user persona context if available
+    const userPersonaContext = userProfile?.display_name 
+      ? `\n\nYou are speaking with ${userProfile.display_name}. Use their name naturally in conversation when appropriate.`
+      : '';
+    
     const nsfwPrompt = nsfwAllowed ? JAILBREAK_PROMPT : '';
-    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- Speak ONLY in first person as the character.\n- NEVER write lines, actions, or internal thoughts for the user. Do not imitate, quote, or paraphrase the user as if you spoke it.\n- NEVER continue or complete the user's sentences, actions, or messages. React only to what the user actually sent.\n- If the user asks you to speak as them, politely refuse and continue speaking only as the character.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
-    const fullSystemPrompt = `${nsfwPrompt}${character.system_prompt}\n\n${memoryContext}${responseStylePrompt}`;
+    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- Speak ONLY in first person as the character.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as the character.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
+    const fullSystemPrompt = `${nsfwPrompt}${character.system_prompt}\n\n${memoryContext}${userPersonaContext}${responseStylePrompt}`;
 
     const openRouterMessages = [
         { role: 'system', content: fullSystemPrompt },
@@ -381,6 +387,7 @@ export async function* processChat(request: ChatRequest) {
         userId,
         characterId: character.id,
         conversation: conversationHistory + `\nassistant: ${fullResponse}`,
+        userPersona: userProfile?.display_name || null,
     });
 
     // Wait for other non-blocking operations to complete and log any errors

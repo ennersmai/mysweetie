@@ -1,7 +1,8 @@
 import { supabase } from '../config/database';
 
 interface ProfileUpdate {
-  nsfw_enabled: boolean;
+  nsfw_enabled?: boolean;
+  display_name?: string;
 }
 
 export const updateUserProfile = async (userId: string, updates: ProfileUpdate) => {

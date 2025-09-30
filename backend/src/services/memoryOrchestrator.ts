@@ -26,7 +26,7 @@ export class MemoryOrchestrator {
     logger.info({ message: 'Extracting memories with Mistral model', ...request });
     
     try {
-      const prompt = this.buildMemoryExtractionPrompt(request.conversation);
+      const prompt = this.buildMemoryExtractionPrompt(request.conversation, request.user_persona);
       
       const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
@@ -159,6 +159,59 @@ export class MemoryOrchestrator {
     try {
       if (memories.length === 0) return;
 
+      // Get user's plan tier to enforce memory limits
+      const { data: profile } = await supabaseAdmin
+        .from('profiles')
+        .select('plan_tier, is_premium')
+        .eq('id', userId)
+        .maybeSingle();
+
+      const planTier = profile?.plan_tier || (profile?.is_premium ? 'basic' : 'free');
+      
+      // Determine memory limit based on plan
+      const memoryLimits: { [key: string]: number } = {
+        'free': 20,
+        'basic': 50,
+        'premium': 100
+      };
+      const memoryLimit = memoryLimits[planTier] || 20;
+
+      // Count current memories for this user-character pair
+      const { count: currentMemoryCount } = await supabaseAdmin
+        .from('user_memories')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('character_id', characterId);
+
+      const existingCount = currentMemoryCount || 0;
+
+      // If at limit, delete lowest importance memories to make room
+      if (existingCount >= memoryLimit) {
+        const memoriesToDelete = Math.max(1, memories.length);
+        const { data: lowestMemories } = await supabaseAdmin
+          .from('user_memories')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('character_id', characterId)
+          .order('importance_score', { ascending: true })
+          .limit(memoriesToDelete);
+
+        if (lowestMemories && lowestMemories.length > 0) {
+          await supabaseAdmin
+            .from('user_memories')
+            .delete()
+            .in('id', lowestMemories.map(m => m.id));
+          
+          logger.info({ 
+            message: 'Deleted low-importance memories to make room', 
+            userId, 
+            characterId,
+            deletedCount: lowestMemories.length,
+            memoryLimit 
+          });
+        }
+      }
+
       const memoriesToUpsert = memories.map(memory => ({
         user_id: userId,
         character_id: characterId,
@@ -189,7 +242,14 @@ export class MemoryOrchestrator {
       // We will clear the cache to force a refresh on next retrieval.
       await redis.deleteCachedMemories(userId, characterId);
       
-      logger.info(`Upserted ${memories.length} memories for user ${userId}`);
+      logger.info({ 
+        message: 'Memory storage completed', 
+        userId, 
+        characterId,
+        memoriesUpserted: memories.length,
+        memoryLimit,
+        planTier 
+      });
 
     } catch (error) {
       // Catch any other unexpected errors
@@ -201,13 +261,15 @@ export class MemoryOrchestrator {
   /**
    * Build memory extraction prompt for Mistral
    */
-  private buildMemoryExtractionPrompt(conversation: ChatMessage[]): string {
+  private buildMemoryExtractionPrompt(conversation: ChatMessage[], userPersona?: string | null): string {
     const conversationText = conversation
       .map(msg => `${msg.role}: ${msg.content}`)
       .join('\n');
 
+    const personaName = userPersona || 'the user';
+
     return `
-Analyze the following conversation and extract CRITICAL memories. A critical memory is a piece of information that is ESSENTIAL for understanding the user's personality, backstory, or their relationship with the character.
+Analyze the following conversation and extract CRITICAL memories. A critical memory is a piece of information that is ESSENTIAL for understanding ${personaName}'s personality, backstory, or their relationship with the character.
 
 CONVERSATION:
 ${conversationText}
@@ -215,23 +277,23 @@ ${conversationText}
 INSTRUCTIONS:
 1. Extract 0-3 memories. It is VERY IMPORTANT to extract nothing if no new critical information is revealed.
 2. Focus ONLY on:
-    - Core user identity facts (name, occupation, defining relationships).
-    - Deep personal preferences and values.
-    - Major life events or emotional turning points.
-    - The established dynamics of the user-character relationship (e.g., "The user sees the character as a mentor").
+    - Core identity facts about ${personaName} (occupation, defining relationships).
+    - Deep personal preferences and values of ${personaName}.
+    - Major life events or emotional turning points in ${personaName}'s life.
+    - The established dynamics of the ${personaName}-character relationship (e.g., "${personaName} sees the character as a mentor").
 3. AVOID extracting:
     - Trivial facts (e.g., favorite color, what they ate for lunch).
     - Casual greetings, pleasantries, or conversational filler.
     - Information that is temporary or likely to change.
 4. Score the importance from 1-10. A score of 7-10 is required for a memory to be considered critical.
-5. Summarize the memory from the character's perspective (e.g., "I learned that the user's name is John.").
+5. Summarize the memory from the character's perspective, using ${personaName}'s name (e.g., "I learned that ${personaName} works as a teacher.").
 6. The memory type MUST be exactly one of: "personal", "emotional", "factual", "relational", "preference".
 
 RESPOND IN THIS EXACT JSON FORMAT:
 {
   "memories": [
     {
-      "text": "specific memory text, from the character's perspective",
+      "text": "specific memory text, from the character's perspective, using ${personaName}'s name",
       "importance": 9,
       "type": "personal",
       "context": "brief context about when this was mentioned"
@@ -363,7 +425,7 @@ JSON RESPONSE:`;
   }
 
   // This is a placeholder for the actual implementation
-  async extractAndStoreMemories(request: { userId: string; characterId: string; conversation: string; }): Promise<void> {
+  async extractAndStoreMemories(request: { userId: string; characterId: string; conversation: string; userPersona?: string | null; }): Promise<void> {
     logger.info({ message: 'Memory extraction triggered', ...request });
     // In the future, this will call the memory orchestrator LLM
     // and store the results in the database.
@@ -373,7 +435,8 @@ JSON RESPONSE:`;
       conversation: request.conversation.split('\n').map(line => {
         const [role, content] = line.split(': ');
         return { role, content } as ChatMessage;
-      })
+      }),
+      user_persona: request.userPersona ?? null
     });
 
     if (extractionResult.memories.length > 0) {

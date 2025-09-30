@@ -38,6 +38,7 @@ export interface MemoryExtractionRequest {
   user_id: string;
   character_id: string;
   conversation_id?: string;
+  user_persona?: string | null;
 }
 
 export interface MemoryExtractionResult {

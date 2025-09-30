@@ -63,7 +63,6 @@
     "nodemon": "^3.1.10",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.2",
-    "@types/serverless-http": "^2.7.3"
+    "typescript": "^5.9.2"
   }
 }

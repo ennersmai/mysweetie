@@ -6,15 +6,33 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
   try {
     // @ts-ignore
     const userId = req.user.id;
-    const { nsfw_enabled } = req.body;
+    const { nsfw_enabled, display_name } = req.body;
 
-    // Basic validation
-    if (typeof nsfw_enabled !== 'boolean') {
-      res.status(400).json({ error: 'Invalid request body. "nsfw_enabled" must be a boolean.' });
+    // Build update object with only provided fields
+    const updates: any = {};
+    
+    if (typeof nsfw_enabled === 'boolean') {
+      updates.nsfw_enabled = nsfw_enabled;
+    }
+    
+    if (typeof display_name === 'string') {
+      // Validate and sanitize display_name
+      const trimmed = display_name.trim();
+      if (trimmed.length > 0 && trimmed.length <= 64) {
+        updates.display_name = trimmed;
+      } else if (trimmed.length > 64) {
+        res.status(400).json({ error: 'Display name must be 64 characters or less.' });
+        return;
+      }
+    }
+
+    // Ensure at least one field is being updated
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ error: 'No valid fields to update.' });
       return;
     }
 
-    const { data, error } = await updateUserProfile(userId, { nsfw_enabled });
+    const { data, error } = await updateUserProfile(userId, updates);
 
     if (error) {
       res.status(500).json({ error: 'Failed to update user profile.' });
