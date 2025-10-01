@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { authFetch } from '../lib/functionsClient';
 import { supabase } from '../lib/supabaseClient';
 import AnimatedSection from '../components/AnimatedSection';
+import { useImagePrefetch } from '../hooks/useImagePrefetch';
 
 type Item = { url: string | null; caption: string | null; is_preview: boolean };
 
@@ -14,6 +15,17 @@ export default function Gallery() {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [lightboxCaption, setLightboxCaption] = useState<string | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
+
+  // Extract image URLs for prefetching
+  const imageUrls = useMemo(() => {
+    return items
+      .filter(item => item.url)
+      .map(item => item.url!)
+      .slice(0, 20); // Limit to first 20 images to avoid overwhelming the browser
+  }, [items]);
+
+  // Prefetch images
+  const { isPrefetched } = useImagePrefetch(imageUrls, { priority: 'low' });
 
   useEffect(() => {
     const load = async () => {
@@ -117,7 +129,12 @@ export default function Gallery() {
             }`}
           >
             {c.avatar_url ? (
-              <img loading="lazy" src={c.avatar_url} alt={c.name} className="w-16 aspect-[3/4] rounded-lg object-contain bg-white/5 ring-2 ring-pink-500/40" />
+              <img 
+                loading="lazy" 
+                src={c.avatar_url} 
+                alt={c.name} 
+                className="w-16 aspect-[3/4] rounded-lg object-contain bg-white/5 ring-2 ring-pink-500/40 transition-opacity duration-300" 
+              />
             ) : (
               <div className="w-16 aspect-[3/4] rounded-lg bg-gradient-to-br from-pink-400 to-purple-600 ring-2 ring-pink-500/40" />
             )}
@@ -143,7 +160,26 @@ export default function Gallery() {
           >
             <div className="p-3">
               {it.url ? (
-                <img loading="lazy" src={it.url} className="w-full aspect-[3/4] cursor-zoom-in object-contain bg-white/5 rounded-lg ring-2 ring-pink-500/40 transition hover:brightness-110" />
+                <div className="relative w-full aspect-[3/4] bg-white/5 rounded-lg ring-2 ring-pink-500/40 overflow-hidden">
+                  <img 
+                    loading="lazy" 
+                    src={it.url} 
+                    className={`w-full h-full cursor-zoom-in object-contain transition-all duration-300 hover:brightness-110 ${
+                      isPrefetched(it.url) ? 'opacity-100' : 'opacity-0'
+                    }`}
+                    onLoad={(e) => {
+                      (e.target as HTMLImageElement).style.opacity = '1';
+                    }}
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.opacity = '0.5';
+                    }}
+                  />
+                  {!isPrefetched(it.url) && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/5">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-pink-500"></div>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="flex w-full aspect-[3/4] items-center justify-center bg-white/10 rounded-lg text-xs text-white/70">Premium</div>
               )}

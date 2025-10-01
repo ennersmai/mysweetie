@@ -1,9 +1,10 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import AnimatedSection from '../components/AnimatedSection';
 import ParticleAnimation from '../components/ParticleAnimation';
 import AnimatedHeroText from '../components/AnimatedHeroText';
+import { useImagePrefetch } from '../hooks/useImagePrefetch';
 
 type Character = {
   id: string;
@@ -55,6 +56,17 @@ export default function Landing() {
   const heroRef = useRef<HTMLDivElement>(null);
   const featuresRef = useRef<HTMLDivElement>(null);
   const faqRef = useRef<HTMLDivElement>(null);
+
+  // Extract character avatar URLs for prefetching
+  const characterImageUrls = useMemo(() => {
+    return characters
+      .filter(char => char.avatar_url)
+      .map(char => char.avatar_url!)
+      .slice(0, 12); // Limit to first 12 characters
+  }, [characters]);
+
+  // Prefetch character images
+  const { isPrefetched } = useImagePrefetch(characterImageUrls, { priority: 'high' });
 
   // Load characters for current style (newest first) and auto-refresh via realtime
   useEffect(() => {
@@ -290,11 +302,26 @@ export default function Landing() {
                     <div className="flex flex-col md:flex-row items-center gap-8 max-w-4xl">
                       <div className="flex-shrink-0">
                         {character.avatar_url ? (
-                          <img 
-                            src={character.avatar_url} 
-                            alt={character.name}
-                            className="max-h-[26rem] md:max-h-[28rem] h-auto w-auto max-w-full object-contain object-center rounded-2xl ring-4 ring-pink-500/40 shadow-2xl"
-                          />
+                          <div className="relative">
+                            <img 
+                              src={character.avatar_url} 
+                              alt={character.name}
+                              className={`max-h-[26rem] md:max-h-[28rem] h-auto w-auto max-w-full object-contain object-center rounded-2xl ring-4 ring-pink-500/40 shadow-2xl transition-opacity duration-500 ${
+                                isPrefetched(character.avatar_url) ? 'opacity-100' : 'opacity-0'
+                              }`}
+                              onLoad={(e) => {
+                                (e.target as HTMLImageElement).style.opacity = '1';
+                              }}
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.opacity = '0.5';
+                              }}
+                            />
+                            {!isPrefetched(character.avatar_url) && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-white/5 rounded-2xl">
+                                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-pink-500"></div>
+                              </div>
+                            )}
+                          </div>
                         ) : (
                           <div className="w-72 h-96 bg-white/10 rounded-2xl flex items-center justify-center">
                             <span className="text-6xl">👤</span>
