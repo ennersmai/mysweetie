@@ -68,6 +68,35 @@ function truncateByTokens(text: string, maxTokens: number): string {
   }
 }
 
+/**
+ * Parse and clean up LLM response by removing incomplete sentences
+ * This only affects the saved version, not the streaming experience
+ */
+function parseResponseForStorage(text: string): string {
+  if (!text || text.trim().length === 0) return text;
+  
+  // Split by sentences (ending with . ! ? or ...)
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  
+  // Filter out sentences that don't end with proper punctuation
+  const completeSentences = sentences.filter(sentence => {
+    const trimmed = sentence.trim();
+    if (trimmed.length === 0) return false;
+    
+    // Check if sentence ends with proper punctuation
+    return /[.!?]$/.test(trimmed);
+  });
+  
+  // If we have complete sentences, return them joined
+  if (completeSentences.length > 0) {
+    return completeSentences.join(' ').trim();
+  }
+  
+  // If no complete sentences, return the original text
+  // (fallback to avoid losing all content)
+  return text.trim();
+}
+
 // TODO: Move to a dedicated types file
 interface ChatRequest {
   character: any;
@@ -371,12 +400,25 @@ export async function* processChat(request: ChatRequest) {
         created_at: userCreatedAt,
       });
     }
+    // Parse the response for storage (remove incomplete sentences)
+    const parsedResponse = parseResponseForStorage(fullResponse);
+    
+    // Log if parsing made changes
+    if (parsedResponse !== fullResponse) {
+      logger.info({ 
+        message: 'Response parsed for storage', 
+        originalLength: fullResponse.length, 
+        parsedLength: parsedResponse.length,
+        conversationId 
+      });
+    }
+    
     rows.push({
       conversation_id: conversationId,
       user_id: userId,
       character_id: character.id, // Add character_id
       role: 'assistant',
-      content: fullResponse,
+      content: parsedResponse, // Use parsed version for storage
       created_at: assistantCreatedAt,
     });
     supabaseAdmin.from('chat_history').insert(rows).then(({ error }) => {
