@@ -51,7 +51,7 @@ export default function Chat() {
   const [fantasyMode, setFantasyMode] = useState(false);
   const [nsfwMode, setNsfwMode] = useState(false); // Add nsfwMode state
   const messagesListRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const firstTurnRef = useRef<boolean>(false);
   const stickToBottomRef = useRef(true);
   const [character, setCharacter] = useState<{ id: string; name: string; avatar_url: string | null; description: string | null; system_prompt: string | null; } | null>(null);
@@ -70,6 +70,12 @@ export default function Chat() {
   const [isNsfwModalOpen, setIsNsfwModalOpen] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
+
+  // Auto-resize textarea function
+  const autoResizeTextarea = (textarea: HTMLTextAreaElement) => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'; // Max height of 120px
+  };
   const assistantMessageRef = useRef('');
   const [isDesktop, setIsDesktop] = useState(() => {
     if (typeof window !== 'undefined' && 'matchMedia' in window) {
@@ -1065,7 +1071,7 @@ export default function Chat() {
             {messages.map((m, i) => (
             <div key={m.id || i} className={`group my-3 ${m.role === 'user' ? 'md:text-right text-left' : 'md:text-left text-left'}`}>
               <div 
-                className={`relative inline-block max-w-[80%] md:ml-0 ${m.role === 'user' ? 'ml-auto' : 'ml-0'} rounded-2xl ${m.role === 'user' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'bg-white/10 text-white/90'} px-4 py-3 text-sm`}
+                className={`relative inline-block max-w-[80%] md:ml-0 ${m.role === 'user' ? 'ml-auto' : 'ml-0'} rounded-2xl ${m.role === 'user' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white' : 'bg-white/10 text-white/90'} ${m.role === 'user' ? 'px-3 py-2' : 'px-4 py-3'} text-sm`}
                 onTouchStart={() => {
                   if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
                   longPressTimerRef.current = window.setTimeout(() => {
@@ -1279,14 +1285,24 @@ export default function Chat() {
                   }, 0);
                 }
               }}>
-                <input
-                  className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500"
+                <textarea
+                  className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500 resize-none overflow-hidden"
                   placeholder="Type a message"
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    autoResizeTextarea(e.target);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      onSubmit();
+                    }
+                  }}
                   ref={isDesktop ? inputRef : null}
                   autoFocus={isDesktop}
                   disabled={streaming || Boolean(cooldownMsg)}
+                  rows={1}
                 />
                 {/* Voice Call Button */}
                 <div className="absolute right-14 top-1/2 -translate-y-1/2">
@@ -1436,11 +1452,14 @@ export default function Chat() {
           >
             <div className="relative">
               <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} className="flex items-center gap-2">
-                <input
-                  className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500"
+                <textarea
+                  className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500 resize-none overflow-hidden"
                   placeholder="Type a message"
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    autoResizeTextarea(e.target);
+                  }}
                   ref={!isDesktop ? inputRef : null}
                   autoFocus={!isDesktop}
                   onKeyDown={(e) => {
@@ -1455,6 +1474,7 @@ export default function Chat() {
                     }
                   }}
                   disabled={streaming || Boolean(cooldownMsg)}
+                  rows={1}
                 />
                 {/* Voice Call Button */}
                 <div className="absolute right-14 top-1/2 -translate-y-1/2">
