@@ -276,6 +276,8 @@ ${conversationText}
 
 IMPORTANT: You are extracting memories about ${personaName} (the user), NOT about the character. The character is the one speaking in the conversation.
 
+GENDER CLARIFICATION: The character is always female, the user (${personaName}) is always male.
+
 INSTRUCTIONS:
 1. Extract 0-3 memories. It is VERY IMPORTANT to extract nothing if no new critical information is revealed.
 2. Focus ONLY on:

@@ -21,6 +21,8 @@ export default function Account() {
   const [saving, setSaving] = useState(false);
   const [displayNameInput, setDisplayNameInput] = useState('');
   const [purchasingCredits, setPurchasingCredits] = useState(false);
+  const [userMemoryInput, setUserMemoryInput] = useState('');
+  const [savingMemory, setSavingMemory] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -153,6 +155,64 @@ export default function Account() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          </div>
+
+          {/* User Memory Section */}
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6">
+            <h3 className="mb-4 text-lg font-semibold text-white">What do you want the AI to remember you with?</h3>
+            <div className="space-y-4">
+              <p className="text-sm text-white/70">
+                Add basic information about yourself that the AI characters will remember. This helps them understand who you are and create more personalized conversations.
+              </p>
+              <form
+                onSubmit={async (e: FormEvent) => {
+                  e.preventDefault();
+                  if (!userMemoryInput.trim()) return;
+                  try {
+                    setSavingMemory(true);
+                    setError(null);
+                    const res = await apiClient.post('/memories', {
+                      characterId: 'system', // Use a special system character for user memories
+                      memoryText: userMemoryInput.trim(),
+                      role: 'user'
+                    });
+                    if (!res.ok) {
+                      const errorData = await res.json();
+                      throw new Error(errorData?.error || 'Failed to save memory');
+                    }
+                    setUserMemoryInput('');
+                    // Show success feedback
+                    setError(null);
+                  } catch (e: any) {
+                    setError(e.message || String(e));
+                  } finally {
+                    setSavingMemory(false);
+                  }
+                }}
+                className="space-y-3"
+              >
+                <textarea
+                  className="w-full rounded-lg border border-white/20 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-pink-500 focus:ring-2 focus:ring-pink-500/20 resize-none"
+                  value={userMemoryInput}
+                  onChange={(e) => setUserMemoryInput(e.target.value)}
+                  placeholder="e.g., I'm a college student studying computer science. I love anime and video games. I'm usually pretty confident but can be shy around new people..."
+                  rows={4}
+                  maxLength={500}
+                />
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-white/50">{userMemoryInput.length}/500 characters</span>
+                  <button 
+                    disabled={savingMemory || !userMemoryInput.trim()} 
+                    className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-600 px-6 py-2 text-sm font-medium text-white hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    {savingMemory ? 'Saving...' : 'Save Memory'}
+                  </button>
+                </div>
+              </form>
+              <div className="text-xs text-white/50">
+                <p>💡 <strong>Tips:</strong> Include your personality, interests, background, or how you'd like characters to see you.</p>
               </div>
             </div>
           </div>

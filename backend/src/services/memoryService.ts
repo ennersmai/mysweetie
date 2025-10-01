@@ -2,12 +2,12 @@ import { supabase, supabaseAdmin } from '../config/database';
 
 export const fetchUserMemories = async (userId: string, characterId: string) => {
   // Use supabaseAdmin to bypass RLS, as the user is already authenticated by middleware.
-  // Include legacy rows where character_id may be NULL (pre-migration)
+  // Include legacy rows where character_id may be NULL (pre-migration) and system memories
   const { data, error } = await supabaseAdmin
     .from('user_memories')
     .select('*')
     .eq('user_id', userId)
-    .or(`character_id.eq.${characterId},character_id.is.null`)
+    .or(`character_id.eq.${characterId},character_id.is.null,character_id.eq.system`)
     .order('last_accessed', { ascending: false });
 
   return { data, error };

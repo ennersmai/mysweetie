@@ -134,7 +134,7 @@ export const createMemory = async (req: Request, res: Response): Promise<void> =
       .from('user_memories')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', userId)
-      .eq('character_id', characterId);
+      .eq('character_id', characterId === 'system' ? 'system' : characterId);
 
     const existingCount = count || 0;
 
@@ -144,7 +144,7 @@ export const createMemory = async (req: Request, res: Response): Promise<void> =
         .from('user_memories')
         .select('id')
         .eq('user_id', userId)
-        .eq('character_id', characterId)
+        .eq('character_id', characterId === 'system' ? 'system' : characterId)
         .order('importance_score', { ascending: true })
         .limit(1)
         .maybeSingle();
@@ -169,11 +169,11 @@ export const createMemory = async (req: Request, res: Response): Promise<void> =
       .from('user_memories')
       .insert({
         user_id: userId,
-        character_id: characterId,
+        character_id: characterId === 'system' ? 'system' : characterId,
         memory_text: trimmedText,
         importance_score: 8, // High importance for manually pinned messages
         memory_type: role === 'user' ? 'factual' : 'relational',
-        conversation_context: `Pinned ${role} message`,
+        conversation_context: characterId === 'system' ? 'User profile memory' : `Pinned ${role} message`,
         last_accessed: new Date().toISOString()
       })
       .select()
