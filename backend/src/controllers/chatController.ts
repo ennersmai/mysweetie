@@ -161,8 +161,9 @@ export const updateChatMessage = async (req: Request, res: Response): Promise<vo
       res.status(403).json({ error: 'Forbidden' });
       return;
     }
-    if (msg.role !== 'user') {
-      res.status(400).json({ error: 'Only user messages can be edited.' });
+    // Allow editing both user and assistant messages
+    if (msg.role !== 'user' && msg.role !== 'assistant') {
+      res.status(400).json({ error: 'Only user and assistant messages can be edited.' });
       return;
     }
 

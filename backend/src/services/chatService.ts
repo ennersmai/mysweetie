@@ -301,9 +301,15 @@ export async function* processChat(request: ChatRequest) {
                         const delta = truncatedText.slice(fullResponse.length);
                         if (delta && delta.length > 0) {
                           fullResponse = truncatedText;
-                          yield { type: 'chunk', content: delta };
+                          // Parse the final response to remove incomplete sentences
+                          const parsedResponse = parseResponseForStorage(fullResponse);
+                          const parsedDelta = parsedResponse.slice(fullResponse.length - delta.length);
+                          yield { type: 'chunk', content: parsedDelta };
+                          fullResponse = parsedResponse;
                         } else {
                           fullResponse = truncatedText;
+                          // Parse the final response to remove incomplete sentences
+                          fullResponse = parseResponseForStorage(fullResponse);
                         }
                         // Stop reading further from the stream
                         shouldStopStreaming = true;
@@ -357,7 +363,7 @@ export async function* processChat(request: ChatRequest) {
       }
     }
 
-    // Parse the response to remove incomplete sentences
+    // Parse the response to remove incomplete sentences (for normal completion)
     const parsedResponse = parseResponseForStorage(fullResponse);
     
     // Log if parsing made changes
@@ -368,6 +374,12 @@ export async function* processChat(request: ChatRequest) {
         parsedLength: parsedResponse.length,
         conversationId 
       });
+      
+      // If parsing changed the response, send the difference as a final chunk
+      if (parsedResponse.length < fullResponse.length) {
+        const removedText = fullResponse.slice(parsedResponse.length);
+        yield { type: 'chunk', content: `\n\n[Removed incomplete sentence: "${removedText.trim()}"]` };
+      }
     }
 
     yield { type: 'final', fullResponse: parsedResponse };
