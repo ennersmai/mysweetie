@@ -180,7 +180,7 @@ export async function* processChat(request: ChatRequest) {
       : '';
     
     const nsfwPrompt = nsfwAllowed ? JAILBREAK_PROMPT : '';
-    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- Speak ONLY in first person as the character.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as the character.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
+    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- You are ${character.name}. You are NOT ${userProfile?.display_name || 'the user'}.\n- Speak ONLY in first person as ${character.name}.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as ${character.name}.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
     
     // Replace template placeholders in character system prompt
     const personaName = userProfile?.display_name || 'the user';
@@ -188,7 +188,10 @@ export async function* processChat(request: ChatRequest) {
       .replace(/\{\{user\}\}/g, personaName)
       .replace(/\[User's Name\]/g, personaName)
       .replace(/\[user\]/g, personaName)
-      .replace(/\{\{char\}\}/g, character.name);
+      .replace(/\{\{char\}\}/g, character.name)
+      // Fix common template issues that cause identity confusion
+      .replace(/\*I'm\s+\w+\*/g, `*I'm ${character.name}*`)
+      .replace(/I'm\s+\w+\s+and\s+don't\s+you\s+forget\s+it/g, `I'm ${character.name} and don't you forget it`);
     
     const fullSystemPrompt = `${nsfwPrompt}${processedSystemPrompt}\n\n${memoryContext}${userPersonaContext}${responseStylePrompt}`;
 

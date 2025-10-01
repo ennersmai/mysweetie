@@ -1273,18 +1273,7 @@ export default function Chat() {
               </div>
             )}
             <div className="hidden md:block">
-              <form onSubmit={(e) => { e.preventDefault(); e.stopPropagation(); onSubmit(); }} className="relative mt-1 flex items-center gap-2" onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onSubmit();
-                  // Scroll only the messages list to the last bubble
-                  setTimeout(() => {
-                    const ml = messagesListRef.current;
-                    if (ml) ml.scrollTop = ml.scrollHeight;
-                  }, 0);
-                }
-              }}>
+              <form onSubmit={(e) => { e.preventDefault(); e.stopPropagation(); onSubmit(); }} className="relative mt-1 flex items-center gap-2">
                 <textarea
                   className="flex-1 rounded-full border border-white/20 bg-white/5 px-4 py-3 pr-24 text-white outline-none placeholder:text-gray-400 focus:border-pink-500 resize-none overflow-hidden"
                   placeholder="Type a message"
@@ -1297,6 +1286,11 @@ export default function Chat() {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       onSubmit();
+                      // Scroll only the messages list to the last bubble
+                      setTimeout(() => {
+                        const ml = messagesListRef.current;
+                        if (ml) ml.scrollTop = ml.scrollHeight;
+                      }, 0);
                     }
                   }}
                   ref={isDesktop ? inputRef : null}
