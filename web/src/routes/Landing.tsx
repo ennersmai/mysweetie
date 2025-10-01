@@ -66,8 +66,8 @@ export default function Landing() {
       .slice(0, 12); // Limit to first 12 characters
   }, [characters]);
 
-  // Prefetch character images
-  const { isPrefetched } = useImagePrefetch(characterImageUrls, { priority: 'high' });
+  // Prefetch character images (keeping for background optimization)
+  useImagePrefetch(characterImageUrls, { priority: 'high' });
 
   // Handle image load
   const handleImageLoad = (url: string) => {
@@ -318,11 +318,11 @@ export default function Landing() {
                                 loadedImages.has(character.avatar_url) ? 'opacity-100' : 'opacity-0'
                               }`}
                               onLoad={(e) => {
-                                handleImageLoad(character.avatar_url);
+                                if (character.avatar_url) handleImageLoad(character.avatar_url);
                                 (e.target as HTMLImageElement).style.opacity = '1';
                               }}
                               onError={(e) => {
-                                handleImageLoad(character.avatar_url); // Mark as "loaded" even on error to hide spinner
+                                if (character.avatar_url) handleImageLoad(character.avatar_url); // Mark as "loaded" even on error to hide spinner
                                 (e.target as HTMLImageElement).style.opacity = '0.5';
                               }}
                             />

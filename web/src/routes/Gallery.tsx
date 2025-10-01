@@ -25,8 +25,8 @@ export default function Gallery() {
       .slice(0, 20); // Limit to first 20 images to avoid overwhelming the browser
   }, [items]);
 
-  // Prefetch images
-  const { isPrefetched } = useImagePrefetch(imageUrls, { priority: 'low' });
+  // Prefetch images (keeping for background optimization)
+  useImagePrefetch(imageUrls, { priority: 'low' });
 
   // Handle image load
   const handleImageLoad = (url: string) => {
@@ -178,11 +178,11 @@ export default function Gallery() {
                       loadedImages.has(it.url) ? 'opacity-100' : 'opacity-0'
                     }`}
                     onLoad={(e) => {
-                      handleImageLoad(it.url);
+                      if (it.url) handleImageLoad(it.url);
                       (e.target as HTMLImageElement).style.opacity = '1';
                     }}
                     onError={(e) => {
-                      handleImageLoad(it.url); // Mark as "loaded" even on error to hide spinner
+                      if (it.url) handleImageLoad(it.url); // Mark as "loaded" even on error to hide spinner
                       (e.target as HTMLImageElement).style.opacity = '0.5';
                     }}
                   />
