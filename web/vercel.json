@@ -7,5 +7,11 @@
     "deploymentEnabled": {
       "master": true
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
 }
