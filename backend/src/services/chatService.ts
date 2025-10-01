@@ -70,7 +70,7 @@ function truncateByTokens(text: string, maxTokens: number): string {
 
 /**
  * Parse and clean up LLM response by removing incomplete sentences
- * This only affects the saved version, not the streaming experience
+ * This affects TTS, rendering, and storage - but not the streaming experience
  */
 function parseResponseForStorage(text: string): string {
   if (!text || text.trim().length === 0) return text;
@@ -357,7 +357,20 @@ export async function* processChat(request: ChatRequest) {
       }
     }
 
-    yield { type: 'final', fullResponse };
+    // Parse the response to remove incomplete sentences
+    const parsedResponse = parseResponseForStorage(fullResponse);
+    
+    // Log if parsing made changes
+    if (parsedResponse !== fullResponse) {
+      logger.info({ 
+        message: 'Response parsed for TTS, rendering, and storage', 
+        originalLength: fullResponse.length, 
+        parsedLength: parsedResponse.length,
+        conversationId 
+      });
+    }
+
+    yield { type: 'final', fullResponse: parsedResponse };
 
     // Ensure conversation exists for this user; create if missing
     if (conversationId) {
@@ -398,18 +411,6 @@ export async function* processChat(request: ChatRequest) {
         role: 'user',
         content: lastUserMessage.content,
         created_at: userCreatedAt,
-      });
-    }
-    // Parse the response for storage (remove incomplete sentences)
-    const parsedResponse = parseResponseForStorage(fullResponse);
-    
-    // Log if parsing made changes
-    if (parsedResponse !== fullResponse) {
-      logger.info({ 
-        message: 'Response parsed for storage', 
-        originalLength: fullResponse.length, 
-        parsedLength: parsedResponse.length,
-        conversationId 
       });
     }
     
