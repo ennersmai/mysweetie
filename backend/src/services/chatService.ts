@@ -137,13 +137,13 @@ async function getRelevantMemories(userId: string, characterId: string, conversa
   logger.info({ message: 'Memory cache miss', userId, characterId });
 
   // 2. If not in cache, query the database
-  // For now, we'll just get the most recent, highest importance memories.
-  // In the future, this will involve vector similarity search.
+  // Include both character-specific memories and system character memories (user profile)
+  const systemCharacterId = '00000000-0000-0000-0000-000000000000';
   const { data, error } = await supabaseAdmin
     .from('user_memories')
     .select('*')
     .eq('user_id', userId)
-    .eq('character_id', characterId)
+    .or(`character_id.eq.${characterId},character_id.eq.${systemCharacterId}`)
     .order('last_accessed', { ascending: false })
     .order('importance_score', { ascending: false })
     .limit(10);
