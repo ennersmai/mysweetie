@@ -15,6 +15,7 @@ export default function Gallery() {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [lightboxCaption, setLightboxCaption] = useState<string | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
+  const [loadedImages, setLoadedImages] = useState<Set<string>>(new Set());
 
   // Extract image URLs for prefetching
   const imageUrls = useMemo(() => {
@@ -27,6 +28,11 @@ export default function Gallery() {
   // Prefetch images
   const { isPrefetched } = useImagePrefetch(imageUrls, { priority: 'low' });
 
+  // Handle image load
+  const handleImageLoad = (url: string) => {
+    setLoadedImages(prev => new Set([...prev, url]));
+  };
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -35,7 +41,11 @@ export default function Gallery() {
           const { data: p } = await supabase.from('profiles').select('is_premium').eq('id', u.user.id).maybeSingle();
           setIsPremium(Boolean(p?.is_premium));
         }
-        const { data: chars } = await supabase.from('characters').select('id, name, avatar_url, style').order('created_at', { ascending: true });
+        const { data: chars } = await supabase
+          .from('characters')
+          .select('id, name, avatar_url, style')
+          .neq('id', '00000000-0000-0000-0000-000000000000') // Exclude system character
+          .order('created_at', { ascending: true });
         setCharacters(chars || []);
         const filtered = (chars || []).filter((c: any) => (c.style as any) ? c.style === styleFilter : styleFilter === 'realistic');
         if (filtered && filtered.length) {
@@ -165,17 +175,19 @@ export default function Gallery() {
                     loading="lazy" 
                     src={it.url} 
                     className={`w-full h-full cursor-zoom-in object-contain transition-all duration-300 hover:brightness-110 ${
-                      isPrefetched(it.url) ? 'opacity-100' : 'opacity-0'
+                      loadedImages.has(it.url) ? 'opacity-100' : 'opacity-0'
                     }`}
                     onLoad={(e) => {
+                      handleImageLoad(it.url);
                       (e.target as HTMLImageElement).style.opacity = '1';
                     }}
                     onError={(e) => {
+                      handleImageLoad(it.url); // Mark as "loaded" even on error to hide spinner
                       (e.target as HTMLImageElement).style.opacity = '0.5';
                     }}
                   />
-                  {!isPrefetched(it.url) && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-white/5">
+                  {!loadedImages.has(it.url) && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/5 rounded-lg">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-pink-500"></div>
                     </div>
                   )}

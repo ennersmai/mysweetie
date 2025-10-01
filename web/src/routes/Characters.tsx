@@ -24,6 +24,7 @@ export default function Characters() {
       const { data, error } = await supabase
         .from('characters')
         .select('id, name, description, avatar_url, system_prompt, style')
+        .neq('id', '00000000-0000-0000-0000-000000000000') // Exclude system character
         .order('created_at', { ascending: true });
       if (error) setError(error.message);
       setCharacters(data ?? []);

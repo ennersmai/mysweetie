@@ -25,6 +25,7 @@ export default function Landing() {
   const [styleFilter, setStyleFilter] = useState<'realistic' | 'anime'>('realistic');
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isSliderHovered, setIsSliderHovered] = useState(false);
+  const [loadedImages, setLoadedImages] = useState<Set<string>>(new Set());
   const [faqs, setFaqs] = useState<FAQItem[]>([
     {
       question: "How does MySweetie.AI work?",
@@ -68,15 +69,22 @@ export default function Landing() {
   // Prefetch character images
   const { isPrefetched } = useImagePrefetch(characterImageUrls, { priority: 'high' });
 
+  // Handle image load
+  const handleImageLoad = (url: string) => {
+    setLoadedImages(prev => new Set([...prev, url]));
+  };
+
   // Load characters for current style (newest first) and auto-refresh via realtime
   useEffect(() => {
     let isCancelled = false;
 
     const loadCharacters = async () => {
       // Show newest characters first; include null style as realistic for backwards-compat
+      // Exclude the system character (UUID: 00000000-0000-0000-0000-000000000000)
       let query = supabase
         .from('characters')
         .select('id, name, description, avatar_url, style')
+        .neq('id', '00000000-0000-0000-0000-000000000000')
         .order('created_at', { ascending: false })
         .limit(12);
 
@@ -307,16 +315,18 @@ export default function Landing() {
                               src={character.avatar_url} 
                               alt={character.name}
                               className={`max-h-[26rem] md:max-h-[28rem] h-auto w-auto max-w-full object-contain object-center rounded-2xl ring-4 ring-pink-500/40 shadow-2xl transition-opacity duration-500 ${
-                                isPrefetched(character.avatar_url) ? 'opacity-100' : 'opacity-0'
+                                loadedImages.has(character.avatar_url) ? 'opacity-100' : 'opacity-0'
                               }`}
                               onLoad={(e) => {
+                                handleImageLoad(character.avatar_url);
                                 (e.target as HTMLImageElement).style.opacity = '1';
                               }}
                               onError={(e) => {
+                                handleImageLoad(character.avatar_url); // Mark as "loaded" even on error to hide spinner
                                 (e.target as HTMLImageElement).style.opacity = '0.5';
                               }}
                             />
-                            {!isPrefetched(character.avatar_url) && (
+                            {!loadedImages.has(character.avatar_url) && (
                               <div className="absolute inset-0 flex items-center justify-center bg-white/5 rounded-2xl">
                                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-pink-500"></div>
                               </div>
