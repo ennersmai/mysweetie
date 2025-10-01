@@ -298,18 +298,14 @@ export async function* processChat(request: ChatRequest) {
                         yield { type: 'chunk', content };
                     } else {
                         const truncatedText = decode(combinedTokens.slice(0, MAX_RESPONSE_TOKENS));
-                        const delta = truncatedText.slice(fullResponse.length);
+                        // Parse the truncated response immediately to remove incomplete sentences
+                        const parsedResponse = parseResponseForStorage(truncatedText);
+                        const delta = parsedResponse.slice(fullResponse.length);
                         if (delta && delta.length > 0) {
-                          fullResponse = truncatedText;
-                          // Parse the final response to remove incomplete sentences
-                          const parsedResponse = parseResponseForStorage(fullResponse);
-                          const parsedDelta = parsedResponse.slice(fullResponse.length - delta.length);
-                          yield { type: 'chunk', content: parsedDelta };
                           fullResponse = parsedResponse;
+                          yield { type: 'chunk', content: delta };
                         } else {
-                          fullResponse = truncatedText;
-                          // Parse the final response to remove incomplete sentences
-                          fullResponse = parseResponseForStorage(fullResponse);
+                          fullResponse = parsedResponse;
                         }
                         // Stop reading further from the stream
                         shouldStopStreaming = true;
@@ -374,12 +370,6 @@ export async function* processChat(request: ChatRequest) {
         parsedLength: parsedResponse.length,
         conversationId 
       });
-      
-      // If parsing changed the response, send the difference as a final chunk
-      if (parsedResponse.length < fullResponse.length) {
-        const removedText = fullResponse.slice(parsedResponse.length);
-        yield { type: 'chunk', content: `\n\n[Removed incomplete sentence: "${removedText.trim()}"]` };
-      }
     }
 
     yield { type: 'final', fullResponse: parsedResponse };
