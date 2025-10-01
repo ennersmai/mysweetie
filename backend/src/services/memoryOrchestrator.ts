@@ -274,6 +274,8 @@ Analyze the following conversation and extract CRITICAL memories. A critical mem
 CONVERSATION:
 ${conversationText}
 
+IMPORTANT: You are extracting memories about ${personaName} (the user), NOT about the character. The character is the one speaking in the conversation.
+
 INSTRUCTIONS:
 1. Extract 0-3 memories. It is VERY IMPORTANT to extract nothing if no new critical information is revealed.
 2. Focus ONLY on:
