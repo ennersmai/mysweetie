@@ -1321,16 +1321,6 @@ export default function Chat() {
                         console.error('Voice call error:', error);
                         window.alert(`Voice call error: ${error}`);
                       }}
-                      onTranscript={(transcript) => {
-                        // Add transcript as user message
-                        console.log('Adding transcript to chat:', transcript);
-                        setMessages(prev => [...prev, { role: 'user', content: transcript }]);
-                      }}
-                      onAIResponse={(response) => {
-                        // Add AI response as assistant message
-                        console.log('Adding AI response to chat:', response);
-                        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
-                      }}
                       disabled={streaming || Boolean(cooldownMsg)}
                     />
                   )}
@@ -1492,14 +1482,6 @@ export default function Chat() {
                       onError={(error) => {
                         console.error('Voice call error:', error);
                         window.alert(`Voice call error: ${error}`);
-                      }}
-                      onTranscript={(transcript) => {
-                        console.log('Adding transcript to chat:', transcript);
-                        setMessages(prev => [...prev, { role: 'user', content: transcript }]);
-                      }}
-                      onAIResponse={(response) => {
-                        console.log('Adding AI response to chat:', response);
-                        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
                       }}
                       disabled={streaming || Boolean(cooldownMsg)}
                     />

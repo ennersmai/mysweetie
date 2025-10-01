@@ -181,7 +181,16 @@ export async function* processChat(request: ChatRequest) {
     
     const nsfwPrompt = nsfwAllowed ? JAILBREAK_PROMPT : '';
     const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- Speak ONLY in first person as the character.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as the character.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
-    const fullSystemPrompt = `${nsfwPrompt}${character.system_prompt}\n\n${memoryContext}${userPersonaContext}${responseStylePrompt}`;
+    
+    // Replace template placeholders in character system prompt
+    const personaName = userProfile?.display_name || 'the user';
+    const processedSystemPrompt = character.system_prompt
+      .replace(/\{\{user\}\}/g, personaName)
+      .replace(/\[User's Name\]/g, personaName)
+      .replace(/\[user\]/g, personaName)
+      .replace(/\{\{char\}\}/g, character.name);
+    
+    const fullSystemPrompt = `${nsfwPrompt}${processedSystemPrompt}\n\n${memoryContext}${userPersonaContext}${responseStylePrompt}`;
 
     const openRouterMessages = [
         { role: 'system', content: fullSystemPrompt },
