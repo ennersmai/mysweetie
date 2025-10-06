@@ -536,9 +536,9 @@ export default function Chat() {
     const incoming = chunk.replace(/\s+/g, ' ');
     ttsSentenceBufRef.current += incoming;
 
-    // Split only on strict sentence boundaries to avoid mid-phrase splits
-    // Boundaries: ellipsis, or terminal punctuation followed by whitespace or end
-    const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$))/;
+    // Split on various boundaries to handle long sentences with commas
+    // Look for: periods, exclamation, question marks, or commas/semicolons followed by space
+    const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$)|[;,](?:\s+|$))/;
     let buf = ttsSentenceBufRef.current;
     while (true) {
       const match = buf.match(boundaryRegex);
@@ -1059,11 +1059,14 @@ export default function Chat() {
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
-                // Don't speak remaining buffer text as it gets deleted from UI
-                // Only complete sentences that made it to the UI were spoken during streaming
+                // Speak any remaining buffer text to ensure we don't miss the end of long sentences
                 if (voiceEnabled) {
-                  // Clear any remaining buffer since incomplete sentences get deleted
-                  ttsSentenceBufRef.current = '';
+                  const remainingInBuffer = ttsSentenceBufRef.current.trim();
+                  if (remainingInBuffer.length > 0) {
+                    console.log(`🎵 Final TTS: speaking remaining buffer "${remainingInBuffer.substring(0, 50)}..." (${remainingInBuffer.length} chars)`);
+                    enqueueTts((voiceKey || 'luna').toLowerCase(), remainingInBuffer);
+                  }
+                  ttsSentenceBufRef.current = ''; // Clear the buffer
                 }
                 if (!assistantMessageRef.current) {
                   assistantMessageRef.current = finalText;
