@@ -153,13 +153,18 @@ export default function Chat() {
   const ttsSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
-  const PCM_MIN_SAMPLES = 3600; // ~150ms at 24kHz
-  const PCM_FADE_SAMPLES = 240; // ~10ms fade-in/out to avoid clicks at boundaries
+  const PCM_MIN_SAMPLES = 4800; // ~200ms at 24kHz to reduce boundary rate
   const ttsValidatedBinaryRef = useRef<boolean>(false);
   // Promises to resolve when current TTS playback fully ends
   const ttsEndResolversRef = useRef<Array<() => void>>([]);
   // Preserve 1 leftover byte between chunks to maintain 16-bit alignment
   const ttsCarryByteRef = useRef<number | null>(null);
+  // Track when the network stream has fully completed for the current sentence
+  const ttsNetworkDoneRef = useRef<boolean>(false);
+  // Crossfade handling between scheduled buffers
+  const ttsLastGainRef = useRef<GainNode | null>(null);
+  const ttsLastEndTimeRef = useRef<number>(0);
+  const TTS_CROSSFADE_S = 0.008; // 8ms overlap to hide boundaries
 
   const cleanTtsText = (s: string) => {
     // Remove asterisk emphasis and any html tags, collapse whitespace
@@ -205,17 +210,7 @@ export default function Chat() {
 
     if (chunk.length === 0) return;
 
-    // Apply tiny fade-in/out to avoid clicks at boundaries
-    const n = chunk.length;
-    const fade = Math.min(PCM_FADE_SAMPLES, Math.floor(n / 8));
-    if (fade > 0) {
-      for (let i = 0; i < fade; i++) {
-        const gainIn = i / fade;
-        const gainOut = (fade - i) / fade;
-        chunk[i] *= gainIn;
-        chunk[n - 1 - i] *= gainOut;
-      }
-    }
+    // No per-chunk fade to avoid periodic clicks; schedule contiguous buffers instead
 
     const float = new Float32Array(chunk);
     const audioBuffer = audioCtx.createBuffer(1, float.length, 24000);
@@ -223,16 +218,45 @@ export default function Chat() {
 
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(audioCtx.destination);
+    // Create a gain node for per-buffer fade and crossfade
+    const gain = audioCtx.createGain();
+    source.connect(gain);
+    gain.connect(audioCtx.destination);
 
-    const startAt = Math.max(audioCtx.currentTime + 0.02, ttsPlayheadRef.current);
+    // Compute start time with small overlap for crossfade
+    let startAt = Math.max(audioCtx.currentTime + 0.01, ttsPlayheadRef.current - TTS_CROSSFADE_S);
+    const endAt = startAt + audioBuffer.duration;
+
+    // Apply crossfade ramps
+    if (ttsLastGainRef.current && ttsLastEndTimeRef.current > 0) {
+      const prevEnd = ttsLastEndTimeRef.current;
+      const downStart = Math.max(audioCtx.currentTime, prevEnd - TTS_CROSSFADE_S);
+      try {
+        ttsLastGainRef.current.gain.setValueAtTime(1, downStart);
+        ttsLastGainRef.current.gain.linearRampToValueAtTime(0, prevEnd);
+      } catch {}
+      try {
+        gain.gain.setValueAtTime(0, startAt);
+        gain.gain.linearRampToValueAtTime(1, startAt + TTS_CROSSFADE_S);
+      } catch {}
+    } else {
+      try {
+        gain.gain.setValueAtTime(1, startAt);
+      } catch {}
+    }
+
     source.start(startAt);
     ttsSourcesRef.current.push(source);
-    ttsPlayheadRef.current = startAt + audioBuffer.duration;
+    ttsPlayheadRef.current = endAt;
+    ttsLastGainRef.current = gain;
+    ttsLastEndTimeRef.current = endAt;
 
     source.onended = () => {
+      // Remove this source first
+      ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
       const remaining = ttsPlayheadRef.current - audioCtx.currentTime;
-      if (remaining <= 0.03) {
+      // Only mark streaming false when network is done, accumulator empty, and no more sources remain
+      if (remaining <= 0.03 && ttsNetworkDoneRef.current && ttsPcmAccumRef.current.length === 0 && ttsSourcesRef.current.length === 0) {
         setPlayingIndex(null);
         ttsStreamingRef.current = false;
         console.log('🎵 TTS audio finished, streaming set to false');
@@ -242,7 +266,6 @@ export default function Chat() {
           try { r(); } catch {}
         });
       }
-      ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
     };
   };
 
@@ -324,6 +347,8 @@ export default function Chat() {
     ttsValidatedBinaryRef.current = false;
     // Reset carry byte between streams
     ttsCarryByteRef.current = null;
+    // Reset network-done flag
+    ttsNetworkDoneRef.current = false;
     // Notify any waiters that playback ended due to stop
     const resolvers = ttsEndResolversRef.current.splice(0);
     resolvers.forEach((r) => {
@@ -361,6 +386,8 @@ export default function Chat() {
     ttsValidatedBinaryRef.current = false;
     // Reset carry byte
     ttsCarryByteRef.current = null;
+    // Network not done until we finish reading
+    ttsNetworkDoneRef.current = false;
     
     try {
       let res: Response;
@@ -391,6 +418,8 @@ export default function Chat() {
       }
       // Ensure any remaining accumulated samples are played
       flushAccumulatedPcm(true);
+      // Mark network as done so onended can finalize state when buffers drain
+      ttsNetworkDoneRef.current = true;
     } finally {
       // Don't set ttsStreamingRef.current = false here
       // It will be set to false when audio actually finishes playing
