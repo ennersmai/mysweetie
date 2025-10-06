@@ -151,11 +151,6 @@ export default function Chat() {
   const ttsStreamingRef = useRef<boolean>(false);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const ttsSourcesRef = useRef<AudioBufferSourceNode[]>([]);
-  
-  // Audio buffering to prevent glitching from rapid chunks
-  const audioChunkBuffer = useRef<Int16Array[]>([]);
-  const audioBufferTimeout = useRef<number | null>(null);
-  const AUDIO_BUFFER_MS = 100; // Buffer for 100ms before processing
 
   const cleanTtsText = (s: string) => {
     // Remove asterisk emphasis and any html tags, collapse whitespace
@@ -201,55 +196,8 @@ export default function Chat() {
       : arrayBuffer.slice(0, alignedLength);
     
     const samples = new Int16Array(alignedBuffer);
-    
-    // Add to buffer instead of processing immediately
-    audioChunkBuffer.current.push(samples);
-    
-    // Clear existing timeout
-    if (audioBufferTimeout.current) {
-      clearTimeout(audioBufferTimeout.current);
-    }
-    
-    // Set timeout to process buffered chunks
-    audioBufferTimeout.current = window.setTimeout(() => {
-      processBufferedAudio();
-    }, AUDIO_BUFFER_MS);
-  };
-
-  const processBufferedAudio = () => {
-    const audioCtx = audioCtxRef.current;
-    if (!audioCtx || audioChunkBuffer.current.length === 0) return;
-    
-    // Concatenate all buffered chunks
-    const totalLength = audioChunkBuffer.current.reduce((sum, chunk) => sum + chunk.length, 0);
-    const combinedSamples = new Int16Array(totalLength);
-    let offset = 0;
-    
-    for (const chunk of audioChunkBuffer.current) {
-      combinedSamples.set(chunk, offset);
-      offset += chunk.length;
-    }
-    
-    // Clear buffer
-    audioChunkBuffer.current = [];
-    
-    // Convert to float32
-    const float = new Float32Array(combinedSamples.length);
-    for (let i = 0; i < combinedSamples.length; i++) {
-      float[i] = combinedSamples[i] / 32768;
-    }
-    
-    // Find the maximum amplitude to prevent clipping
-    const maxAmplitude = Math.max(...float.map(Math.abs));
-    
-    // Apply dynamic normalization to prevent clipping
-    if (maxAmplitude > 0.8) {
-      const normalizationFactor = 0.8 / maxAmplitude;
-      for (let i = 0; i < float.length; i++) {
-        float[i] *= normalizationFactor;
-      }
-      console.log(`Applied dynamic normalization: ${normalizationFactor.toFixed(3)} (max was ${maxAmplitude.toFixed(3)})`);
-    }
+    const float = new Float32Array(samples.length);
+    for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
     
     const sr = ttsSampleRateRef.current || 24000;
     
@@ -260,7 +208,7 @@ export default function Chat() {
     source.buffer = audioBuffer;
     source.connect(audioCtx.destination);
 
-    const startAt = Math.max(audioCtx.currentTime + 0.15, ttsPlayheadRef.current);
+    const startAt = Math.max(audioCtx.currentTime + 0.1, ttsPlayheadRef.current);
     source.start(startAt);
     ttsSourcesRef.current.push(source);
     ttsPlayheadRef.current = startAt + audioBuffer.duration;
@@ -279,16 +227,6 @@ export default function Chat() {
   const stopTtsNow = useCallback(() => {
     try { ttsAbortRef.current?.abort(); } catch {}
     ttsAbortRef.current = null;
-    
-    // Clear audio buffer timeout
-    if (audioBufferTimeout.current) {
-      clearTimeout(audioBufferTimeout.current);
-      audioBufferTimeout.current = null;
-    }
-    
-    // Clear audio chunk buffer
-    audioChunkBuffer.current = [];
-    
     // Stop all scheduled sources
     const audioCtx = audioCtxRef.current;
     ttsSourcesRef.current.forEach((s) => {
