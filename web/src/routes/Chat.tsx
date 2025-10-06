@@ -221,6 +221,9 @@ export default function Chat() {
       const remaining = ttsPlayheadRef.current - audioCtx.currentTime;
       if (remaining <= 0.05) {
         setPlayingIndex(null);
+        // Set streaming to false when all audio for this sentence is done
+        ttsStreamingRef.current = false;
+        console.log('🎵 TTS audio finished, streaming set to false');
       }
       // Remove from active sources list
       ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
@@ -296,7 +299,8 @@ export default function Chat() {
         }
       }
     } finally {
-      ttsStreamingRef.current = false;
+      // Don't set ttsStreamingRef.current = false here
+      // It will be set to false when audio actually finishes playing
     }
   }, []);
 
