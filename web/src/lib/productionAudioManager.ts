@@ -27,7 +27,7 @@ export class ProductionAudioManager {
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
   private readonly vadThresholdRms = 0.003; // More sensitive for better speech detection
-  private readonly vadHangoverMs = 1000; // Shorter hangover for more responsive detection
+  private readonly vadHangoverMs = 2500; // Match backend timeout for consistent behavior
   private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
   private readonly vadMinFrames = 3; // Require 3 consecutive frames to confirm speech
 
