@@ -150,6 +150,7 @@ export default function Chat() {
   const ttsStreamingRef = useRef<boolean>(false);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const ttsSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const uiTextBufferRef = useRef<string>(''); // Accumulator for UI streaming
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
   const PCM_MIN_SAMPLES = 4800; // ~200ms at 24kHz to reduce boundary rate
@@ -167,11 +168,12 @@ export default function Chat() {
   // Safe max characters per TTS request to avoid provider truncation
   const TTS_MAX_CHARS = 280;
 
-  // Extract only complete sentences from a chunk to avoid showing deleted text
-  const extractCompleteSentences = (chunk: string): string[] => {
+  // Extract complete sentences from accumulated text buffer
+  const extractCompleteSentencesFromBuffer = (): string => {
     const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$))/;
-    const sentences: string[] = [];
-    let remaining = chunk;
+    const buffer = uiTextBufferRef.current;
+    let completedText = '';
+    let remaining = buffer;
     
     while (true) {
       const match = remaining.match(boundaryRegex);
@@ -179,14 +181,18 @@ export default function Chat() {
       const idx = match.index! + match[0].length;
       const sentence = remaining.slice(0, idx);
       
-      // CHECK: Only return sentences that have proper punctuation
+      // CHECK: Only extract sentences that have proper punctuation
       if (/[\.\!\?]$/.test(sentence.trim())) {
-        sentences.push(sentence);
+        completedText += sentence;
+        remaining = remaining.slice(idx);
+      } else {
+        break;
       }
-      remaining = remaining.slice(idx);
     }
     
-    return sentences;
+    // Update buffer to only contain incomplete text
+    uiTextBufferRef.current = remaining;
+    return completedText;
   };
 
   // Split long sentences into smaller TTS-safe segments preferring punctuation/word boundaries
@@ -963,6 +969,7 @@ export default function Chat() {
     });
     assistantMessageRef.current = '';
     wordBufferRef.current = '';
+    uiTextBufferRef.current = '';
     // legacy HTTP audio queue cleared (no-op)
     currentAssistantIndexRef.current = assistantIndex;
     if (!regeneratedInput) {
@@ -1046,10 +1053,13 @@ export default function Chat() {
               if (data.type === 'chunk' && data.content) {
                 const chunk = data.content;
                 
-                // Only accumulate text that we actually display (complete sentences)
-                const completeSentences = extractCompleteSentences(chunk);
-                if (completeSentences.length > 0) {
-                  const completeText = completeSentences.join('');
+                // Accumulate chunk into buffer
+                uiTextBufferRef.current += chunk;
+                
+                // Extract complete sentences from buffer
+                const completeText = extractCompleteSentencesFromBuffer();
+                
+                if (completeText.length > 0) {
                   assistantMessageRef.current += completeText;
                   wordBufferRef.current += completeText;
                   
@@ -1090,17 +1100,36 @@ export default function Chat() {
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
+                
                 // Speak any remaining buffer text to ensure we don't miss the end
                 if (voiceEnabled) {
-                  const remainingInBuffer = ttsSentenceBufRef.current.trim();
+                  const remainingInBuffer = uiTextBufferRef.current.trim();
                   if (remainingInBuffer.length > 0) {
                     console.log(`🎵 Final TTS: speaking remaining buffer "${remainingInBuffer.substring(0, 50)}..." (${remainingInBuffer.length} chars)`);
-                    enqueueTts((voiceKey || 'luna').toLowerCase(), remainingInBuffer);
-                    ttsSentenceBufRef.current = ''; // Clear the buffer
+                    ttsAppendSentence(remainingInBuffer);
                   }
                 }
+                
+                // Display final complete text in UI
                 if (!assistantMessageRef.current) {
                   assistantMessageRef.current = finalText;
+                  setMessages(prev => {
+                    const next = [...prev];
+                    let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
+                    if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
+                      if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
+                        idx = next.length - 1;
+                        currentAssistantIndexRef.current = idx;
+                      } else {
+                        next.push({ role: 'assistant', content: '' } as any);
+                        idx = next.length - 1;
+                        currentAssistantIndexRef.current = idx;
+                      }
+                    }
+                    const target = next[idx] as any;
+                    next[idx] = { ...target, content: finalText } as any;
+                    return next;
+                  });
                   // Ensure final chunk leaves us scrolled to bottom if appropriate
                   setTimeout(() => {
                     if (!stickToBottomRef.current) return;
@@ -1109,6 +1138,10 @@ export default function Chat() {
                     el.scrollTop = el.scrollHeight;
                   }, 0);
                 }
+                
+                // Clear buffers after final
+                uiTextBufferRef.current = '';
+                ttsSentenceBufRef.current = '';
               }
             } catch (e) {
               console.error('Failed to parse stream chunk:', jsonStr);
