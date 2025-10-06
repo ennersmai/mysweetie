@@ -162,6 +162,50 @@ export default function Chat() {
   const ttsNetworkDoneRef = useRef<boolean>(false);
   // Monotonic counter to tag each TTS PCM request for debugging/correlation
   const ttsRequestSeqRef = useRef<number>(0);
+  // Safe max characters per TTS request to avoid provider truncation
+  const TTS_MAX_CHARS = 280;
+
+  // Split long sentences into smaller TTS-safe segments preferring punctuation/word boundaries
+  const segmentTextForTts = (text: string): string[] => {
+    const s = cleanTtsText(text);
+    if (s.length <= TTS_MAX_CHARS) return [s];
+    const segments: string[] = [];
+    let remaining = s;
+    while (remaining.length > 0) {
+      if (remaining.length <= TTS_MAX_CHARS) {
+        segments.push(remaining);
+        break;
+      }
+      // Try to find a natural split point within the window
+      const window = remaining.slice(0, TTS_MAX_CHARS);
+      // Prefer strong punctuation
+      let splitIdx = Math.max(
+        window.lastIndexOf('. '),
+        window.lastIndexOf('! '),
+        window.lastIndexOf('? '),
+      );
+      // Then commas/semicolons/colons/em-dash
+      if (splitIdx < 0) {
+        splitIdx = Math.max(
+          window.lastIndexOf(', '),
+          window.lastIndexOf('; '),
+          window.lastIndexOf(': '),
+          window.lastIndexOf(' — '),
+          window.lastIndexOf(' - '),
+        );
+      }
+      // Then whitespace
+      if (splitIdx < 0) {
+        splitIdx = window.lastIndexOf(' ');
+      }
+      // Fallback hard cut if no boundary found
+      if (splitIdx < 0) splitIdx = TTS_MAX_CHARS;
+      const part = remaining.slice(0, splitIdx + 1).trim();
+      if (part.length > 0) segments.push(part);
+      remaining = remaining.slice(splitIdx + 1).trimStart();
+    }
+    return segments;
+  };
   // Crossfade handling between scheduled buffers
   const ttsLastGainRef = useRef<GainNode | null>(null);
   const ttsLastEndTimeRef = useRef<number>(0);
@@ -470,16 +514,17 @@ export default function Chat() {
   const enqueueTts = useCallback((speaker: string, text: string) => {
     const trimmed = cleanTtsText(text);
     if (!trimmed) return;
-    // Always queue; downstream queue processor will serialize playback
-    
-    console.log(`🎵 Enqueueing TTS: "${trimmed.substring(0, 50)}..." (processing: ${ttsProcessingRef.current}, streaming: ${ttsStreamingRef.current})`);
-    
-    // Always add to queue first
-    ttsQueueRef.current.push({ speaker, text: trimmed });
+    // Split into safe-sized segments to avoid provider-side truncation
+    const parts = segmentTextForTts(trimmed);
+    console.log(`🎵 Enqueueing TTS ${parts.length} segment(s) (processing: ${ttsProcessingRef.current}, streaming: ${ttsStreamingRef.current})`);
+    parts.forEach((p, idx) => {
+      ttsQueueRef.current.push({ speaker, text: p });
+      if (idx === 0) console.log(`🎵 TTS segment[1/${parts.length}]: "${p.substring(0, 60)}${p.length > 60 ? '…' : ''}" (${p.length} chars)`);
+    });
     
     // If already processing, just return (queue will be processed)
     if (ttsProcessingRef.current) {
-      console.log('🎵 TTS already processing, added to queue');
+      console.log('🎵 TTS already processing, appended segments to queue');
       return;
     }
     
