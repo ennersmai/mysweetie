@@ -293,6 +293,7 @@ export default function Chat() {
 
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
+    console.log(`🎵 Created audio source with buffer duration: ${audioBuffer.duration}s`);
     // Create a gain node for per-buffer fade and crossfade
     const gain = audioCtx.createGain();
     source.connect(gain);
@@ -321,6 +322,7 @@ export default function Chat() {
     }
 
     source.start(startAt);
+    console.log(`🎵 Started audio source at ${startAt}s, will end at ${endAt}s`);
     ttsSourcesRef.current.push(source);
     ttsPlayheadRef.current = endAt;
     ttsLastGainRef.current = gain;
@@ -346,7 +348,11 @@ export default function Chat() {
 
   const schedulePcmChunk = (arrayBuffer: ArrayBuffer) => {
     const audioCtx = audioCtxRef.current;
-    if (!audioCtx) return;
+    if (!audioCtx) {
+      console.warn('🎵 No AudioContext available for PCM chunk');
+      return;
+    }
+    console.log(`🎵 Processing PCM chunk: ${arrayBuffer.byteLength} bytes`);
 
     // Build a properly aligned byte view preserving 16-bit boundaries across chunks
     let u8 = new Uint8Array(arrayBuffer);
@@ -489,6 +495,7 @@ export default function Chat() {
         if (done) break;
         if (value) {
           const ab = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+          console.log(`🎵 Received PCM chunk: ${ab.byteLength} bytes`);
           schedulePcmChunk(ab);
         }
       }
