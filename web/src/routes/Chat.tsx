@@ -1045,18 +1045,19 @@ export default function Chat() {
               const data = JSON.parse(jsonStr);
               if (data.type === 'chunk' && data.content) {
                 const chunk = data.content;
-                assistantMessageRef.current += chunk;
-                wordBufferRef.current += chunk;
-
-                if (voiceEnabled) {
-                  // Speak complete sentences as they arrive for faster response
-                  ttsAppendSentence(chunk);
-                }
                 
-                // Only update UI with complete sentences to avoid showing deleted text
-                // Keep incomplete sentences in a separate buffer until they're complete
+                // Only accumulate text that we actually display (complete sentences)
                 const completeSentences = extractCompleteSentences(chunk);
                 if (completeSentences.length > 0) {
+                  const completeText = completeSentences.join('');
+                  assistantMessageRef.current += completeText;
+                  wordBufferRef.current += completeText;
+                  
+                  if (voiceEnabled) {
+                    // Speak complete sentences as they arrive for faster response
+                    ttsAppendSentence(completeText);
+                  }
+                  
                   // Update UI with only complete sentences
                   setMessages(prev => {
                     const next = [...prev];
@@ -1073,31 +1074,12 @@ export default function Chat() {
                     }
                     const target = next[idx] as any;
                     // Only add complete sentences to the displayed content
-                    const newContent = target.content + completeSentences.join('');
+                    const newContent = target.content + completeText;
                     next[idx] = { ...target, content: newContent } as any;
                     return next;
                   });
                 }
 
-                setMessages(prev => {
-                  const next = [...prev];
-                  let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
-                  if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
-                    // Try to use the last message if it's assistant
-                    if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
-                      idx = next.length - 1;
-                      currentAssistantIndexRef.current = idx;
-                    } else {
-                      // Create a single assistant placeholder if none exists
-                      next.push({ role: 'assistant', content: '' } as any);
-                      idx = next.length - 1;
-                      currentAssistantIndexRef.current = idx;
-                    }
-                  }
-                  const target = next[idx] as any;
-                  next[idx] = { ...target, content: assistantMessageRef.current } as any;
-                  return next;
-                });
                 // Scroll the messages container during streaming if user is near bottom
                 setTimeout(() => {
                   if (!stickToBottomRef.current) return;
