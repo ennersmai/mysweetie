@@ -162,6 +162,8 @@ export default function Chat() {
   const ttsNetworkDoneRef = useRef<boolean>(false);
   // Monotonic counter to tag each TTS PCM request for debugging/correlation
   const ttsRequestSeqRef = useRef<number>(0);
+  // Whether we've received a final full response for the current turn
+  const ttsGotFinalRef = useRef<boolean>(false);
   // Safe max characters per TTS request to avoid provider truncation
   const TTS_MAX_CHARS = 280;
 
@@ -497,13 +499,13 @@ export default function Chat() {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
         }
-        // Add punctuation-aware pause between sentences
+        // Short punctuation-aware pause between segments
         const trimmed = (text || '').trim();
-        let pauseMs = 70;
-        if (/\.{3}$/.test(trimmed) || /…$/.test(trimmed)) pauseMs = 260; // ellipsis
-        else if (/[!?]$/.test(trimmed)) pauseMs = 180;
-        else if (/\.$/.test(trimmed)) pauseMs = 140;
-        else if (/[;,:]$/.test(trimmed)) pauseMs = 100;
+        let pauseMs = 40;
+        if (/\.{3}$/.test(trimmed) || /…$/.test(trimmed)) pauseMs = 120; // ellipsis
+        else if (/[!?]$/.test(trimmed)) pauseMs = 90;
+        else if (/\.$/.test(trimmed)) pauseMs = 70;
+        else if (/[;,:]$/.test(trimmed)) pauseMs = 55;
         await new Promise(r => setTimeout(r, pauseMs));
       }
     } finally {
@@ -963,6 +965,7 @@ export default function Chat() {
       stopTtsNow();
       ttsQueueRef.current = [];
       ttsSentenceBufRef.current = '';
+      ttsGotFinalRef.current = false;
     }
     try {
       // New API call to the Node.js backend
@@ -1060,6 +1063,14 @@ export default function Chat() {
                 }, 0);
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
+                ttsGotFinalRef.current = true;
+                // Always enqueue the final text to ensure we speak everything that gets displayed
+                if (voiceEnabled) {
+                  const finalClean = cleanTtsText(finalText);
+                  if (finalClean.length > 0) {
+                    enqueueTts((voiceKey || 'luna').toLowerCase(), finalClean);
+                  }
+                }
                 if (!assistantMessageRef.current) {
                   assistantMessageRef.current = finalText;
                   setMessages(prev => {
@@ -1086,10 +1097,6 @@ export default function Chat() {
                     if (!el) return;
                     el.scrollTop = el.scrollHeight;
                   }, 0);
-                  if (voiceEnabled) {
-                    // Enqueue full text if no chunks were processed
-                    enqueueTts((voiceKey || 'luna').toLowerCase(), finalText);
-                  }
                 }
               }
             } catch (e) {
