@@ -202,8 +202,8 @@ export default function Chat() {
     const float = new Float32Array(samples.length);
     for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
     
-    // Create buffer at TTS sample rate (24000 Hz) and let AudioContext handle conversion
-    const audioBuffer = audioCtx.createBuffer(1, float.length, 24000);
+    // Create buffer at TTS sample rate (48000 Hz) to match browser AudioContext
+    const audioBuffer = audioCtx.createBuffer(1, float.length, 48000);
     audioBuffer.getChannelData(0).set(float);
 
     const source = audioCtx.createBufferSource();
@@ -284,7 +284,7 @@ export default function Chat() {
         text,
         speaker,
         modelId: 'arcana',
-        samplingRate: 24000, // Use 24000 Hz (Rime.ai standard)
+        samplingRate: 48000, // Use 48000 Hz to match browser AudioContext
         lang: 'eng',
         }, controller.signal as any);
       } catch (e) {

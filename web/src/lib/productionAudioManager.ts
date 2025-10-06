@@ -275,7 +275,7 @@ export class ProductionAudioManager {
       
       // If accumulator gets too large (>1200ms worth), flush immediately
       const totalSamples = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
-      const durationMs = (totalSamples / 24000) * 1000;
+      const durationMs = (totalSamples / 48000) * 1000;
       
       if (durationMs > 1200) { // More than 1200ms accumulated
         if (this.pcmAccumulatorTimer) {
@@ -308,7 +308,7 @@ export class ProductionAudioManager {
       }
       
       // Create single smooth audio buffer
-      const audioBuffer = this.audioContext.createBuffer(1, combinedSamples.length, 24000);
+      const audioBuffer = this.audioContext.createBuffer(1, combinedSamples.length, 48000);
       const channelData = audioBuffer.getChannelData(0);
       
       for (let i = 0; i < combinedSamples.length; i++) {
