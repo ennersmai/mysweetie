@@ -482,20 +482,36 @@ export default function Chat() {
         lang: 'eng',
         }, controller.signal as any);
       } catch (e) {
-        console.warn(`TTS[#${reqId}] request aborted/failed`);
+        console.warn(`TTS[#${reqId}] request aborted/failed:`, e);
         return;
       }
-      if (!res.ok || !res.body) return;
+      if (!res.ok) {
+        console.error(`TTS[#${reqId}] request failed with status: ${res.status}`);
+        return;
+      }
+      if (!res.body) {
+        console.error(`TTS[#${reqId}] no response body`);
+        return;
+      }
+      console.log(`TTS[#${reqId}] got response, starting to read PCM data`);
       const reader = res.body.getReader();
       // Read streaming PCM chunks
+      let chunkCount = 0;
       while (true) {
         let readResult;
-        try { readResult = await reader.read(); } catch { break; }
+        try { readResult = await reader.read(); } catch (e) { 
+          console.warn(`TTS[#${reqId}] reader error:`, e);
+          break; 
+        }
         const { value, done } = readResult;
-        if (done) break;
+        if (done) {
+          console.log(`TTS[#${reqId}] stream ended, received ${chunkCount} chunks`);
+          break;
+        }
         if (value) {
+          chunkCount++;
           const ab = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-          console.log(`🎵 Received PCM chunk: ${ab.byteLength} bytes`);
+          console.log(`🎵 Received PCM chunk ${chunkCount}: ${ab.byteLength} bytes`);
           schedulePcmChunk(ab);
         }
       }
