@@ -198,24 +198,24 @@ export default function Chat() {
     const samples = new Int16Array(alignedBuffer);
     const float = new Float32Array(samples.length);
     
-    // Convert to float32 and apply normalization to prevent clipping
+    // Convert to float32
     for (let i = 0; i < samples.length; i++) {
       float[i] = samples[i] / 32768;
     }
     
-    // Normalize audio to prevent clipping (reduce volume by 20%)
-    const normalizationFactor = 0.8;
-    for (let i = 0; i < float.length; i++) {
-      float[i] *= normalizationFactor;
+    // Find the maximum amplitude to prevent clipping
+    const maxAmplitude = Math.max(...float.map(Math.abs));
+    
+    // Apply dynamic normalization to prevent clipping
+    if (maxAmplitude > 0.8) {
+      const normalizationFactor = 0.8 / maxAmplitude;
+      for (let i = 0; i < float.length; i++) {
+        float[i] *= normalizationFactor;
+      }
+      console.log(`Applied dynamic normalization: ${normalizationFactor.toFixed(3)} (max was ${maxAmplitude.toFixed(3)})`);
     }
     
     const sr = ttsSampleRateRef.current || 24000;
-    
-    // Debug: Check for potential audio issues
-    const maxSample = Math.max(...float.map(Math.abs));
-    if (maxSample > 0.95) {
-      console.warn('PCM chunk has very high amplitude, potential clipping:', maxSample);
-    }
     
     const audioBuffer = audioCtx.createBuffer(1, float.length, sr);
     audioBuffer.getChannelData(0).set(float);
