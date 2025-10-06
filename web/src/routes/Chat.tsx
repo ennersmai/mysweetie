@@ -1026,7 +1026,7 @@ export default function Chat() {
                 wordBufferRef.current += chunk;
 
                 if (voiceEnabled) {
-                  // Buffer and send full sentences or long clauses via HTTP
+                  // Speak complete sentences as they arrive for faster response
                   ttsAppendSentence(chunk);
                 }
 
@@ -1059,13 +1059,11 @@ export default function Chat() {
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
-                // Always speak the final text to ensure we speak what's actually displayed
+                // Don't speak remaining buffer text as it gets deleted from UI
+                // Only complete sentences that made it to the UI were spoken during streaming
                 if (voiceEnabled) {
-                  const finalClean = cleanTtsText(finalText);
-                  if (finalClean.length > 0) {
-                    console.log(`🎵 Final TTS: speaking complete text "${finalClean.substring(0, 50)}..." (${finalClean.length} chars)`);
-                    enqueueTts((voiceKey || 'luna').toLowerCase(), finalClean);
-                  }
+                  // Clear any remaining buffer since incomplete sentences get deleted
+                  ttsSentenceBufRef.current = '';
                 }
                 if (!assistantMessageRef.current) {
                   assistantMessageRef.current = finalText;
