@@ -152,19 +152,23 @@ export default function VoiceCallButton({
       switch (message.type) {
         case 'state_change':
           if (message.state) {
-            console.log(`[FRONTEND STATE] Received state change: ${message.state}`);
+            console.log(`🔄 [FRONTEND STATE] Received state change: ${message.state}`);
             setCallState(message.state);
             callStateRef.current = message.state;
             // Send audio when in LISTENING or USER_SPEAKING
             shouldSendAudioRef.current = message.state === 'LISTENING' || message.state === 'USER_SPEAKING';
-            console.log(`[FRONTEND STATE] State changed to ${message.state}, shouldSendAudio: ${shouldSendAudioRef.current}`);
+            console.log(`🔄 [FRONTEND STATE] State changed to ${message.state}, shouldSendAudio: ${shouldSendAudioRef.current}`);
             
             // Debug state transitions
             if (message.state === 'LISTENING') {
-              console.log(`[FRONTEND STATE] ✅ Now in LISTENING mode - ready to accept user input`);
+              console.log(`🔄 [FRONTEND STATE] ✅ Now in LISTENING mode - ready to accept user input`);
+            } else if (message.state === 'AI_SPEAKING') {
+              console.log(`🔄 [FRONTEND STATE] 🔊 AI is speaking - audio should be muted`);
+            } else if (message.state === 'USER_SPEAKING') {
+              console.log(`🔄 [FRONTEND STATE] 🎤 User is speaking - audio should be sent`);
             }
           } else {
-            console.warn(`[FRONTEND STATE] Received state_change message with no state:`, message);
+            console.warn(`🔄 [FRONTEND STATE] Received state_change message with no state:`, message);
           }
           break;
           
@@ -190,6 +194,7 @@ export default function VoiceCallButton({
           
         case 'command':
           if (message.command === 'stop_playback' && audioManagerRef.current) {
+            console.log('🛑 Received stop_playback command from backend');
             audioManagerRef.current.stopPlayback();
           }
           break;
@@ -388,7 +393,10 @@ export default function VoiceCallButton({
             audioManagerRef.current.startRecording((audioData) => {
               // Only send audio when we should be listening
               if (ws.readyState === WebSocket.OPEN && shouldSendAudioRef.current) {
+                console.log(`🎤 Sending audio chunk: ${audioData.byteLength} bytes`);
                 ws.send(audioData);
+              } else {
+                console.log(`🎤 Skipping audio chunk: WebSocket open=${ws.readyState === WebSocket.OPEN}, shouldSend=${shouldSendAudioRef.current}`);
               }
             });
           }
@@ -557,12 +565,13 @@ export default function VoiceCallButton({
       }
     } else if (callState === 'AI_SPEAKING') {
       // Allow interruption by clicking
-      console.log('Manually interrupting AI speech');
+      console.log('🛑 Manually interrupting AI speech via button click');
       if (audioManagerRef.current) {
         audioManagerRef.current.stopPlayback();
       }
       if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
         websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
+        console.log('🛑 Sent interrupt message to backend');
       }
     } else {
       endCall();

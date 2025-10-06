@@ -35,37 +35,35 @@ const logger = winston.createLogger({
   ]
 });
 
-// If we're not in production, log to the console with a simple format
-if (process.env.NODE_ENV !== 'production') {
-  const safeJsonStringify = (value: any) => {
-    const cache = new Set();
-    return JSON.stringify(
-      value,
-      (key, value) => {
-        if (typeof value === 'object' && value !== null) {
-          if (cache.has(value)) {
-            // Circular reference found, discard key
-            return '[Circular]';
-          }
-          // Store value in our collection
-          cache.add(value);
+// Always log to console for Fly.io visibility
+const safeJsonStringify = (value: any) => {
+  const cache = new Set();
+  return JSON.stringify(
+    value,
+    (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (cache.has(value)) {
+          // Circular reference found, discard key
+          return '[Circular]';
         }
-        return value;
-      },
-      2
-    );
-  };
+        // Store value in our collection
+        cache.add(value);
+      }
+      return value;
+    },
+    2
+  );
+};
 
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-      winston.format.printf(({ timestamp, level, message, service, ...meta }) => {
-        const metaString = Object.keys(meta).length ? ` ${safeJsonStringify(meta)}` : '';
-        return `${timestamp} [${service}] ${level}: ${message}${metaString}`;
-      })
-    )
-  }));
-}
+logger.add(new winston.transports.Console({
+  format: winston.format.combine(
+    winston.format.colorize(),
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    winston.format.printf(({ timestamp, level, message, service, ...meta }) => {
+      const metaString = Object.keys(meta).length ? ` ${safeJsonStringify(meta)}` : '';
+      return `${timestamp} [${service}] ${level}: ${message}${metaString}`;
+    })
+  )
+}));
 
 export { logger };

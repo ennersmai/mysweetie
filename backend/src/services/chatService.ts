@@ -47,7 +47,7 @@ export async function fetchChatHistory(userId: string, conversationId: string) {
 
 
 const MODEL_MAP: Record<string, string> = {
-  'Sweet Myth': 'x-ai/grok-4-fast:free',
+  'Sweet Myth': 'x-ai/grok-4-fast',
   'Swift Muse': 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
   'Crystal Focus': 'undi95/remm-slerp-l2-13b',
   'Midnight Nova': 'thedrummer/anubis-70b-v1.1',

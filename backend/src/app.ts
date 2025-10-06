@@ -29,8 +29,13 @@ const app = express();
 // Use specific proxy configuration for Fly.io instead of trusting all proxies
 app.set('trust proxy', 1);
 
+// Test connections and log startup
+logger.info('Starting MySweetie.AI Backend...');
+logger.info('Testing database connection...');
 testConnection();
+logger.info('Connecting to Redis...');
 redis.connect();
+logger.info('Backend startup complete');
 
 // CORS configuration - Should be one of the first middleware
 function buildAllowedOrigins(): string[] {
@@ -89,9 +94,23 @@ app.use(helmet({
 // Compression middleware
 app.use(compression());
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Body parsing middleware - preserve raw body for Stripe webhooks
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
+
+// General body parsing middleware for all other routes
+app.use((req, res, next) => {
+  if (req.path === '/api/stripe/webhook') {
+    return next();
+  }
+  express.json({ limit: '10mb' })(req, res, next);
+});
+
+app.use((req, res, next) => {
+  if (req.path === '/api/stripe/webhook') {
+    return next();
+  }
+  express.urlencoded({ extended: true, limit: '10mb' })(req, res, next);
+});
 
 // Logging middleware
 if (process.env.NODE_ENV === 'production') {
@@ -163,6 +182,25 @@ app.get('/', (req, res) => {
       voiceSupport: 'enabled',
       realTimeVoice: 'enabled',
       premiumFeatures: 'enabled'
+    },
+    environment: {
+      stripeConfigured: !!process.env.STRIPE_SECRET_KEY,
+      frontendUrl: process.env.FRONTEND_URL,
+      nodeEnv: process.env.NODE_ENV
+    }
+  });
+});
+
+// Test endpoint for debugging
+app.get('/test', (req, res) => {
+  res.json({
+    message: 'Backend is working',
+    timestamp: new Date().toISOString(),
+    headers: req.headers,
+    environment: {
+      stripeSecretKey: process.env.STRIPE_SECRET_KEY ? 'Set' : 'Not set',
+      frontendUrl: process.env.FRONTEND_URL || 'Not set',
+      corsOrigins: process.env.CORS_ORIGINS || 'Not set'
     }
   });
 });

@@ -12,6 +12,17 @@ const server = createServer(app);
 handleWebSocketUpgrade(server);
 
 server.listen(port, () => {
+  console.log(`🚀 MySweetie.AI Backend Server running on port ${port}`);
+  console.log(`🎤 Real-time voice calls available at ws://localhost:${port}/ws/call/{sessionId}`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔑 Stripe configured: ${!!process.env.STRIPE_SECRET_KEY}`);
+  console.log(`🌍 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+  console.log(`📊 Log level: ${process.env.LOG_LEVEL || 'info'}`);
+  
   logger.info(`🚀 MySweetie.AI Backend Server running on port ${port}`);
   logger.info(`🎤 Real-time voice calls available at ws://localhost:${port}/ws/call/{sessionId}`);
+  logger.info(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+  logger.info(`🔑 Stripe configured: ${!!process.env.STRIPE_SECRET_KEY}`);
+  logger.info(`🌍 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+  logger.info(`📊 Log level: ${process.env.LOG_LEVEL || 'info'}`);
 });

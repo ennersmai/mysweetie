@@ -9,7 +9,9 @@ import { authenticate } from '../middleware/auth';
 import { 
   createCheckoutSession, 
   createPortalSession, 
-  handleWebhook 
+  handleWebhook,
+  testWebhook,
+  manualUpdate
 } from '../controllers/stripeController';
 
 const router = Router();
@@ -31,5 +33,17 @@ router.post('/create-portal-session', authenticate, createPortalSession);
  * Handle Stripe webhooks (no auth required)
  */
 router.post('/webhook', handleWebhook);
+
+/**
+ * GET /api/stripe/test-webhook
+ * Test webhook endpoint for debugging
+ */
+router.get('/test-webhook', testWebhook);
+
+/**
+ * POST /api/stripe/manual-update
+ * Manual update endpoint for testing
+ */
+router.post('/manual-update', manualUpdate);
 
 export default router;

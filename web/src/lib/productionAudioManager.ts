@@ -94,9 +94,9 @@ export class ProductionAudioManager {
               return; // Skip VAD processing during playback (but MediaRecorder keeps running)
             }
             
-            // Log VAD activity every 200 cycles to debug (less spam)
-            if (Math.random() < 0.005) {
-              console.log(`VAD active: rms=${rms.toFixed(4)}, threshold=${this.vadThresholdRms}, micMuted=${this.micMuted}`);
+            // Log VAD activity consistently for debugging
+            if (Math.random() < 0.01) { // Increased logging frequency for better debugging
+              console.log(`VAD: rms=${rms.toFixed(4)}, threshold=${this.vadThresholdRms}, micMuted=${this.micMuted}, speaking=${this.vadSpeaking}`);
             }
             
             if (rms >= this.vadThresholdRms) {
@@ -106,12 +106,11 @@ export class ProductionAudioManager {
               // Only confirm speech after consecutive frames
               if (!this.vadSpeaking && this.vadConsecutiveFrames >= this.vadMinFrames) {
                 this.vadSpeaking = true;
-                // eslint-disable-next-line no-console
-                console.log(`VAD: speaking detected (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames})`);
+                console.log(`🎤 VAD: SPEECH DETECTED (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames})`);
                 
                 // If user starts speaking during TTS, interrupt it
                 if (this.micMuted && this.isPlaying) {
-                  console.log('User interrupted TTS - stopping playback');
+                  console.log('🛑 VAD: User interrupted TTS - stopping playback');
                   this.isInterrupted = true;
                   this.stopPlayback();
                   this.micMuted = false; // Unmute mic for user speech
@@ -133,8 +132,7 @@ export class ProductionAudioManager {
               
               if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
                 this.vadSpeaking = false;
-                // eslint-disable-next-line no-console
-                console.log(`VAD: speaking ended`);
+                console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
                 // Notify UI
                 if (this.onSpeechEnd) {
                   this.onSpeechEnd();
@@ -197,10 +195,10 @@ export class ProductionAudioManager {
       }
     };
 
-    // Start recording immediately with 250ms timeslices (less frequent chunks)
+    // Start recording with smaller chunks for better STT accuracy
     try {
-      this.mediaRecorder.start(250);
-      console.log('MediaRecorder started with 250ms timeslice - continuous audio streaming enabled');
+      this.mediaRecorder.start(100); // Reduced from 250ms to 100ms for better STT accuracy
+      console.log('MediaRecorder started with 100ms timeslice - continuous audio streaming enabled');
     } catch (err) {
       console.error('Failed to start MediaRecorder:', err);
       return false;
@@ -428,7 +426,12 @@ export class ProductionAudioManager {
 
   stopPlayback(): void {
     if (this.currentSource) {
-      this.currentSource.stop();
+      try {
+        this.currentSource.stop();
+      } catch (error) {
+        // Ignore errors when stopping already stopped sources
+        console.log('Source already stopped or error stopping:', error);
+      }
       this.currentSource = null;
     }
     
@@ -436,7 +439,14 @@ export class ProductionAudioManager {
     this.audioQueue = [];
     this.isPlaying = false;
     
-    console.log('Playback stopped');
+    // Clear PCM accumulator to prevent any remaining audio from playing
+    if (this.pcmAccumulatorTimer) {
+      clearTimeout(this.pcmAccumulatorTimer);
+      this.pcmAccumulatorTimer = null;
+    }
+    this.pcmAccumulator = [];
+    
+    console.log('🛑 Playback stopped and cleared');
   }
 
   setPlaybackCompleteCallback(callback: (() => void) | null): void {

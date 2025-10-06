@@ -41,10 +41,14 @@ export interface CallSession {
    * Timer used to detect end of speech based on lack of incoming chunks
    */
   speechEndTimer?: any;
+  /**
+   * Lock to prevent concurrent TTS processing
+   */
+  ttsProcessing?: boolean;
 }
 
 export interface CallMessage {
-  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'tts_finished' | 'tts_stream_end';
+  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'ai_response_chunk' | 'tts_finished' | 'tts_stream_end';
   command?: string;
   text?: string;
   is_final?: boolean;
@@ -137,16 +141,22 @@ export class CallService {
 
       logger.info(`Received audio chunk: ${audioData.length} bytes`);
 
+      // Buffer the chunk
+      session.audioBuffer.push(audioData);
+      
+      // Only transition to USER_SPEAKING after accumulating sufficient audio (min 10 chunks ~1000ms with 100ms chunks)
+      // This prevents immediate transition on connection noise/silence
       if (session.state === CallState.LISTENING) {
-        session.state = CallState.USER_SPEAKING;
-        session.audioBuffer = [];
-        this.sendStateUpdate(session, CallState.USER_SPEAKING);
+        if (session.audioBuffer.length >= 10) {
+          session.state = CallState.USER_SPEAKING;
+          this.sendStateUpdate(session, CallState.USER_SPEAKING);
+          logger.info(`🎤 Session ${session.id} transitioned to USER_SPEAKING after ${session.audioBuffer.length} chunks (${(session.audioBuffer.length * 100)}ms)`);
+        } else {
+          logger.debug(`🎤 Session ${session.id} still in LISTENING, buffering (${session.audioBuffer.length}/10 chunks)`);
+        }
       }
 
-      // Buffer the chunk (we'll pick the last one for encoded formats)
-      session.audioBuffer.push(audioData);
-
-      // Reset end-of-speech timer (silence-based)
+      // Reset end-of-speech timer (silence-based) - reduced to 200ms for faster response with smaller chunks
       if (session.speechEndTimer) {
         clearTimeout(session.speechEndTimer);
       }
@@ -154,14 +164,14 @@ export class CallService {
         try {
           if (!session.isActive) return;
           if (session.state !== CallState.USER_SPEAKING) return;
-          logger.info(`Transitioning session ${session.id} from USER_SPEAKING to AI_PROCESSING (silence)`);
+          logger.info(`🔇 Session ${session.id} speech end timer fired - transitioning to AI_PROCESSING`);
           session.state = CallState.AI_PROCESSING;
           this.sendStateUpdate(session, CallState.AI_PROCESSING);
           await this.processAudioWithGroq(session);
         } catch (err) {
           logger.error('Error on speech end timer:', err);
         }
-      }, 500); // end-of-speech after ~500ms of no chunks
+      }, 2000); // end-of-speech after 2000ms of no chunks (allows for natural pauses in longer sentences)
 
     } catch (error: any) {
       logger.error('Error processing audio data:', error);
@@ -172,7 +182,7 @@ export class CallService {
   private isPCMData(audioData: Buffer): boolean {
     // PCM data from ScriptProcessor is typically smaller chunks (4096 samples * 2 bytes = 8192 bytes)
     // Encoded audio (WebM) has file signatures and is usually larger
-    const audioHex = audioData.slice(0, 4).toString('hex');
+    const audioHex = audioData.subarray(0, 4).toString('hex');
     const isWebM = audioHex === '1a45dfa3';
     const isOgg = audioHex === '4f676753';
     
@@ -247,6 +257,39 @@ export class CallService {
       logger.error(`Client WebSocket error for session ${session.id}:`, error);
       this.endSession(session.id);
     });
+
+    session.clientWebSocket.on('message', (data: Buffer) => {
+      try {
+        const message = JSON.parse(data.toString());
+        this.handleWebSocketMessage(session, message);
+      } catch (error) {
+        // If it's not JSON, it's probably audio data
+        this.processAudioData(session.id, data);
+      }
+    });
+  }
+
+  private handleWebSocketMessage(session: CallSession, message: any): void {
+    logger.info(`Received WebSocket message for session ${session.id}:`, message);
+    
+    switch (message.type) {
+      case 'interrupt':
+        logger.info(`Handling interrupt for session ${session.id}`);
+        this.handleInterruption(session);
+        break;
+      case 'force_end_speech':
+        logger.info(`Force ending speech for session ${session.id}`);
+        if (session.state === CallState.USER_SPEAKING) {
+          this.transitionToAIProcessing(session);
+        }
+        break;
+      case 'tts_playback_finished':
+        logger.info(`TTS playback finished for session ${session.id}`);
+        this.handleTTSPlaybackFinished(session.id);
+        break;
+      default:
+        logger.warn(`Unknown message type: ${message.type}`);
+    }
   }
 
   private async handleVADResult(
@@ -325,6 +368,14 @@ export class CallService {
   }
 
   private async processTTSBySentences(session: CallSession, text: string): Promise<void> {
+    // Prevent concurrent TTS processing - wait if already processing
+    if (session.ttsProcessing) {
+      logger.warn(`TTS already processing for session ${session.id}, skipping duplicate request`);
+      return;
+    }
+    
+    session.ttsProcessing = true;
+    
     try {
       // Parse text for TTS - remove action markers first
       const spokenText = this.parseTextForTTS(text);
@@ -347,8 +398,10 @@ export class CallService {
           logger.info(`Processing TTS sentence ${i + 1}/${sentences.length}: "${sentence.substring(0, 50)}..."`);
           await this.openRimeConnection(session, sentence);
           
-          // Small delay between sentences to ensure proper sequencing
-          await new Promise(resolve => setTimeout(resolve, 100));
+          // Reduced delay between sentences for smoother playback (from 100ms to 50ms)
+          if (i < sentences.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
         }
       }
       
@@ -361,26 +414,32 @@ export class CallService {
       
     } catch (error: any) {
       logger.error(`Error processing TTS by sentences for session ${session.id}:`, error);
-      // Fallback to listening state
+      // Fallback to listening state, clear buffer for next speech
+      session.audioBuffer = [];
       session.state = CallState.LISTENING;
       this.sendStateUpdate(session, CallState.LISTENING);
+    } finally {
+      // Always release the lock
+      session.ttsProcessing = false;
     }
   }
 
   private splitIntoSentences(text: string): string[] {
-    // Split on sentence endings, but be smart about abbreviations
-    const sentences = text
-      .split(/[.!?]+/)
-      .map(s => s.trim())
-      .filter(s => s.length > 0)
-      .map(s => s + '.'); // Add period back
+    // More efficient sentence splitting that preserves original punctuation
+    const sentenceEndings = /([.!?]+)/g;
+    const parts = text.split(sentenceEndings);
+    const sentences: string[] = [];
     
-    // If no sentences found, treat the whole text as one sentence
-    if (sentences.length === 0) {
-      return [text];
+    for (let i = 0; i < parts.length; i += 2) {
+      const sentence = parts[i]?.trim();
+      const punctuation = parts[i + 1] || '';
+      if (sentence) {
+        sentences.push(sentence + punctuation);
+      }
     }
     
-    return sentences;
+    // If no sentences found, treat the whole text as one sentence
+    return sentences.length > 0 ? sentences : [text];
   }
 
   private parseTextForTTS(text: string): string {
@@ -402,13 +461,25 @@ export class CallService {
   }
 
   private async handleInterruption(session: CallSession): Promise<void> {
-    logger.info(`Session ${session.id}: Handling interruption`);
+    logger.info(`🛑 Session ${session.id}: Handling interruption`);
 
+    // Stop any ongoing TTS processing
+    session.ttsProcessing = false;
+    
+    // Clear any buffered audio since user interrupted
+    session.audioBuffer = [];
+    
     // Send stop playback command to client
     this.sendCommandToClient(session, 'stop_playback');
 
     // Reset VAD state
     session.vad.reset();
+    
+    // Transition back to listening immediately
+    session.state = CallState.LISTENING;
+    this.sendStateUpdate(session, CallState.LISTENING);
+    
+    logger.info(`🛑 Session ${session.id} interrupted and returned to LISTENING`);
   }
 
   private async processAudioWithGroq(session: CallSession): Promise<void> {
@@ -448,7 +519,7 @@ export class CallService {
       }
 
       // Detect audio format based on file signature
-      const audioHex = audioData.slice(0, 4).toString('hex');
+      const audioHex = audioData.subarray(0, 4).toString('hex');
       logger.info(`Audio header preview (first 4 bytes): ${audioHex}`);
       const isWebM = audioHex === '1a45dfa3'; // WebM signature
       const isOgg = audioHex === '4f676753'; // Ogg signature
@@ -464,7 +535,7 @@ export class CallService {
         filename = 'audio.ogg';
       }
       
-      logger.info(`Detected audio format: ${contentType} (signature: ${audioHex}), processing ${audioData.length} bytes`);
+      logger.info(`🎵 Processing audio: ${contentType} (${audioData.length} bytes, ${(audioData.length / 16000).toFixed(2)}s estimated)`);
 
       // Create form data for Groq API with enhanced settings for better accuracy
       const form = new FormData();
@@ -475,8 +546,9 @@ export class CallService {
       form.append('model', 'whisper-large-v3'); // Use full model for better accuracy (not turbo)
       form.append('language', 'en');
       form.append('response_format', 'verbose_json'); // Get more detailed response
-      form.append('temperature', '0.1'); // Slightly higher temperature for better accuracy
-      form.append('prompt', 'This is a casual conversation between friends. Please transcribe accurately including casual speech patterns.'); // Context hint for better accuracy
+      form.append('temperature', '0'); // Lower temperature for more accurate transcription
+      form.append('timestamp_granularities[]', 'word'); // Get word-level timestamps for better accuracy
+      // Note: Removed prompt as Whisper can hallucinate the prompt text when audio is short/empty
 
       // Send to Groq API
       const response = await axios.post(this.GROQ_HTTP_URL, form, {
@@ -490,7 +562,39 @@ export class CallService {
       // Handle verbose_json response format
       const transcript = response.data.text || response.data.transcript || '';
       const confidence = response.data.confidence || 'unknown';
-      logger.info(`Groq transcription for session ${session.id}: "${transcript}" (confidence: ${confidence})`);
+      const duration = response.data.duration || 0;
+      const words = response.data.words || [];
+      logger.info(`🎯 Groq transcription for session ${session.id}: "${transcript}" (confidence: ${confidence}, duration: ${duration}s, words: ${words.length})`);
+
+      // Filter out common Whisper hallucinations (happens with silent/empty audio)
+      const commonHallucinations = [
+        'thank you',
+        'thanks for watching',
+        'you',
+        'bye',
+        'goodbye',
+        'see you next time',
+        'transcribe everything accurately',
+        'please subscribe',
+        'please like and subscribe'
+      ];
+      
+      const lowerTranscript = transcript.toLowerCase().trim();
+      const isHallucination = commonHallucinations.some(phrase => 
+        lowerTranscript === phrase || lowerTranscript === phrase + '.'
+      );
+      
+      // Also check if audio duration is suspiciously short (< 0.3 seconds likely silence)
+      const isTooShort = duration > 0 && duration < 0.3;
+      
+      if (isHallucination || isTooShort) {
+        logger.warn(`🚫 Rejected low-quality transcription for session ${session.id}: "${transcript}" (duration: ${duration}s, isHallucination: ${isHallucination}, isTooShort: ${isTooShort})`);
+        // Go back to listening state without sending anything, clear buffer for next utterance
+        session.audioBuffer = [];
+        session.state = CallState.LISTENING;
+        this.sendStateUpdate(session, CallState.LISTENING);
+        return;
+      }
 
       if (transcript && transcript.trim()) {
         // Send transcript to client
@@ -681,29 +785,7 @@ export class CallService {
     });
   }
 
-  private handleGroqMessage(session: CallSession, message: any): void {
-    try {
-      if (message.result) {
-        const { type, text } = message.result;
-        
-        // Send interim transcripts to client for real-time display
-        if (type === 'interim' && text) {
-          this.sendTranscriptUpdate(session, text, false);
-        }
-        
-        // Handle final transcript
-        if (type === 'final' && text) {
-          session.transcriptBuffer = text;
-          this.sendTranscriptUpdate(session, text, true);
-          
-          // Generate AI response
-          this.generateAIResponse(session, text);
-        }
-      }
-    } catch (error: any) {
-      logger.error('Error handling Groq message:', error);
-    }
-  }
+  // Removed handleGroqMessage - Groq Whisper API doesn't support streaming
 
   private async generateAIResponse(session: CallSession, userMessage: string): Promise<void> {
     try {
@@ -759,6 +841,8 @@ export class CallService {
         
         if (chunk.type === 'chunk' && chunk.content) {
           fullResponse += chunk.content;
+          // Stream chunks to client in real-time for UI display
+          this.sendAIResponseChunkToClient(session, chunk.content);
         } else if (chunk.type === 'final' && chunk.fullResponse) {
           fullResponse = chunk.fullResponse;
           logger.info(`AI stream final chunk received for session ${session.id}, total chunks: ${chunkCount}`);
@@ -770,65 +854,85 @@ export class CallService {
       logger.info(`AI response preview: "${fullResponse.substring(0, 200)}..."`);
 
       if (fullResponse) {
-        // Send AI response to client for chat history
+        // Send final AI response to client for chat history (after all chunks)
         this.sendAIResponseToClient(session, fullResponse);
-        // Persist assistant response and deduct voice credit
-        try {
-          await supabaseAdmin.from('chat_history').insert({
+        
+        // All database operations run in parallel to avoid blocking TTS
+        const deductCreditsPromise = (async () => {
+          try {
+            // Try RPC first
+            const { error: rpcError } = await supabaseAdmin.rpc('decrement_voice_credits', { 
+              user_id: session.userId, 
+              amount: 1 
+            });
+            
+            if (rpcError) {
+              logger.warn('Failed to deduct voice credit via RPC, falling back to manual update:', rpcError);
+              // Fallback to manual update
+              const { data: profile } = await supabaseAdmin
+                .from('profiles')
+                .select('voice_credits')
+                .eq('id', session.userId)
+                .maybeSingle();
+              
+              if (profile) {
+                const current = Number(profile.voice_credits || 0);
+                await supabaseAdmin
+                  .from('profiles')
+                  .update({ voice_credits: Math.max(0, current - 1) })
+                  .eq('id', session.userId);
+              }
+            }
+          } catch (e: any) {
+            logger.error('Failed to deduct voice credit:', e?.message || e);
+          }
+        })();
+        
+        Promise.all([
+          // Persist assistant response
+          supabaseAdmin.from('chat_history').insert({
             conversation_id: session.conversationId,
             user_id: session.userId,
             character_id: session.characterId,
             role: 'assistant',
             content: fullResponse
-          });
-          await supabaseAdmin
+          }),
+          // Update conversation timestamp
+          supabaseAdmin
             .from('conversations')
             .update({ updated_at: new Date().toISOString() })
-            .eq('id', session.conversationId);
-          // Trigger memory extraction asynchronously
-          memoryOrchestrator.extractAndStoreMemories({
-            userId: session.userId,
-            characterId: session.characterId,
-            conversation: `user: ${userMessage}\nassistant: ${fullResponse}`
-          }).catch((e: any) => {
-            logger.warn('Memory extraction (call) failed:', e?.message || e);
-          });
-          // Deduct one voice credit
-          const { data: profile, error: profErr } = await supabaseAdmin
-            .from('profiles')
-            .select('voice_credits')
-            .eq('id', session.userId)
-            .maybeSingle();
-          if (!profErr && profile) {
-            const current = Number(profile.voice_credits || 0);
-            if (current <= 0) {
-              this.sendErrorToClient(session, 'No voice credits remaining');
-              session.state = CallState.IDLE;
-              this.sendStateUpdate(session, CallState.IDLE);
-              return;
-            }
-            await supabaseAdmin
-              .from('profiles')
-              .update({ voice_credits: current - 1 })
-              .eq('id', session.userId);
-            logger.info(`Deducted 1 voice credit from user ${session.userId}. New balance: ${current - 1}`);
-          } else {
-            logger.warn('Could not fetch profile to deduct voice credit:', profErr);
-          }
-        } catch (e: any) {
-          logger.error('Failed to save assistant response to chat_history:', e?.message || e);
+            .eq('id', session.conversationId),
+          // Deduct voice credit
+          deductCreditsPromise,
+        ]).catch((e: any) => {
+          logger.error('Failed to save assistant response or update credits:', e?.message || e);
+        });
+        
+        // Trigger memory extraction asynchronously (non-blocking)
+        memoryOrchestrator.extractAndStoreMemories({
+          userId: session.userId,
+          characterId: session.characterId,
+          conversation: `user: ${userMessage}\nassistant: ${fullResponse}`
+        }).catch((e: any) => {
+          logger.warn('Memory extraction (call) failed:', e?.message || e);
+        });
+        
+        // Only start TTS if not already processing (prevent duplicates)
+        if (!session.ttsProcessing) {
+          // Transition to AI_SPEAKING and process TTS sentence by sentence for voice calls
+          session.state = CallState.AI_SPEAKING;
+          this.sendStateUpdate(session, CallState.AI_SPEAKING);
+          logger.info(`Session ${session.id} transitioned to AI_SPEAKING - starting sentence-by-sentence TTS`);
+          
+          // Process TTS sentence by sentence to avoid cutoffs with long responses
+          await this.processTTSBySentences(session, fullResponse);
+        } else {
+          logger.warn(`Skipping TTS for session ${session.id} - already processing another response`);
         }
         
-        // Transition to AI_SPEAKING and process TTS sentence by sentence for voice calls
-        session.state = CallState.AI_SPEAKING;
-        this.sendStateUpdate(session, CallState.AI_SPEAKING);
-        logger.info(`Session ${session.id} transitioned to AI_SPEAKING - starting sentence-by-sentence TTS`);
-        
-        // Process TTS sentence by sentence to avoid cutoffs with long responses
-        await this.processTTSBySentences(session, fullResponse);
-        
       } else {
-        // Fallback to listening if no response
+        // Fallback to listening if no response, clear buffer
+        session.audioBuffer = [];
         session.state = CallState.LISTENING;
         this.sendStateUpdate(session, CallState.LISTENING);
       }
@@ -893,13 +997,13 @@ export class CallService {
   }
 
   private sendStateUpdate(session: CallSession, state: CallState): void {
-    logger.info(`[STATE UPDATE] Sending state change to session ${session.id}: ${state}`);
+    logger.info(`🔄 [BACKEND STATE] Sending state change to session ${session.id}: ${state}`);
     const message: CallMessage = {
       type: 'state_change',
       state
     };
     this.sendMessageToClient(session, message);
-    logger.info(`[STATE UPDATE] State change message sent for session ${session.id}`);
+    logger.info(`🔄 [BACKEND STATE] State change message sent for session ${session.id}`);
   }
 
   private sendTranscriptUpdate(session: CallSession, text: string, isFinal: boolean): void {
@@ -917,6 +1021,16 @@ export class CallService {
       text
     };
     this.sendMessageToClient(session, message);
+  }
+
+  private sendAIResponseChunkToClient(session: CallSession, text: string): void {
+    logger.debug(`Sending AI response chunk to session ${session.id}: "${text}"`);
+    const message: CallMessage = {
+      type: 'ai_response_chunk',
+      text
+    };
+    this.sendMessageToClient(session, message);
+    logger.debug(`AI response chunk sent successfully to session ${session.id}`);
   }
 
   private sendErrorToClient(session: CallSession, error: string): void {
