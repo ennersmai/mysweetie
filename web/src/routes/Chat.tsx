@@ -164,8 +164,15 @@ export default function Chat() {
   const ensureAudioContext = async () => {
     if (!audioCtxRef.current) {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      audioCtxRef.current = new Ctx();
-      console.log('Created new AudioContext with sample rate:', audioCtxRef.current?.sampleRate);
+      // Try to create AudioContext with 24000 Hz sample rate to match TTS
+      try {
+        audioCtxRef.current = new Ctx({ sampleRate: 24000 });
+        console.log('Created new AudioContext with sample rate:', audioCtxRef.current?.sampleRate);
+      } catch (e) {
+        // Fallback to default sample rate if 24000 is not supported
+        audioCtxRef.current = new Ctx();
+        console.log('Created new AudioContext with default sample rate:', audioCtxRef.current?.sampleRate);
+      }
     }
     if (audioCtxRef.current?.state === 'suspended') {
       try { 
@@ -199,9 +206,10 @@ export default function Chat() {
     const float = new Float32Array(samples.length);
     for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
     
-    const sr = ttsSampleRateRef.current || 24000;
-    
-    const audioBuffer = audioCtx.createBuffer(1, float.length, sr);
+    // CRITICAL FIX: Use the AudioContext's native sample rate, not the TTS sample rate
+    // The TTS is 24000 Hz, but AudioContext is 48000 Hz - we need to resample
+    const ttsSampleRate = ttsSampleRateRef.current || 24000;
+    const audioBuffer = audioCtx.createBuffer(1, float.length, ttsSampleRate);
     audioBuffer.getChannelData(0).set(float);
 
     const source = audioCtx.createBufferSource();
