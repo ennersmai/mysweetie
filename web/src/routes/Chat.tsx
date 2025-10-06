@@ -93,8 +93,8 @@ export default function Chat() {
   const longPressTimerRef = useRef<number | null>(null);
 
   const MODEL_OPTIONS: { key: string; desc: string; premium?: boolean }[] = [
-    { key: 'Sweet Myth', desc: 'Grok-4 Fast — quick, capable general model (free).' },
-    { key: 'Swift Muse', desc: 'Dolphin Mistral 24B (Venice) — creative and expressive (free).' },
+    { key: 'Sweet Myth', desc: 'Grok-4 Fast — quick, capable general model' },
+    { key: 'Swift Muse', desc: 'Dolphin Mistral 24B (Venice) — creative and expressive' },
     { key: 'Crystal Focus', desc: 'ReMM Slerp L2 13B — concise, logical responses.', premium: true },
     { key: 'Midnight Nova', desc: 'Anubis 70B — powerful roleplay and character immersion.', premium: true },
     { key: 'Silver Whisper', desc: 'Euryale 70B — advanced storytelling with rich detail.', premium: true },
@@ -175,7 +175,21 @@ export default function Chat() {
   const schedulePcmChunk = (arrayBuffer: ArrayBuffer) => {
     const audioCtx = audioCtxRef.current;
     if (!audioCtx) return;
-    const samples = new Int16Array(arrayBuffer);
+    
+    // Ensure buffer length is a multiple of 2 for Int16Array
+    const byteLength = arrayBuffer.byteLength;
+    const alignedLength = byteLength - (byteLength % 2);
+    
+    if (alignedLength === 0) {
+      console.warn('PCM chunk too small or misaligned, skipping');
+      return;
+    }
+    
+    const alignedBuffer = alignedLength === byteLength 
+      ? arrayBuffer 
+      : arrayBuffer.slice(0, alignedLength);
+    
+    const samples = new Int16Array(alignedBuffer);
     const float = new Float32Array(samples.length);
     for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
     const sr = ttsSampleRateRef.current || 22050;
@@ -1311,6 +1325,16 @@ export default function Chat() {
                         prompt: character.system_prompt || ''
                       }}
                       conversationId={currentConversationId || undefined}
+                      onTranscript={(transcript) => {
+                        console.log('User spoke:', transcript);
+                        // Add user message to chat history
+                        setMessages(prev => [...prev, { role: 'user', content: transcript }]);
+                      }}
+                      onAIResponse={(response) => {
+                        console.log('AI responded:', response);
+                        // Add AI response to chat history
+                        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+                      }}
                       onError={(error) => {
                         console.error('Voice call error:', error);
                         window.alert(`Voice call error: ${error}`);
@@ -1473,6 +1497,16 @@ export default function Chat() {
                         prompt: character.system_prompt || ''
                       }}
                       conversationId={currentConversationId || undefined}
+                      onTranscript={(transcript) => {
+                        console.log('User spoke:', transcript);
+                        // Add user message to chat history
+                        setMessages(prev => [...prev, { role: 'user', content: transcript }]);
+                      }}
+                      onAIResponse={(response) => {
+                        console.log('AI responded:', response);
+                        // Add AI response to chat history
+                        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+                      }}
                       onError={(error) => {
                         console.error('Voice call error:', error);
                         window.alert(`Voice call error: ${error}`);

@@ -14,9 +14,11 @@ import Tos from './routes/Tos';
 import Footer from './components/Footer';
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
+import AgeGate from './components/AgeGate';
 
 function App() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
   const location = useLocation();
   const isChatPage = location.pathname.startsWith('/chat');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -30,6 +32,18 @@ function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    // Check if user has already confirmed age
+    const confirmed = localStorage.getItem('mysweetie-age-confirmed');
+    if (confirmed) {
+      setAgeConfirmed(true);
+    }
+  }, []);
+
+  // Show age gate until confirmed
+  if (!ageConfirmed) {
+    return <AgeGate onAccept={() => setAgeConfirmed(true)} />;
+  }
 
   return (
       <AuthProvider>

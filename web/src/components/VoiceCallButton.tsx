@@ -451,10 +451,10 @@ export default function VoiceCallButton({
     
     switch (callState) {
       case 'IDLE': return 'bg-gray-500';
-      case 'LISTENING': return 'bg-blue-500';
-      case 'USER_SPEAKING': return 'bg-green-500 animate-pulse';
-      case 'AI_PROCESSING': return 'bg-yellow-500 animate-pulse';
-      case 'AI_SPEAKING': return 'bg-purple-500 animate-pulse';
+      case 'LISTENING': return 'bg-blue-500 shadow-blue-500/50';
+      case 'USER_SPEAKING': return 'bg-green-500 animate-pulse shadow-green-500/50';
+      case 'AI_PROCESSING': return 'bg-yellow-500 animate-pulse shadow-yellow-500/50';
+      case 'AI_SPEAKING': return 'bg-purple-600 animate-pulse shadow-purple-600/50';
       default: return 'bg-gray-500';
     }
   };
@@ -525,12 +525,34 @@ export default function VoiceCallButton({
         {connectionStatus === 'connecting' ? (
           <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
         ) : !isCallActive ? (
+          // Phone icon for starting call
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
           </svg>
-        ) : (
+        ) : callState === 'LISTENING' ? (
+          // Microphone icon for listening
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M3 3l18 18m-5.314-5.314L14 14l-2 2 2 2m0 0l-2-2m2 2l2-2m-2 2l-2-2" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+          </svg>
+        ) : callState === 'USER_SPEAKING' ? (
+          // Sound wave icon for user speaking
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 3v18M8 6v12M16 6v12M4 9v6M20 9v6" stroke="currentColor" strokeWidth={2} strokeLinecap="round"/>
+          </svg>
+        ) : callState === 'AI_PROCESSING' ? (
+          // Brain/thinking icon for AI processing
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+          </svg>
+        ) : callState === 'AI_SPEAKING' ? (
+          // Speaker waves icon for AI speaking
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m0-9.9a5 5 0 011.414-1.414M9 12h.01M12 12h.01M15 12h.01" />
+          </svg>
+        ) : (
+          // Hangup icon for ending call
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
           </svg>
         )}
       </button>
