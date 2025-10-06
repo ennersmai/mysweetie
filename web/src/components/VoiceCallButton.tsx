@@ -153,6 +153,7 @@ export default function VoiceCallButton({
         case 'state_change':
           if (message.state) {
             console.log(`🔄 [FRONTEND STATE] Received state change: ${message.state}`);
+            console.log(`🔄 [FRONTEND STATE] Previous state: ${callStateRef.current}`);
             setCallState(message.state);
             callStateRef.current = message.state;
             // Send audio when in LISTENING or USER_SPEAKING
@@ -166,6 +167,8 @@ export default function VoiceCallButton({
               console.log(`🔄 [FRONTEND STATE] 🔊 AI is speaking - audio should be muted`);
             } else if (message.state === 'USER_SPEAKING') {
               console.log(`🔄 [FRONTEND STATE] 🎤 User is speaking - audio should be sent`);
+            } else if (message.state === 'AI_PROCESSING') {
+              console.log(`🔄 [FRONTEND STATE] 🤔 AI is processing - waiting for response`);
             }
           } else {
             console.warn(`🔄 [FRONTEND STATE] Received state_change message with no state:`, message);
@@ -403,6 +406,8 @@ export default function VoiceCallButton({
           setConnectionStatus('connected');
           
           // Initialize in listening mode (backend starts with LISTENING state)
+          setCallState('LISTENING');
+          callStateRef.current = 'LISTENING';
           shouldSendAudioRef.current = true;
           console.log('[FRONTEND] Starting audio recording, shouldSendAudio:', shouldSendAudioRef.current);
           
