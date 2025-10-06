@@ -256,9 +256,11 @@ export default function Chat() {
     
     // Prevent concurrent TTS requests
     if (ttsStreamingRef.current) {
-      console.warn('TTS already streaming, skipping request');
+      console.warn('🚫 TTS already streaming, skipping request');
       return;
     }
+    
+    console.log(`🎤 Starting TTS: "${text.substring(0, 50)}..."`);
     
     await ensureAudioContext();
     // Do not reset playhead here to ensure strict sequential playback across sentences
@@ -323,13 +325,19 @@ export default function Chat() {
     // Prevent flooding the queue with tiny fragments during active streaming
     if (!force && ttsStreamingRef.current && trimmed.length < 40) return;
     
-    // If already processing, just add to queue
+    console.log(`🎵 Enqueueing TTS: "${trimmed.substring(0, 50)}..." (processing: ${ttsProcessingRef.current}, streaming: ${ttsStreamingRef.current})`);
+    
+    // Always add to queue first
+    ttsQueueRef.current.push({ speaker, text: trimmed });
+    
+    // If already processing, just return (queue will be processed)
     if (ttsProcessingRef.current) {
-      ttsQueueRef.current.push({ speaker, text: trimmed });
+      console.log('🎵 TTS already processing, added to queue');
       return;
     }
     
-    ttsQueueRef.current.push({ speaker, text: trimmed });
+    // Start processing the queue
+    console.log('🎵 Starting TTS queue processing');
     processTtsQueue();
   }, [processTtsQueue]);
 
