@@ -181,8 +181,8 @@ export default function Chat() {
       const idx = match.index! + match[0].length;
       const sentence = remaining.slice(0, idx);
       
-      // CHECK: Only extract sentences that have proper punctuation
-      if (/[\.\!\?]$/.test(sentence.trim())) {
+      // CHECK: Sentence contains proper punctuation (allow quotes/parens after)
+      if (/[\.\!\?][\)\]"']?$/.test(sentence.trim())) {
         completedText += sentence;
         remaining = remaining.slice(idx);
       } else {
@@ -574,8 +574,8 @@ export default function Chat() {
       const idx = match.index! + match[0].length;
       const full = buf.slice(0, idx);
       const sentence = cleanTtsText(full);
-      // CHECK: Only stream if sentence has proper punctuation
-      if (sentence.length >= 2 && /[\.\!\?]$/.test(sentence.trim())) {
+      // CHECK: Only stream if sentence has proper punctuation (allow quotes/parens after)
+      if (sentence.length >= 2 && /[\.\!\?][\)\]"']?$/.test(sentence.trim())) {
         enqueueTts((voiceKey || 'luna').toLowerCase(), sentence);
       }
       buf = buf.slice(idx);
