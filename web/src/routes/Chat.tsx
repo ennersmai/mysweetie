@@ -143,7 +143,7 @@ export default function Chat() {
   // HTTP PCM TTS via Arcana
   const audioCtxRef = useRef<AudioContext | null>(null);
   const ttsPlayheadRef = useRef<number>(0); // seconds scheduled ahead in AudioContext time
-  const ttsSampleRateRef = useRef<number>(24000);
+  const ttsSampleRateRef = useRef<number>(48000); // Use 48000 Hz to match browser AudioContext
   const ttsSentenceBufRef = useRef<string>('');
   const ttsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ttsQueueRef = useRef<{ speaker: string; text: string }[]>([]);
@@ -164,15 +164,10 @@ export default function Chat() {
   const ensureAudioContext = async () => {
     if (!audioCtxRef.current) {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      // Try to create AudioContext with 24000 Hz sample rate to match TTS
-      try {
-        audioCtxRef.current = new Ctx({ sampleRate: 24000 });
-        console.log('Created new AudioContext with sample rate:', audioCtxRef.current?.sampleRate);
-      } catch (e) {
-        // Fallback to default sample rate if 24000 is not supported
-        audioCtxRef.current = new Ctx();
-        console.log('Created new AudioContext with default sample rate:', audioCtxRef.current?.sampleRate);
-      }
+      audioCtxRef.current = new Ctx();
+      console.log('Created new AudioContext with sample rate:', audioCtxRef.current?.sampleRate);
+      // Update TTS sample rate to match AudioContext
+      ttsSampleRateRef.current = audioCtxRef.current?.sampleRate || 48000;
     }
     if (audioCtxRef.current?.state === 'suspended') {
       try { 
