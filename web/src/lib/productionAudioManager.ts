@@ -33,6 +33,10 @@ export class ProductionAudioManager {
       // Initialize audio context
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       
+      // Ensure mic starts unmuted
+      this.micMuted = false;
+      console.log('ProductionAudioManager: Initializing with micMuted =', this.micMuted);
+      
       // Request microphone access
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -76,6 +80,7 @@ export class ProductionAudioManager {
             
             // Skip VAD if mic is muted during TTS playback
             if (this.micMuted) {
+              // Log once per mute cycle
               if (this.vadSpeaking) {
                 this.vadSpeaking = false;
                 console.log('VAD: Force-stopped speaking due to TTS playback');
@@ -94,6 +99,11 @@ export class ProductionAudioManager {
               return; // Skip VAD processing during playback
             }
             
+            // Log VAD activity every 100 cycles to debug
+            if (Math.random() < 0.01) {
+              console.log(`VAD active: rms=${rms.toFixed(4)}, threshold=${this.vadThresholdRms}, micMuted=${this.micMuted}`);
+            }
+            
             if (rms >= this.vadThresholdRms) {
               this.vadLastAboveThreshold = now;
               if (!this.vadSpeaking) {
@@ -107,8 +117,9 @@ export class ProductionAudioManager {
                 // Start recording this utterance if not already
                 try {
                   if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-                    this.mediaRecorder.start();
-                    console.log('MediaRecorder started for utterance');
+                    // Start with 100ms timeslice to get continuous audio chunks
+                    this.mediaRecorder.start(100);
+                    console.log('MediaRecorder started for utterance with 100ms timeslice');
                   }
                 } catch (err) {
                   console.warn('Failed to start MediaRecorder on VAD start:', err);

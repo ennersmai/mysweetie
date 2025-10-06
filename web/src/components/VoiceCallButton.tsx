@@ -341,13 +341,13 @@ export default function VoiceCallButton({
       // Set up VAD callbacks for instant UI feedback
       audioManagerRef.current.setSpeechCallbacks(
         () => {
-          // Speech started - update UI immediately
-          console.log('[FRONTEND] VAD detected speech start - updating UI to USER_SPEAKING');
-          setCallState('USER_SPEAKING');
+          // Speech started - log but let backend control the state
+          console.log('[FRONTEND] VAD detected speech start');
+          // Don't change state here - let the backend control it based on actual audio processing
         },
         () => {
-          // Speech ended - don't update UI yet, wait for backend confirmation
-          console.log('[FRONTEND] VAD detected speech end - waiting for backend processing');
+          // Speech ended - log but wait for backend confirmation
+          console.log('[FRONTEND] VAD detected speech end');
         }
       );
 
@@ -393,13 +393,17 @@ export default function VoiceCallButton({
           
           // Initialize in listening mode (backend starts with LISTENING state)
           shouldSendAudioRef.current = true;
+          console.log('[FRONTEND] Starting audio recording, shouldSendAudio:', shouldSendAudioRef.current);
           
           // Start audio recording
           if (audioManagerRef.current) {
             audioManagerRef.current.startRecording((audioData) => {
               // Only send audio when we should be listening
               if (ws.readyState === WebSocket.OPEN && shouldSendAudioRef.current) {
+                console.log(`[FRONTEND] Sending audio chunk: ${audioData.byteLength} bytes`);
                 ws.send(audioData);
+              } else {
+                console.log(`[FRONTEND] Skipping audio send - wsState: ${ws.readyState}, shouldSend: ${shouldSendAudioRef.current}`);
               }
             });
           }
