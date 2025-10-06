@@ -143,7 +143,7 @@ export default function Chat() {
   // HTTP PCM TTS via Arcana
   const audioCtxRef = useRef<AudioContext | null>(null);
   const ttsPlayheadRef = useRef<number>(0); // seconds scheduled ahead in AudioContext time
-  const ttsSampleRateRef = useRef<number>(48000); // Use 48000 Hz to match browser AudioContext
+  const ttsSampleRateRef = useRef<number>(24000); // Use 24000 Hz to match TTS output
   const ttsSentenceBufRef = useRef<string>('');
   const ttsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ttsQueueRef = useRef<{ speaker: string; text: string }[]>([]);
@@ -164,10 +164,11 @@ export default function Chat() {
   const ensureAudioContext = async () => {
     if (!audioCtxRef.current) {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      audioCtxRef.current = new Ctx();
+      // Create AudioContext at 24000 Hz to match TTS output
+      audioCtxRef.current = new Ctx({ sampleRate: 24000 });
       console.log('Created new AudioContext with sample rate:', audioCtxRef.current?.sampleRate);
       // Update TTS sample rate to match AudioContext
-      ttsSampleRateRef.current = audioCtxRef.current?.sampleRate || 48000;
+      ttsSampleRateRef.current = audioCtxRef.current?.sampleRate || 24000;
     }
     if (audioCtxRef.current?.state === 'suspended') {
       try { 
@@ -202,8 +203,8 @@ export default function Chat() {
     const float = new Float32Array(samples.length);
     for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
     
-    // Create buffer at TTS sample rate (48000 Hz) to match browser AudioContext
-    const audioBuffer = audioCtx.createBuffer(1, float.length, 48000);
+    // Create buffer at TTS sample rate (24000 Hz) - AudioContext will resample automatically
+    const audioBuffer = audioCtx.createBuffer(1, float.length, 24000);
     audioBuffer.getChannelData(0).set(float);
 
     const source = audioCtx.createBufferSource();
@@ -284,7 +285,7 @@ export default function Chat() {
         text,
         speaker,
         modelId: 'arcana',
-        samplingRate: 48000, // Use 48000 Hz to match browser AudioContext
+        samplingRate: 24000, // Use Rime.ai's native sample rate
         lang: 'eng',
         }, controller.signal as any);
       } catch (e) {

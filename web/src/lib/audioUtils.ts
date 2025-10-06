@@ -231,7 +231,7 @@ export class AudioManager {
       const audioBuffer = this.playbackContext.createBuffer(
         this.config.channels,
         samples.length,
-        48000 // Rime.ai sends 48kHz PCM
+        24000 // Rime.ai sends 24kHz PCM
       );
 
       // Convert int16 PCM to float32 and copy to audio buffer
