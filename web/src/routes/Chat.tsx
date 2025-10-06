@@ -145,7 +145,6 @@ export default function Chat() {
   const ttsPlayheadRef = useRef<number>(0); // seconds scheduled ahead in AudioContext time
   const ttsSampleRateRef = useRef<number>(24000); // Use 24000 Hz to match TTS output
   const ttsSentenceBufRef = useRef<string>('');
-  const ttsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ttsQueueRef = useRef<{ speaker: string; text: string }[]>([]);
   const ttsProcessingRef = useRef<boolean>(false);
   const ttsStreamingRef = useRef<boolean>(false);
@@ -161,6 +160,8 @@ export default function Chat() {
   const ttsCarryByteRef = useRef<number | null>(null);
   // Track when the network stream has fully completed for the current sentence
   const ttsNetworkDoneRef = useRef<boolean>(false);
+  // Monotonic counter to tag each TTS PCM request for debugging/correlation
+  const ttsRequestSeqRef = useRef<number>(0);
   // Crossfade handling between scheduled buffers
   const ttsLastGainRef = useRef<GainNode | null>(null);
   const ttsLastEndTimeRef = useRef<number>(0);
@@ -366,7 +367,8 @@ export default function Chat() {
       return;
     }
     
-    console.log(`🎤 Starting TTS: "${text.substring(0, 50)}..."`);
+    const reqId = ++ttsRequestSeqRef.current;
+    console.log(`🎤 Starting TTS[#${reqId}]: "${text.substring(0, 50)}..."`);
     
     // Stop any existing audio sources before starting new TTS
     ttsSourcesRef.current.forEach((s) => {
@@ -400,7 +402,7 @@ export default function Chat() {
         lang: 'eng',
         }, controller.signal as any);
       } catch (e) {
-        // aborted or failed
+        console.warn(`TTS[#${reqId}] request aborted/failed`);
         return;
       }
       if (!res.ok || !res.body) return;
@@ -420,6 +422,7 @@ export default function Chat() {
       flushAccumulatedPcm(true);
       // Mark network as done so onended can finalize state when buffers drain
       ttsNetworkDoneRef.current = true;
+      console.log(`🎤 TTS[#${reqId}] network done`);
     } finally {
       // Don't set ttsStreamingRef.current = false here
       // It will be set to false when audio actually finishes playing
@@ -492,38 +495,21 @@ export default function Chat() {
     // Normalize and accumulate
     const incoming = chunk.replace(/\s+/g, ' ');
     ttsSentenceBufRef.current += incoming;
-    // If a sentence end is present, split and send full sentences
+
+    // Split only on strict sentence boundaries to avoid mid-phrase splits
+    // Boundaries: ellipsis, or terminal punctuation followed by whitespace or end
+    const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$))/;
     let buf = ttsSentenceBufRef.current;
-    const parts = buf.split(/((?:\.\.\.|[\.\!\?])[\)\]"']?(?:\s+|$))/); // keep delimiters; handle ellipsis and EoS
-    if (parts.length > 1) {
-      let assembled = '';
-      let i = 0;
-      for (; i < parts.length - 1; i += 2) {
-        assembled += parts[i] + (parts[i + 1] || '');
-        const sentence = cleanTtsText(assembled);
-        if (sentence.length >= 6) enqueueTts((voiceKey || 'luna').toLowerCase(), sentence);
-        assembled = '';
-      }
-      // Whatever remains after processing full pairs stays in buffer
-      const remainder = parts.slice(i).join('');
-      ttsSentenceBufRef.current = remainder;
-    } else {
-      // No boundary yet; debounce-send long clauses to reduce initial delay
-      if (ttsDebounceRef.current) clearTimeout(ttsDebounceRef.current);
-      if (buf.length >= 140 && /\s$/.test(buf)) {
-        const toSend = buf;
-        ttsSentenceBufRef.current = '';
-        enqueueTts((voiceKey || 'luna').toLowerCase(), toSend);
-      } else {
-        ttsDebounceRef.current = setTimeout(() => {
-          const pending = ttsSentenceBufRef.current;
-          if (pending.length >= 120 && /\s$/.test(pending)) {
-            ttsSentenceBufRef.current = '';
-            enqueueTts((voiceKey || 'luna').toLowerCase(), pending);
-          }
-        }, 250);
-      }
+    while (true) {
+      const match = buf.match(boundaryRegex);
+      if (!match) break;
+      const idx = match.index! + match[0].length;
+      const full = buf.slice(0, idx);
+      const sentence = cleanTtsText(full);
+      if (sentence.length >= 2) enqueueTts((voiceKey || 'luna').toLowerCase(), sentence);
+      buf = buf.slice(idx);
     }
+    ttsSentenceBufRef.current = buf;
   };
 
   // (removed) sentence-based buffering; we now stream tokens directly to Rime
@@ -928,6 +914,10 @@ export default function Chat() {
       // no audio element used in realtime mode
     } else {
       setPlayingIndex(assistantIndex);
+      // Hard reset any previous TTS activity/queue to avoid mixing with new turn
+      stopTtsNow();
+      ttsQueueRef.current = [];
+      ttsSentenceBufRef.current = '';
     }
     try {
       // New API call to the Node.js backend
