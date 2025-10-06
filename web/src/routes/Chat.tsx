@@ -197,7 +197,18 @@ export default function Chat() {
     
     const samples = new Int16Array(alignedBuffer);
     const float = new Float32Array(samples.length);
-    for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
+    
+    // Convert to float32 and apply normalization to prevent clipping
+    for (let i = 0; i < samples.length; i++) {
+      float[i] = samples[i] / 32768;
+    }
+    
+    // Normalize audio to prevent clipping (reduce volume by 20%)
+    const normalizationFactor = 0.8;
+    for (let i = 0; i < float.length; i++) {
+      float[i] *= normalizationFactor;
+    }
+    
     const sr = ttsSampleRateRef.current || 24000;
     
     // Debug: Check for potential audio issues
