@@ -180,64 +180,6 @@ export default function Chat() {
     return audioCtxRef.current!;
   };
 
-  // PCM accumulation for smooth playback (like voice call system)
-  const pcmAccumulatorRef = useRef<Int16Array[]>([]);
-  const pcmAccumulatorTimerRef = useRef<number | null>(null);
-  const PCM_ACCUMULATION_TIME = 800; // ms - accumulate for 800ms chunks for very smooth audio
-
-  // Flush accumulated PCM data into a single smooth audio buffer
-  const flushPCMAccumulator = useCallback(() => {
-    if (!audioCtxRef.current || pcmAccumulatorRef.current.length === 0) return;
-    
-    const audioCtx = audioCtxRef.current;
-    
-    // Concatenate all accumulated samples
-    const totalSamples = pcmAccumulatorRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-    const combinedSamples = new Int16Array(totalSamples);
-    let offset = 0;
-    
-    for (const chunk of pcmAccumulatorRef.current) {
-      combinedSamples.set(chunk, offset);
-      offset += chunk.length;
-    }
-    
-    // Convert to float32
-    const float = new Float32Array(combinedSamples.length);
-    for (let i = 0; i < combinedSamples.length; i++) {
-      float[i] = combinedSamples[i] / 32768;
-    }
-    
-    // Create buffer at TTS sample rate (24000 Hz) and let AudioContext handle conversion
-    const audioBuffer = audioCtx.createBuffer(1, float.length, 24000);
-    audioBuffer.getChannelData(0).set(float);
-    
-    // Schedule for playback
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(audioCtx.destination);
-    
-    // Schedule to play at the current playhead
-    const startAt = Math.max(audioCtx.currentTime + 0.1, ttsPlayheadRef.current);
-    source.start(startAt);
-    ttsSourcesRef.current.push(source);
-    ttsPlayheadRef.current = startAt + audioBuffer.duration;
-    
-    source.onended = () => {
-      // When we reach the end of the last scheduled chunk, clear playing UI
-      const remaining = ttsPlayheadRef.current - audioCtx.currentTime;
-      if (remaining <= 0.05) {
-        setPlayingIndex(null);
-        // Set streaming to false when all audio for this sentence is done
-        ttsStreamingRef.current = false;
-        console.log('🎵 TTS audio finished, streaming set to false');
-      }
-      // Remove from active sources list
-      ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
-    };
-    
-    // Clear accumulator
-    pcmAccumulatorRef.current = [];
-  }, []);
 
   const schedulePcmChunk = (arrayBuffer: ArrayBuffer) => {
     const audioCtx = audioCtxRef.current;
@@ -256,37 +198,35 @@ export default function Chat() {
       ? arrayBuffer 
       : arrayBuffer.slice(0, alignedLength);
     
-    try {
-      const samples = new Int16Array(alignedBuffer);
-      
-      // Add to accumulator
-      pcmAccumulatorRef.current.push(samples);
-      
-      // Reset timer
-      if (pcmAccumulatorTimerRef.current) {
-        clearTimeout(pcmAccumulatorTimerRef.current);
+    const samples = new Int16Array(alignedBuffer);
+    const float = new Float32Array(samples.length);
+    for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
+    
+    // Create buffer at TTS sample rate (24000 Hz) and let AudioContext handle conversion
+    const audioBuffer = audioCtx.createBuffer(1, float.length, 24000);
+    audioBuffer.getChannelData(0).set(float);
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+
+    const startAt = Math.max(audioCtx.currentTime + 0.05, ttsPlayheadRef.current);
+    source.start(startAt);
+    ttsSourcesRef.current.push(source);
+    ttsPlayheadRef.current = startAt + audioBuffer.duration;
+
+    source.onended = () => {
+      // When we reach the end of the last scheduled chunk, clear playing UI
+      const remaining = ttsPlayheadRef.current - audioCtx.currentTime;
+      if (remaining <= 0.05) {
+        setPlayingIndex(null);
+        // Set streaming to false when all audio for this sentence is done
+        ttsStreamingRef.current = false;
+        console.log('🎵 TTS audio finished, streaming set to false');
       }
-      
-      // Set timer to flush accumulator
-      pcmAccumulatorTimerRef.current = window.setTimeout(() => {
-        flushPCMAccumulator();
-      }, PCM_ACCUMULATION_TIME);
-      
-      // If accumulator gets too large (>1200ms worth), flush immediately
-      const totalSamples = pcmAccumulatorRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-      const durationMs = (totalSamples / 24000) * 1000;
-      
-      if (durationMs > 1200) { // More than 1200ms accumulated
-        if (pcmAccumulatorTimerRef.current) {
-          clearTimeout(pcmAccumulatorTimerRef.current);
-          pcmAccumulatorTimerRef.current = null;
-        }
-        flushPCMAccumulator();
-      }
-      
-    } catch (error) {
-      console.error('Error accumulating PCM chunk:', error);
-    }
+      // Remove from active sources list
+      ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
+    };
   };
 
   const stopTtsNow = useCallback(() => {
