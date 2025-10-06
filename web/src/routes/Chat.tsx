@@ -164,8 +164,6 @@ export default function Chat() {
   const ttsRequestSeqRef = useRef<number>(0);
   // Whether we've received a final full response for the current turn
   const ttsGotFinalRef = useRef<boolean>(false);
-  // Track what text we've already spoken during streaming to avoid duplicates
-  const ttsSpokenTextRef = useRef<string>('');
   // Safe max characters per TTS request to avoid provider truncation
   const TTS_MAX_CHARS = 280;
 
@@ -501,14 +499,7 @@ export default function Chat() {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
         }
-        // Short punctuation-aware pause between segments
-        const trimmed = (text || '').trim();
-        let pauseMs = 40;
-        if (/\.{3}$/.test(trimmed) || /…$/.test(trimmed)) pauseMs = 120; // ellipsis
-        else if (/[!?]$/.test(trimmed)) pauseMs = 90;
-        else if (/\.$/.test(trimmed)) pauseMs = 70;
-        else if (/[;,:]$/.test(trimmed)) pauseMs = 55;
-        await new Promise(r => setTimeout(r, pauseMs));
+        // No artificial pauses - TTS handles natural pacing
       }
     } finally {
       ttsProcessingRef.current = false;
@@ -557,7 +548,6 @@ export default function Chat() {
       const sentence = cleanTtsText(full);
       if (sentence.length >= 2) {
         enqueueTts((voiceKey || 'luna').toLowerCase(), sentence);
-        ttsSpokenTextRef.current += sentence + ' ';
       }
       buf = buf.slice(idx);
     }
@@ -971,7 +961,6 @@ export default function Chat() {
       ttsQueueRef.current = [];
       ttsSentenceBufRef.current = '';
       ttsGotFinalRef.current = false;
-      ttsSpokenTextRef.current = '';
     }
     try {
       // New API call to the Node.js backend
@@ -1070,22 +1059,12 @@ export default function Chat() {
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
-                // Only enqueue the final text if we haven't already spoken it during streaming
+                // Always speak the final text to ensure we speak what's actually displayed
                 if (voiceEnabled) {
                   const finalClean = cleanTtsText(finalText);
-                  const alreadySpoken = ttsSpokenTextRef.current.trim();
-                  
-                  // If we haven't spoken anything yet, or the final text is longer than what we spoke
-                  if (alreadySpoken.length === 0 || finalClean.length > alreadySpoken.length) {
-                    // Only speak the part we haven't spoken yet
-                    const remainingText = alreadySpoken.length > 0 
-                      ? finalClean.slice(alreadySpoken.length).trim()
-                      : finalClean;
-                    
-                    if (remainingText.length > 0) {
-                      console.log(`🎵 Final TTS: speaking remaining "${remainingText.substring(0, 50)}..." (${remainingText.length} chars)`);
-                      enqueueTts((voiceKey || 'luna').toLowerCase(), remainingText);
-                    }
+                  if (finalClean.length > 0) {
+                    console.log(`🎵 Final TTS: speaking complete text "${finalClean.substring(0, 50)}..." (${finalClean.length} chars)`);
+                    enqueueTts((voiceKey || 'luna').toLowerCase(), finalClean);
                   }
                 }
                 if (!assistantMessageRef.current) {
