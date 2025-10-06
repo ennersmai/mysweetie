@@ -178,7 +178,11 @@ export default function Chat() {
       if (!match) break;
       const idx = match.index! + match[0].length;
       const sentence = remaining.slice(0, idx);
-      sentences.push(sentence);
+      
+      // CHECK: Only return sentences that have proper punctuation
+      if (/[\.\!\?]$/.test(sentence.trim())) {
+        sentences.push(sentence);
+      }
       remaining = remaining.slice(idx);
     }
     
@@ -564,7 +568,8 @@ export default function Chat() {
       const idx = match.index! + match[0].length;
       const full = buf.slice(0, idx);
       const sentence = cleanTtsText(full);
-      if (sentence.length >= 2) {
+      // CHECK: Only stream if sentence has proper punctuation
+      if (sentence.length >= 2 && /[\.\!\?]$/.test(sentence.trim())) {
         enqueueTts((voiceKey || 'luna').toLowerCase(), sentence);
       }
       buf = buf.slice(idx);
