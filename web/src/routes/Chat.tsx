@@ -153,9 +153,11 @@ export default function Chat() {
   const ttsSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
-  const PCM_MIN_SAMPLES = 2400; // ~100ms at 24kHz
-  const PCM_FADE_SAMPLES = 96;  // ~4ms fade-in/out to avoid clicks at boundaries
+  const PCM_MIN_SAMPLES = 3600; // ~150ms at 24kHz
+  const PCM_FADE_SAMPLES = 240; // ~10ms fade-in/out to avoid clicks at boundaries
   const ttsValidatedBinaryRef = useRef<boolean>(false);
+  // Promises to resolve when current TTS playback fully ends
+  const ttsEndResolversRef = useRef<Array<() => void>>([]);
   // Preserve 1 leftover byte between chunks to maintain 16-bit alignment
   const ttsCarryByteRef = useRef<number | null>(null);
 
@@ -234,6 +236,11 @@ export default function Chat() {
         setPlayingIndex(null);
         ttsStreamingRef.current = false;
         console.log('🎵 TTS audio finished, streaming set to false');
+        // Notify any waiters that playback fully ended
+        const resolvers = ttsEndResolversRef.current.splice(0);
+        resolvers.forEach((r) => {
+          try { r(); } catch {}
+        });
       }
       ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
     };
@@ -315,6 +322,13 @@ export default function Chat() {
     ttsPcmAccumRef.current = [];
     // Reset validation for next stream
     ttsValidatedBinaryRef.current = false;
+    // Reset carry byte between streams
+    ttsCarryByteRef.current = null;
+    // Notify any waiters that playback ended due to stop
+    const resolvers = ttsEndResolversRef.current.splice(0);
+    resolvers.forEach((r) => {
+      try { r(); } catch {}
+    });
   }, []);
 
   // Speak a single sentence via HTTP PCM endpoint
@@ -345,6 +359,8 @@ export default function Chat() {
     ttsPcmAccumRef.current = [];
     // Re-validate binary for new stream
     ttsValidatedBinaryRef.current = false;
+    // Reset carry byte
+    ttsCarryByteRef.current = null;
     
     try {
       let res: Response;
@@ -387,7 +403,20 @@ export default function Chat() {
     try {
       while (ttsQueueRef.current.length > 0) {
         const { speaker, text } = ttsQueueRef.current.shift()!;
+        // Ensure previous playback is done before starting next
+        if (ttsStreamingRef.current) {
+          await new Promise<void>((resolve) => {
+            // If ended already, resolve immediately
+            if (!ttsStreamingRef.current) return resolve();
+            ttsEndResolversRef.current.push(resolve);
+          });
+        }
         await speakPcm(speaker, text);
+        // Wait until playback fully ends
+        await new Promise<void>((resolve) => {
+          if (!ttsStreamingRef.current) return resolve();
+          ttsEndResolversRef.current.push(resolve);
+        });
         if (stickToBottomRef.current) {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
