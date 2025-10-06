@@ -185,13 +185,6 @@ export default function Chat() {
     const audioCtx = audioCtxRef.current;
     if (!audioCtx) return;
     
-    // CRITICAL FIX: Stop any existing audio sources to prevent overlap/glitches
-    ttsSourcesRef.current.forEach((s) => {
-      try { s.stop(0); } catch {}
-      try { s.disconnect(); } catch {}
-    });
-    ttsSourcesRef.current = [];
-    
     // Ensure buffer length is a multiple of 2 for Int16Array
     const byteLength = arrayBuffer.byteLength;
     const alignedLength = byteLength - (byteLength % 2);
@@ -270,6 +263,13 @@ export default function Chat() {
     }
     
     console.log(`🎤 Starting TTS: "${text.substring(0, 50)}..."`);
+    
+    // Stop any existing audio sources before starting new TTS
+    ttsSourcesRef.current.forEach((s) => {
+      try { s.stop(0); } catch {}
+      try { s.disconnect(); } catch {}
+    });
+    ttsSourcesRef.current = [];
     
     await ensureAudioContext();
     // Do not reset playhead here to ensure strict sequential playback across sentences
