@@ -65,7 +65,6 @@ export default function VoiceCallButton({
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
   const [voiceLevel, setVoiceLevel] = useState(0); // 0-1 for animation
   const [currentTranscript, setCurrentTranscript] = useState('');
-  const [currentAIResponse, setCurrentAIResponse] = useState('');
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
 
   const audioManagerRef = useRef<ProductionAudioManager | null>(null);
@@ -199,28 +198,16 @@ export default function VoiceCallButton({
         case 'ai_response_chunk':
           // Stream AI response chunks for real-time display in chat
           console.log('Received AI response chunk:', message.text);
-          if (message.text) {
-            // Send chunks to parent for streaming in chat area
-            if (onAIResponseChunk) {
-              onAIResponseChunk(message.text);
-            }
-            setCurrentAIResponse(prev => {
-              const updated = prev + message.text;
-              console.log('Updated AI response display:', updated);
-              return updated;
-            });
+          if (message.text && onAIResponseChunk) {
+            onAIResponseChunk(message.text);
           }
           break;
 
         case 'ai_response':
-          // Final AI response - send to parent and clear streaming buffer
+          // Final AI response - send to parent
           console.log('Received final AI response:', message.text);
-          if (message.text) {
-            if (onAIResponse) {
-              onAIResponse(message.text);
-            }
-            // Clear the tooltip response
-            setCurrentAIResponse('');
+          if (message.text && onAIResponse) {
+            onAIResponse(message.text);
           }
           break;
           
@@ -462,7 +449,6 @@ export default function VoiceCallButton({
     setIsCallActive(false);
     setCallState('IDLE');
     setCurrentTranscript('');
-    setCurrentAIResponse('');
     shouldSendAudioRef.current = false;
     // Stop playback immediately
     if (audioManagerRef.current) {
@@ -630,19 +616,12 @@ export default function VoiceCallButton({
         </>
       )}
 
-      {/* Live transcript/AI response tooltip */}
-      {(currentTranscript || currentAIResponse) && isCallActive && (
+      {/* Live transcript tooltip - only shows your speech while talking */}
+      {currentTranscript && isCallActive && (
         <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-black/90 text-white text-xs rounded-lg max-w-md shadow-lg border border-white/20">
-          {currentTranscript && (
-            <div className="text-green-300 mb-1">
-              <span className="font-semibold">You: </span>{currentTranscript}
-            </div>
-          )}
-          {currentAIResponse && (
-            <div className="text-purple-300">
-              <span className="font-semibold">{character.name}: </span>{currentAIResponse}
-            </div>
-          )}
+          <div className="text-green-300">
+            <span className="font-semibold">You: </span>{currentTranscript}
+          </div>
         </div>
       )}
 
