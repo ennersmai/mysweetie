@@ -175,11 +175,17 @@ export default function Chat() {
     let completedText = '';
     let remaining = buffer;
     
+    console.log(`📝 Buffer before extraction: "${buffer.substring(0, 100)}..."`);
+    
     while (true) {
       const match = remaining.match(boundaryRegex);
       if (!match) break;
       const idx = match.index! + match[0].length;
       const sentence = remaining.slice(0, idx);
+      
+      console.log(`🔍 Found sentence boundary: "${sentence.substring(0, 80)}..."`);
+      console.log(`🔍 Sentence ends with: "${sentence.trim().slice(-10)}"`);
+      console.log(`🔍 Passes check: ${/[\.\!\?][\)\]"']?$/.test(sentence.trim())}`);
       
       // CHECK: Sentence contains proper punctuation (allow quotes/parens after)
       if (/[\.\!\?][\)\]"']?$/.test(sentence.trim())) {
@@ -189,6 +195,9 @@ export default function Chat() {
         break;
       }
     }
+    
+    console.log(`✅ Completed text: "${completedText.substring(0, 100)}..."`);
+    console.log(`⏳ Remaining in buffer: "${remaining.substring(0, 100)}..."`);
     
     // Update buffer to only contain incomplete text
     uiTextBufferRef.current = remaining;
@@ -564,6 +573,8 @@ export default function Chat() {
     const incoming = chunk.replace(/\s+/g, ' ');
     ttsSentenceBufRef.current += incoming;
 
+    console.log(`🎙️ TTS buffer: "${ttsSentenceBufRef.current.substring(0, 100)}..."`);
+
     // Only split on terminal punctuation to avoid speaking text that might get deleted
     // Be conservative - only speak sentences that end with proper punctuation
     const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$))/;
@@ -574,13 +585,20 @@ export default function Chat() {
       const idx = match.index! + match[0].length;
       const full = buf.slice(0, idx);
       const sentence = cleanTtsText(full);
+      
+      console.log(`🎙️ TTS sentence candidate: "${sentence.substring(0, 80)}..."`);
+      console.log(`🎙️ Sentence ends with: "${sentence.trim().slice(-10)}"`);
+      console.log(`🎙️ Passes check: ${sentence.length >= 2 && /[\.\!\?][\)\]"']?$/.test(sentence.trim())}`);
+      
       // CHECK: Only stream if sentence has proper punctuation (allow quotes/parens after)
       if (sentence.length >= 2 && /[\.\!\?][\)\]"']?$/.test(sentence.trim())) {
+        console.log(`✅ Enqueueing TTS: "${sentence.substring(0, 50)}..."`);
         enqueueTts((voiceKey || 'luna').toLowerCase(), sentence);
       }
       buf = buf.slice(idx);
     }
     ttsSentenceBufRef.current = buf;
+    console.log(`🎙️ TTS buffer after extraction: "${ttsSentenceBufRef.current.substring(0, 100)}..."`);
   };
 
   // (removed) sentence-based buffering; we now stream tokens directly to Rime
