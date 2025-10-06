@@ -167,6 +167,24 @@ export default function Chat() {
   // Safe max characters per TTS request to avoid provider truncation
   const TTS_MAX_CHARS = 280;
 
+  // Extract only complete sentences from a chunk to avoid showing deleted text
+  const extractCompleteSentences = (chunk: string): string[] => {
+    const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$))/;
+    const sentences: string[] = [];
+    let remaining = chunk;
+    
+    while (true) {
+      const match = remaining.match(boundaryRegex);
+      if (!match) break;
+      const idx = match.index! + match[0].length;
+      const sentence = remaining.slice(0, idx);
+      sentences.push(sentence);
+      remaining = remaining.slice(idx);
+    }
+    
+    return sentences;
+  };
+
   // Split long sentences into smaller TTS-safe segments preferring punctuation/word boundaries
   const segmentTextForTts = (text: string): string[] => {
     const s = cleanTtsText(text);
@@ -536,9 +554,9 @@ export default function Chat() {
     const incoming = chunk.replace(/\s+/g, ' ');
     ttsSentenceBufRef.current += incoming;
 
-    // Split on various boundaries to handle long sentences with commas
-    // Look for: periods, exclamation, question marks, or commas/semicolons followed by space
-    const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$)|[;,](?:\s+|$))/;
+    // Only split on terminal punctuation to avoid speaking text that might get deleted
+    // Be conservative - only speak sentences that end with proper punctuation
+    const boundaryRegex = /((?:\.\.\.|…|[\.\!\?])[\)\]"']?(?:\s+|$))/;
     let buf = ttsSentenceBufRef.current;
     while (true) {
       const match = buf.match(boundaryRegex);
@@ -1029,6 +1047,32 @@ export default function Chat() {
                   // Speak complete sentences as they arrive for faster response
                   ttsAppendSentence(chunk);
                 }
+                
+                // Only update UI with complete sentences to avoid showing deleted text
+                // Keep incomplete sentences in a separate buffer until they're complete
+                const completeSentences = extractCompleteSentences(chunk);
+                if (completeSentences.length > 0) {
+                  // Update UI with only complete sentences
+                  setMessages(prev => {
+                    const next = [...prev];
+                    let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
+                    if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
+                      if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
+                        idx = next.length - 1;
+                        currentAssistantIndexRef.current = idx;
+                      } else {
+                        next.push({ role: 'assistant', content: '' } as any);
+                        idx = next.length - 1;
+                        currentAssistantIndexRef.current = idx;
+                      }
+                    }
+                    const target = next[idx] as any;
+                    // Only add complete sentences to the displayed content
+                    const newContent = target.content + completeSentences.join('');
+                    next[idx] = { ...target, content: newContent } as any;
+                    return next;
+                  });
+                }
 
                 setMessages(prev => {
                   const next = [...prev];
@@ -1059,34 +1103,17 @@ export default function Chat() {
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
-                // Speak any remaining buffer text to ensure we don't miss the end of long sentences
+                // Speak any remaining buffer text to ensure we don't miss the end
                 if (voiceEnabled) {
                   const remainingInBuffer = ttsSentenceBufRef.current.trim();
                   if (remainingInBuffer.length > 0) {
                     console.log(`🎵 Final TTS: speaking remaining buffer "${remainingInBuffer.substring(0, 50)}..." (${remainingInBuffer.length} chars)`);
                     enqueueTts((voiceKey || 'luna').toLowerCase(), remainingInBuffer);
+                    ttsSentenceBufRef.current = ''; // Clear the buffer
                   }
-                  ttsSentenceBufRef.current = ''; // Clear the buffer
                 }
                 if (!assistantMessageRef.current) {
                   assistantMessageRef.current = finalText;
-                  setMessages(prev => {
-                    const next = [...prev];
-                    let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
-                    if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
-                      if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
-                        idx = next.length - 1;
-                        currentAssistantIndexRef.current = idx;
-                      } else {
-                        next.push({ role: 'assistant', content: '' } as any);
-                        idx = next.length - 1;
-                        currentAssistantIndexRef.current = idx;
-                      }
-                    }
-                    const target = next[idx] as any;
-                    next[idx] = { ...target, content: assistantMessageRef.current } as any;
-                    return next;
-                  });
                   // Ensure final chunk leaves us scrolled to bottom if appropriate
                   setTimeout(() => {
                     if (!stickToBottomRef.current) return;
