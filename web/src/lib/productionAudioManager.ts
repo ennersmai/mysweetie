@@ -26,8 +26,10 @@ export class ProductionAudioManager {
   private vadIntervalId: number | null = null;
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private readonly vadThresholdRms = 0.008; // Less sensitive - raised to reduce noise
-  private readonly vadHangoverMs = 3000; // Longer hangover to avoid cutting words
+  private readonly vadThresholdRms = 0.003; // More sensitive for better speech detection
+  private readonly vadHangoverMs = 1000; // Shorter hangover for more responsive detection
+  private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
+  private readonly vadMinFrames = 3; // Require 3 consecutive frames to confirm speech
 
   async initialize(): Promise<boolean> {
     try {
@@ -99,10 +101,13 @@ export class ProductionAudioManager {
             
             if (rms >= this.vadThresholdRms) {
               this.vadLastAboveThreshold = now;
-              if (!this.vadSpeaking) {
+              this.vadConsecutiveFrames++;
+              
+              // Only confirm speech after consecutive frames
+              if (!this.vadSpeaking && this.vadConsecutiveFrames >= this.vadMinFrames) {
                 this.vadSpeaking = true;
                 // eslint-disable-next-line no-console
-                console.log(`VAD: speaking detected (rms=${rms.toFixed(3)})`);
+                console.log(`VAD: speaking detected (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames})`);
                 
                 // If user starts speaking during TTS, interrupt it
                 if (this.micMuted && this.isPlaying) {
@@ -122,13 +127,18 @@ export class ProductionAudioManager {
                   this.onSpeechStart();
                 }
               }
-            } else if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
-              this.vadSpeaking = false;
-              // eslint-disable-next-line no-console
-              console.log(`VAD: speaking ended`);
-              // Notify UI
-              if (this.onSpeechEnd) {
-                this.onSpeechEnd();
+            } else {
+              // Reset consecutive frames counter
+              this.vadConsecutiveFrames = 0;
+              
+              if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
+                this.vadSpeaking = false;
+                // eslint-disable-next-line no-console
+                console.log(`VAD: speaking ended`);
+                // Notify UI
+                if (this.onSpeechEnd) {
+                  this.onSpeechEnd();
+                }
               }
             }
           };
