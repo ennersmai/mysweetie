@@ -18,7 +18,7 @@ export class ProductionAudioManager {
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
   private readonly micBoostFactor = 1.5; // Reduced from 4.0 to prevent distortion
-  private micMuted = false; // Track if mic should be muted during TTS playback
+  private isPlayingTTS = false; // Track if TTS is currently playing
   private isInterrupted = false; // Track if TTS was interrupted by user speech
 
   // Simple VAD
@@ -26,19 +26,21 @@ export class ProductionAudioManager {
   private vadIntervalId: number | null = null;
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private readonly vadThresholdRms = 0.01; // Increased threshold to reduce false positives from background noise
-  private readonly vadHangoverMs = 2500; // Match backend timeout for consistent behavior
+  private baseVadThreshold = 0.01; // Base threshold for normal operation
+  private currentVadThreshold = 0.01; // Dynamic threshold that increases during TTS
+  private readonly vadHangoverMs = 1500; // Reduced for faster response
   private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
-  private readonly vadMinFrames = 5; // Require 5 consecutive frames to confirm speech (reduce false positives)
+  private readonly vadMinFrames = 3; // Reduced for faster response
+  private recentRmsValues: number[] = []; // Track recent RMS values for adaptive threshold
 
   async initialize(): Promise<boolean> {
     try {
       // Initialize audio context
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       
-      // Ensure mic starts unmuted
-      this.micMuted = false;
-      console.log('ProductionAudioManager: Initializing with micMuted =', this.micMuted);
+      // Initialize VAD state
+      this.isPlayingTTS = false;
+      console.log('ProductionAudioManager: Initializing audio system');
       
       // Request microphone access
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -81,41 +83,42 @@ export class ProductionAudioManager {
             const rms = Math.sqrt(sum / timeDomain.length);
             const now = performance.now();
             
-            // Skip VAD if mic is muted during TTS playback
-            if (this.micMuted) {
-              // Log once per mute cycle
-              if (this.vadSpeaking) {
-                this.vadSpeaking = false;
-                console.log('VAD: Force-stopped speaking due to TTS playback');
-                if (this.onSpeechEnd) {
-                  this.onSpeechEnd();
-                }
-              }
-              return; // Skip VAD processing during playback (but MediaRecorder keeps running)
+            // Update recent RMS values for adaptive threshold
+            this.recentRmsValues.push(rms);
+            if (this.recentRmsValues.length > 50) {
+              this.recentRmsValues.shift();
             }
             
-            // Log VAD activity consistently for debugging
-            if (Math.random() < 0.01) { // Increased logging frequency for better debugging
-              console.log(`VAD: rms=${rms.toFixed(4)}, threshold=${this.vadThresholdRms}, micMuted=${this.micMuted}, speaking=${this.vadSpeaking}`);
+            // Adaptive threshold: increase during TTS to prevent feedback
+            if (this.isPlayingTTS) {
+              // During TTS, use a higher threshold to prevent TTS from triggering VAD
+              this.currentVadThreshold = this.baseVadThreshold * 3;
+            } else {
+              // Normal operation - use base threshold
+              this.currentVadThreshold = this.baseVadThreshold;
             }
             
-            if (rms >= this.vadThresholdRms) {
+            // Log VAD activity occasionally for debugging
+            if (Math.random() < 0.01) {
+              console.log(`VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)}, playing=${this.isPlayingTTS}, speaking=${this.vadSpeaking}`);
+            }
+            
+            if (rms >= this.currentVadThreshold) {
               this.vadLastAboveThreshold = now;
               this.vadConsecutiveFrames++;
               
               // Only confirm speech after consecutive frames
               if (!this.vadSpeaking && this.vadConsecutiveFrames >= this.vadMinFrames) {
                 this.vadSpeaking = true;
-                console.log(`🎤 VAD: SPEECH DETECTED (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames})`);
+                console.log(`🎤 VAD: SPEECH DETECTED (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
                 // If user starts speaking during TTS, interrupt it
-                if (this.micMuted && this.isPlaying) {
+                if (this.isPlayingTTS && this.isPlaying) {
                   console.log('🛑 VAD: User interrupted TTS - stopping playback');
                   this.isInterrupted = true;
                   this.stopPlayback();
-                  this.micMuted = false; // Unmute mic for user speech
                   
-                  // Notify backend about interruption
+                  // Notify backend about interruption immediately
                   if (this.onPlaybackComplete) {
                     this.onPlaybackComplete();
                   }
@@ -140,7 +143,7 @@ export class ProductionAudioManager {
               }
             }
           };
-          this.vadIntervalId = window.setInterval(tick, 20); // Increased polling rate from 50ms to 20ms for faster response
+          this.vadIntervalId = window.setInterval(tick, 20); // Fast polling for responsive VAD
         }
       } catch (e) {
         console.warn('VAD setup failed, continuing without gating:', e);
@@ -177,17 +180,10 @@ export class ProductionAudioManager {
     // Provide audio chunks continuously while recording
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0 && this.onAudioData) {
-        // Skip sending audio during TTS playback (when mic is muted)
-        if (this.micMuted) {
-          // Log occasionally to avoid spam
-          if (Math.random() < 0.1) {
-            console.log(`MediaRecorder data skipped (mic muted): ${event.data.size} bytes`);
-          }
-          return;
-        }
-        // Log occasionally to verify audio is being sent (less spam)
-        if (Math.random() < 0.1) {
-          console.log(`MediaRecorder sending: ${event.data.size} bytes`);
+        // Always send audio data - let backend handle state management
+        // Log occasionally to verify audio is being sent
+        if (Math.random() < 0.05) {
+          console.log(`MediaRecorder sending: ${event.data.size} bytes (TTS playing: ${this.isPlayingTTS})`);
         }
         event.data.arrayBuffer().then((buf) => {
           this.onAudioData!(buf);
@@ -224,9 +220,9 @@ export class ProductionAudioManager {
       return;
     }
     
-    // Reset interruption flag and mute mic during TTS playback
+    // Reset interruption flag and set TTS playing state
     this.isInterrupted = false;
-    this.micMuted = true;
+    this.isPlayingTTS = true;
 
     try {
       // PCM audio from Rime.ai TTS - play immediately, no buffering
@@ -369,32 +365,30 @@ export class ProductionAudioManager {
     if (this.audioQueue.length === 0) {
       console.log('ProductionAudioManager: Audio queue empty - playback complete');
       this.isPlaying = false;
+      this.isPlayingTTS = false; // No longer playing TTS
       console.log(`ProductionAudioManager: About to check callback - hasCallback: ${!!this.onPlaybackComplete}, isPlaying: ${this.isPlaying}`);
       
-      // Notify playback complete after a longer delay to ensure all audio has actually finished
-      // This prevents the system from listening again while audio artifacts are still playing
-        setTimeout(() => {
-          console.log(`ProductionAudioManager: Timeout callback executing - hasCallback: ${!!this.onPlaybackComplete}, isPlaying: ${this.isPlaying}, interrupted: ${this.isInterrupted}`);
-          
-          // Only unmute mic if not interrupted (user didn't speak over TTS)
-          if (!this.isInterrupted) {
-            this.micMuted = false;
-            console.log('ProductionAudioManager: Mic unmuted, ready to listen');
-          } else {
-            console.log('ProductionAudioManager: TTS was interrupted by user speech - keeping mic active');
-          }
-          
-          if (this.onPlaybackComplete && !this.isPlaying) {
-            console.log('ProductionAudioManager: 🔔 CALLING PLAYBACK COMPLETE CALLBACK');
-            this.onPlaybackComplete();
-            console.log('ProductionAudioManager: ✅ Playback complete callback executed successfully');
-          } else {
-            console.warn('ProductionAudioManager: ❌ Playback complete but conditions not met:', {
-              hasCallback: !!this.onPlaybackComplete,
-              isPlaying: this.isPlaying
-            });
-          }
-        }, 300); // Increased from 100ms to 300ms to ensure audio fully finishes before listening
+      // Notify playback complete after a short delay to ensure audio has finished
+      setTimeout(() => {
+        console.log(`ProductionAudioManager: Timeout callback executing - hasCallback: ${!!this.onPlaybackComplete}, isPlaying: ${this.isPlaying}, interrupted: ${this.isInterrupted}`);
+        
+        if (!this.isInterrupted) {
+          console.log('ProductionAudioManager: TTS completed normally');
+        } else {
+          console.log('ProductionAudioManager: TTS was interrupted by user speech');
+        }
+        
+        if (this.onPlaybackComplete && !this.isPlaying) {
+          console.log('ProductionAudioManager: 🔔 CALLING PLAYBACK COMPLETE CALLBACK');
+          this.onPlaybackComplete();
+          console.log('ProductionAudioManager: ✅ Playback complete callback executed successfully');
+        } else {
+          console.warn('ProductionAudioManager: ❌ Playback complete but conditions not met:', {
+            hasCallback: !!this.onPlaybackComplete,
+            isPlaying: this.isPlaying
+          });
+        }
+      }, 200); // Reduced delay for faster response
       return;
     }
 
@@ -438,6 +432,7 @@ export class ProductionAudioManager {
     // Clear audio queue and PCM buffer
     this.audioQueue = [];
     this.isPlaying = false;
+    this.isPlayingTTS = false; // Reset TTS playing state
     
     // Clear PCM accumulator to prevent any remaining audio from playing
     if (this.pcmAccumulatorTimer) {

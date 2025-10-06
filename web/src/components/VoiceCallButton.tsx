@@ -173,19 +173,32 @@ export default function VoiceCallButton({
           break;
           
         case 'transcript_update':
-          console.log('Transcript update received:', message.text, 'is_final:', message.is_final);
+          console.log('📝 Transcript update received:', message.text, 'is_final:', message.is_final);
           if (message.text) {
+            // Always update the current transcript state
+            setCurrentTranscript(message.text);
+            
             // Send live updates to parent for input field
             if (onTranscriptUpdate) {
+              console.log('📝 Calling onTranscriptUpdate with:', message.text);
               onTranscriptUpdate(message.text);
             }
-            setCurrentTranscript(message.text);
-            // Send final transcript to parent to add as chat message
-            if (message.is_final && onTranscript) {
-              onTranscript(message.text);
-              setCurrentTranscript(''); // Clear after sending final
+            
+            // Handle final transcript
+            if (message.is_final) {
+              console.log('📝 Final transcript received:', message.text);
+              
+              if (onTranscript) {
+                console.log('📝 Calling onTranscript with final text:', message.text);
+                onTranscript(message.text);
+              }
+              
+              // Clear local state after sending final
+              setCurrentTranscript('');
+              
               // Clear input field after final transcript
               if (onTranscriptUpdate) {
+                console.log('📝 Clearing input field after final transcript');
                 onTranscriptUpdate('');
               }
             }
@@ -334,9 +347,14 @@ export default function VoiceCallButton({
       // Set up VAD callbacks for instant UI feedback
       audioManagerRef.current.setSpeechCallbacks(
         () => {
-          // Speech started - log but let backend control the state
+          // Speech started - log and handle interruption if AI is speaking
           console.log('[FRONTEND] VAD detected speech start');
-          // Don't change state here - let the backend control it based on actual audio processing
+          
+          // If AI is speaking and user starts talking, send interrupt immediately
+          if (callStateRef.current === 'AI_SPEAKING' && websocketRef.current?.readyState === WebSocket.OPEN) {
+            console.log('🛑 [FRONTEND] User interrupting AI speech - sending interrupt');
+            websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
+          }
         },
         () => {
           // Speech ended - log but wait for backend confirmation
