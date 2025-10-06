@@ -17,7 +17,7 @@ export class ProductionAudioManager {
   private onSpeechEnd: (() => void) | null = null;
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
-  private readonly micBoostFactor = 4.0; // Increased from 2.5 for better pickup
+  private readonly micBoostFactor = 1.5; // Reduced from 4.0 to prevent distortion
   private micMuted = false; // Track if mic should be muted during TTS playback
   private isInterrupted = false; // Track if TTS was interrupted by user speech
 
@@ -42,7 +42,7 @@ export class ProductionAudioManager {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: false, // Disabled to preserve more audio detail
+          noiseSuppression: true, // Enable noise suppression for cleaner audio
           autoGainControl: true,
           sampleRate: 48000
         }
@@ -153,9 +153,9 @@ export class ProductionAudioManager {
 
     this.onAudioData = onAudioData;
 
-    // Determine best supported format - increased bitrate for better quality
+    // Determine best supported format - balanced bitrate for quality and size
     const options: MediaRecorderOptions = {
-      audioBitsPerSecond: 256000 // Increased from 192000 for clearer audio
+      audioBitsPerSecond: 128000 // Reduced from 256000 to prevent over-compression
     };
     
     if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
