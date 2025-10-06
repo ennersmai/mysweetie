@@ -201,10 +201,8 @@ export default function Chat() {
     const float = new Float32Array(samples.length);
     for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
     
-    // CRITICAL FIX: Use the AudioContext's native sample rate, not the TTS sample rate
-    // The TTS is 24000 Hz, but AudioContext is 48000 Hz - we need to resample
-    const ttsSampleRate = ttsSampleRateRef.current || 24000;
-    const audioBuffer = audioCtx.createBuffer(1, float.length, ttsSampleRate);
+    // Use 48000 Hz to match the AudioContext and TTS request
+    const audioBuffer = audioCtx.createBuffer(1, float.length, 48000);
     audioBuffer.getChannelData(0).set(float);
 
     const source = audioCtx.createBufferSource();
@@ -278,7 +276,7 @@ export default function Chat() {
         text,
         speaker,
         modelId: 'arcana',
-        samplingRate: ttsSampleRateRef.current || 24000,
+        samplingRate: 48000, // Request 48000 Hz to match browser AudioContext
         lang: 'eng',
         }, controller.signal as any);
       } catch (e) {
