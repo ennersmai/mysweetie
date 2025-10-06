@@ -165,9 +165,15 @@ export default function Chat() {
     if (!audioCtxRef.current) {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
       audioCtxRef.current = new Ctx();
+      console.log('Created new AudioContext with sample rate:', audioCtxRef.current?.sampleRate);
     }
     if (audioCtxRef.current?.state === 'suspended') {
-      try { await audioCtxRef.current.resume(); } catch {}
+      try { 
+        await audioCtxRef.current.resume(); 
+        console.log('AudioContext resumed');
+      } catch (e) {
+        console.warn('Failed to resume AudioContext:', e);
+      }
     }
     return audioCtxRef.current!;
   };
@@ -192,7 +198,14 @@ export default function Chat() {
     const samples = new Int16Array(alignedBuffer);
     const float = new Float32Array(samples.length);
     for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
-    const sr = ttsSampleRateRef.current || 22050;
+    const sr = ttsSampleRateRef.current || 24000;
+    
+    // Debug: Check for potential audio issues
+    const maxSample = Math.max(...float.map(Math.abs));
+    if (maxSample > 0.95) {
+      console.warn('PCM chunk has very high amplitude, potential clipping:', maxSample);
+    }
+    
     const audioBuffer = audioCtx.createBuffer(1, float.length, sr);
     audioBuffer.getChannelData(0).set(float);
 
