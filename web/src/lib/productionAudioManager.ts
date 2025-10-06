@@ -87,16 +87,8 @@ export class ProductionAudioManager {
                 if (this.onSpeechEnd) {
                   this.onSpeechEnd();
                 }
-                try {
-                  if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    this.mediaRecorder.stop();
-                    console.log('MediaRecorder stopped due to TTS playback');
-                  }
-                } catch (err) {
-                  console.warn('Failed to stop MediaRecorder during TTS:', err);
-                }
               }
-              return; // Skip VAD processing during playback
+              return; // Skip VAD processing during playback (but MediaRecorder keeps running)
             }
             
             // Log VAD activity every 100 cycles to debug
@@ -110,19 +102,9 @@ export class ProductionAudioManager {
                 this.vadSpeaking = true;
                 // eslint-disable-next-line no-console
                 console.log(`VAD: speaking detected (rms=${rms.toFixed(3)})`);
-                // Notify UI immediately
+                // Notify UI for visual feedback
                 if (this.onSpeechStart) {
                   this.onSpeechStart();
-                }
-                // Start recording this utterance if not already
-                try {
-                  if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-                    // Start with 100ms timeslice to get continuous audio chunks
-                    this.mediaRecorder.start(100);
-                    console.log('MediaRecorder started for utterance with 100ms timeslice');
-                  }
-                } catch (err) {
-                  console.warn('Failed to start MediaRecorder on VAD start:', err);
                 }
               }
             } else if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
@@ -132,15 +114,6 @@ export class ProductionAudioManager {
               // Notify UI
               if (this.onSpeechEnd) {
                 this.onSpeechEnd();
-              }
-              // Finalize blob for this utterance
-              try {
-                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                  this.mediaRecorder.stop();
-                  console.log('MediaRecorder stopped to finalize utterance');
-                }
-              } catch (err) {
-                console.warn('Failed to stop MediaRecorder on VAD end:', err);
               }
             }
           };
@@ -178,14 +151,35 @@ export class ProductionAudioManager {
 
     this.mediaRecorder = new MediaRecorder(this.recordingStream, options);
     
-    // Provide finalized blob when recording stops; VAD controls start/stop
+    // Provide audio chunks continuously while recording
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0 && this.onAudioData) {
-        event.data.arrayBuffer().then((buf) => this.onAudioData!(buf));
+        // Skip sending audio during TTS playback (when mic is muted)
+        if (this.micMuted) {
+          // Log occasionally to avoid spam
+          if (Math.random() < 0.1) {
+            console.log(`MediaRecorder data skipped (mic muted): ${event.data.size} bytes`);
+          }
+          return;
+        }
+        // Log every chunk to verify audio is being sent
+        console.log(`MediaRecorder sending: ${event.data.size} bytes`);
+        event.data.arrayBuffer().then((buf) => {
+          this.onAudioData!(buf);
+        });
       }
     };
 
-    console.log('Recording ready');
+    // Start recording immediately with 100ms timeslices
+    try {
+      this.mediaRecorder.start(100);
+      console.log('MediaRecorder started with 100ms timeslice - continuous audio streaming enabled');
+    } catch (err) {
+      console.error('Failed to start MediaRecorder:', err);
+      return false;
+    }
+
+    console.log('Recording ready and active');
     return true;
   }
 

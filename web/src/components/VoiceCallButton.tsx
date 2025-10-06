@@ -400,10 +400,7 @@ export default function VoiceCallButton({
             audioManagerRef.current.startRecording((audioData) => {
               // Only send audio when we should be listening
               if (ws.readyState === WebSocket.OPEN && shouldSendAudioRef.current) {
-                console.log(`[FRONTEND] Sending audio chunk: ${audioData.byteLength} bytes`);
                 ws.send(audioData);
-              } else {
-                console.log(`[FRONTEND] Skipping audio send - wsState: ${ws.readyState}, shouldSend: ${shouldSendAudioRef.current}`);
               }
             });
           }
