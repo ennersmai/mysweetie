@@ -155,6 +155,9 @@ export default function Chat() {
   const ttsPcmAccumRef = useRef<number[]>([]);
   const PCM_MIN_SAMPLES = 2400; // ~100ms at 24kHz
   const PCM_FADE_SAMPLES = 96;  // ~4ms fade-in/out to avoid clicks at boundaries
+  const ttsValidatedBinaryRef = useRef<boolean>(false);
+  // Preserve 1 leftover byte between chunks to maintain 16-bit alignment
+  const ttsCarryByteRef = useRef<number | null>(null);
 
   const cleanTtsText = (s: string) => {
     // Remove asterisk emphasis and any html tags, collapse whitespace
@@ -240,23 +243,47 @@ export default function Chat() {
     const audioCtx = audioCtxRef.current;
     if (!audioCtx) return;
 
-    // Ensure buffer length is a multiple of 2 for Int16Array
-    const byteLength = arrayBuffer.byteLength;
-    const alignedLength = byteLength - (byteLength % 2);
+    // Build a properly aligned byte view preserving 16-bit boundaries across chunks
+    let u8 = new Uint8Array(arrayBuffer);
+    if (ttsCarryByteRef.current !== null) {
+      const merged = new Uint8Array(u8.length + 1);
+      merged[0] = ttsCarryByteRef.current;
+      merged.set(u8, 1);
+      u8 = merged;
+      ttsCarryByteRef.current = null;
+    }
+    if (u8.length === 0) return;
+    if ((u8.length & 1) === 1) {
+      // Save the last byte to prepend to the next chunk
+      ttsCarryByteRef.current = u8[u8.length - 1] as number;
+      u8 = u8.subarray(0, u8.length - 1);
+    }
+    if (u8.length === 0) return;
 
-    if (alignedLength === 0) {
-      // Too small or misaligned; skip
-      return;
+    // Validate that this looks like binary (not a JSON/text body) on first chunk
+    if (!ttsValidatedBinaryRef.current) {
+      const probe = u8.subarray(0, Math.min(64, u8.length));
+      let printable = 0;
+      for (let i = 0; i < probe.length; i++) {
+        const b = probe[i];
+        if (b === 9 || b === 10 || b === 13 || (b >= 32 && b <= 126)) printable++;
+      }
+      // If majority is printable ASCII, likely not PCM; abort playback
+      if (printable / probe.length > 0.7) {
+        console.error('Received non-PCM (text) data in PCM stream; aborting playback');
+        ttsPcmAccumRef.current = [];
+        ttsStreamingRef.current = false;
+        return;
+      }
+      ttsValidatedBinaryRef.current = true;
     }
 
-    const alignedBuffer = alignedLength === byteLength
-      ? arrayBuffer
-      : arrayBuffer.slice(0, alignedLength);
-
-    const samples = new Int16Array(alignedBuffer);
-    // Append to accumulator as float32
-    for (let i = 0; i < samples.length; i++) {
-      ttsPcmAccumRef.current.push(samples[i] / 32768);
+    // Parse as little-endian 16-bit signed PCM using DataView for robustness
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    for (let i = 0; i < u8.byteLength; i += 2) {
+      const s = dv.getInt16(i, true); // little-endian
+      // Normalize to [-1, 1]
+      ttsPcmAccumRef.current.push(Math.max(-1, Math.min(1, s / 32768)));
     }
 
     // Flush in ~100ms blocks to reduce boundary clicks
@@ -286,6 +313,8 @@ export default function Chat() {
     setPlayingIndex(null);
     // Clear any accumulated PCM to avoid tail artifacts
     ttsPcmAccumRef.current = [];
+    // Reset validation for next stream
+    ttsValidatedBinaryRef.current = false;
   }, []);
 
   // Speak a single sentence via HTTP PCM endpoint
@@ -314,6 +343,8 @@ export default function Chat() {
     ttsStreamingRef.current = true;
     // Reset PCM accumulator for a fresh stream
     ttsPcmAccumRef.current = [];
+    // Re-validate binary for new stream
+    ttsValidatedBinaryRef.current = false;
     
     try {
       let res: Response;

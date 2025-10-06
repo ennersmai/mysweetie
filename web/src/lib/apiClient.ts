@@ -96,9 +96,11 @@ export const apiClient = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'audio/pcm',
         'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify(body),
+      cache: 'no-store',
       signal,
     });
   },
