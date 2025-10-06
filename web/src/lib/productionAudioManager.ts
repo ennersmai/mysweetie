@@ -25,8 +25,8 @@ export class ProductionAudioManager {
   private vadIntervalId: number | null = null;
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private readonly vadThresholdRms = 0.003; // More sensitive - lowered from 0.006
-  private readonly vadHangoverMs = 1500; // Longer hangover to avoid cutting words
+  private readonly vadThresholdRms = 0.008; // Less sensitive - raised to reduce noise
+  private readonly vadHangoverMs = 2000; // Longer hangover to avoid cutting words
 
   async initialize(): Promise<boolean> {
     try {
@@ -91,8 +91,8 @@ export class ProductionAudioManager {
               return; // Skip VAD processing during playback (but MediaRecorder keeps running)
             }
             
-            // Log VAD activity every 100 cycles to debug
-            if (Math.random() < 0.01) {
+            // Log VAD activity every 200 cycles to debug (less spam)
+            if (Math.random() < 0.005) {
               console.log(`VAD active: rms=${rms.toFixed(4)}, threshold=${this.vadThresholdRms}, micMuted=${this.micMuted}`);
             }
             
@@ -162,18 +162,20 @@ export class ProductionAudioManager {
           }
           return;
         }
-        // Log every chunk to verify audio is being sent
-        console.log(`MediaRecorder sending: ${event.data.size} bytes`);
+        // Log occasionally to verify audio is being sent (less spam)
+        if (Math.random() < 0.1) {
+          console.log(`MediaRecorder sending: ${event.data.size} bytes`);
+        }
         event.data.arrayBuffer().then((buf) => {
           this.onAudioData!(buf);
         });
       }
     };
 
-    // Start recording immediately with 100ms timeslices
+    // Start recording immediately with 250ms timeslices (less frequent chunks)
     try {
-      this.mediaRecorder.start(100);
-      console.log('MediaRecorder started with 100ms timeslice - continuous audio streaming enabled');
+      this.mediaRecorder.start(250);
+      console.log('MediaRecorder started with 250ms timeslice - continuous audio streaming enabled');
     } catch (err) {
       console.error('Failed to start MediaRecorder:', err);
       return false;
