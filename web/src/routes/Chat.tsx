@@ -1331,11 +1331,17 @@ export default function Chat() {
                       }}
                       onTranscript={(transcript) => {
                         console.log('User spoke (final):', transcript);
-                        // Add user message when speech ends
-                        setMessages(prev => [...prev, { role: 'user', content: transcript }]);
-                        // Add empty assistant message for streaming
-                        setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
-                        currentAssistantIndexRef.current = messagesRef.current.length + 1;
+                        // Add user message and empty assistant message for streaming
+                        setMessages(prev => {
+                          const newMessages: Message[] = [
+                            ...prev,
+                            { role: 'user' as const, content: transcript },
+                            { role: 'assistant' as const, content: '' }
+                          ];
+                          // Set the index to the last message (the empty assistant message)
+                          currentAssistantIndexRef.current = newMessages.length - 1;
+                          return newMessages;
+                        });
                         assistantMessageRef.current = '';
                       }}
                       onAIResponseChunk={(chunk) => {
@@ -1537,11 +1543,17 @@ export default function Chat() {
                       }}
                       onTranscript={(transcript) => {
                         console.log('User spoke (final):', transcript);
-                        // Add user message when speech ends
-                        setMessages(prev => [...prev, { role: 'user', content: transcript }]);
-                        // Add empty assistant message for streaming
-                        setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
-                        currentAssistantIndexRef.current = messagesRef.current.length + 1;
+                        // Add user message and empty assistant message for streaming
+                        setMessages(prev => {
+                          const newMessages: Message[] = [
+                            ...prev,
+                            { role: 'user' as const, content: transcript },
+                            { role: 'assistant' as const, content: '' }
+                          ];
+                          // Set the index to the last message (the empty assistant message)
+                          currentAssistantIndexRef.current = newMessages.length - 1;
+                          return newMessages;
+                        });
                         assistantMessageRef.current = '';
                       }}
                       onAIResponseChunk={(chunk) => {

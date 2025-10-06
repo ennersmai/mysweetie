@@ -74,6 +74,7 @@ export default function VoiceCallButton({
   const animationFrameRef = useRef<number | null>(null);
   const shouldSendAudioRef = useRef<boolean>(true);
   const callStateRef = useRef<keyof CallState>('IDLE');
+  const isEndingCallRef = useRef<boolean>(false);
 
   // Check audio support on mount
   useEffect(() => {
@@ -427,6 +428,16 @@ export default function VoiceCallButton({
   const startCall = async () => {
     console.log('startCall called, audioSupported:', audioSupported);
     
+    if (isEndingCallRef.current) {
+      console.log('Cannot start call - currently ending a call');
+      return;
+    }
+    
+    if (isCallActive) {
+      console.log('Call already active, skipping start');
+      return;
+    }
+    
     if (!audioSupported) {
       onError?.('Audio not supported in this browser');
       return;
@@ -446,10 +457,19 @@ export default function VoiceCallButton({
   };
 
   const endCall = () => {
+    if (isEndingCallRef.current) {
+      console.log('Already ending call, skipping duplicate endCall');
+      return;
+    }
+    
+    isEndingCallRef.current = true;
+    console.log('Ending call...');
+    
     setIsCallActive(false);
     setCallState('IDLE');
     setCurrentTranscript('');
     shouldSendAudioRef.current = false;
+    
     // Stop playback immediately
     if (audioManagerRef.current) {
       audioManagerRef.current.stopPlayback();
@@ -466,7 +486,7 @@ export default function VoiceCallButton({
       audioManagerRef.current.cleanup();
       audioManagerRef.current = null;
     }
-
+    
     // End call on backend
     if (sessionIdRef.current) {
       apiClient.post(`/call/${sessionIdRef.current}/end`, {}).catch(console.error);
@@ -474,6 +494,12 @@ export default function VoiceCallButton({
     }
 
     setConnectionStatus('disconnected');
+    
+    // Reset the flag after a delay to allow for re-initialization
+    setTimeout(() => {
+      isEndingCallRef.current = false;
+      console.log('Call ended, ready for new call');
+    }, 500);
   };
 
   const getButtonScale = (): number => {
