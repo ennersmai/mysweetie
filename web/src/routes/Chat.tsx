@@ -242,35 +242,48 @@ export default function Chat() {
   // Speak a single sentence via HTTP PCM endpoint
   const speakPcm = useCallback(async (speaker: string, text: string) => {
     if (!text.trim()) return;
+    
+    // Prevent concurrent TTS requests
+    if (ttsStreamingRef.current) {
+      console.warn('TTS already streaming, skipping request');
+      return;
+    }
+    
     await ensureAudioContext();
     // Do not reset playhead here to ensure strict sequential playback across sentences
     const controller = new AbortController();
     ttsAbortRef.current = controller;
-    let res: Response;
+    ttsStreamingRef.current = true;
+    
     try {
-      res = await apiClient.streamAudio('/tts/pcm', {
-      text,
-      speaker,
-      modelId: 'arcana',
-      samplingRate: ttsSampleRateRef.current || 24000,
-      lang: 'eng',
-      }, controller.signal as any);
-    } catch (e) {
-      // aborted or failed
-      return;
-    }
-    if (!res.ok || !res.body) return;
-    const reader = res.body.getReader();
-    // Read streaming PCM chunks
-    while (true) {
-      let readResult;
-      try { readResult = await reader.read(); } catch { break; }
-      const { value, done } = readResult;
-      if (done) break;
-      if (value) {
-        const ab = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-        schedulePcmChunk(ab);
+      let res: Response;
+      try {
+        res = await apiClient.streamAudio('/tts/pcm', {
+        text,
+        speaker,
+        modelId: 'arcana',
+        samplingRate: ttsSampleRateRef.current || 24000,
+        lang: 'eng',
+        }, controller.signal as any);
+      } catch (e) {
+        // aborted or failed
+        return;
       }
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader();
+      // Read streaming PCM chunks
+      while (true) {
+        let readResult;
+        try { readResult = await reader.read(); } catch { break; }
+        const { value, done } = readResult;
+        if (done) break;
+        if (value) {
+          const ab = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+          schedulePcmChunk(ab);
+        }
+      }
+    } finally {
+      ttsStreamingRef.current = false;
     }
   }, []);
 
@@ -280,9 +293,7 @@ export default function Chat() {
     try {
       while (ttsQueueRef.current.length > 0) {
         const { speaker, text } = ttsQueueRef.current.shift()!;
-        ttsStreamingRef.current = true;
         await speakPcm(speaker, text);
-        ttsStreamingRef.current = false;
         if (stickToBottomRef.current) {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
@@ -300,6 +311,13 @@ export default function Chat() {
     if (!trimmed) return;
     // Prevent flooding the queue with tiny fragments during active streaming
     if (!force && ttsStreamingRef.current && trimmed.length < 40) return;
+    
+    // If already processing, just add to queue
+    if (ttsProcessingRef.current) {
+      ttsQueueRef.current.push({ speaker, text: trimmed });
+      return;
+    }
+    
     ttsQueueRef.current.push({ speaker, text: trimmed });
     processTtsQueue();
   }, [processTtsQueue]);
