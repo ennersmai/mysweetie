@@ -32,12 +32,14 @@ export interface VoiceCallButtonProps {
   conversationId?: string;
   onError?: (error: string) => void;
   onTranscript?: (transcript: string) => void;
+  onTranscriptUpdate?: (partialTranscript: string) => void; // Live STT updates
   onAIResponse?: (response: string) => void;
+  onAIResponseChunk?: (chunk: string) => void; // Streaming AI response
   disabled?: boolean;
 }
 
 export interface CallMessage {
-  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'tts_finished' | 'tts_stream_end';
+  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'ai_response_chunk' | 'tts_finished' | 'tts_stream_end';
   command?: string;
   text?: string;
   is_final?: boolean;
@@ -51,7 +53,9 @@ export default function VoiceCallButton({
   conversationId, 
   onError,
   onTranscript,
+  onTranscriptUpdate,
   onAIResponse,
+  onAIResponseChunk,
   disabled = false
 }: VoiceCallButtonProps) {
   const [isCallActive, setIsCallActive] = useState(false);
@@ -61,6 +65,7 @@ export default function VoiceCallButton({
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
   const [voiceLevel, setVoiceLevel] = useState(0); // 0-1 for animation
   const [currentTranscript, setCurrentTranscript] = useState('');
+  const [currentAIResponse, setCurrentAIResponse] = useState('');
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
 
   const audioManagerRef = useRef<ProductionAudioManager | null>(null);
@@ -166,10 +171,19 @@ export default function VoiceCallButton({
         case 'transcript_update':
           console.log('Transcript update received:', message.text, 'is_final:', message.is_final);
           if (message.text) {
+            // Send live updates to parent for input field
+            if (onTranscriptUpdate) {
+              onTranscriptUpdate(message.text);
+            }
             setCurrentTranscript(message.text);
-            // Send transcript to parent to add as chat message
+            // Send final transcript to parent to add as chat message
             if (message.is_final && onTranscript) {
               onTranscript(message.text);
+              setCurrentTranscript(''); // Clear after sending final
+              // Clear input field after final transcript
+              if (onTranscriptUpdate) {
+                onTranscriptUpdate('');
+              }
             }
           }
           break;
@@ -182,9 +196,31 @@ export default function VoiceCallButton({
           
         // Removed tts_finished case - we rely on tts_stream_end instead
           
+        case 'ai_response_chunk':
+          // Stream AI response chunks for real-time display in chat
+          console.log('Received AI response chunk:', message.text);
+          if (message.text) {
+            // Send chunks to parent for streaming in chat area
+            if (onAIResponseChunk) {
+              onAIResponseChunk(message.text);
+            }
+            setCurrentAIResponse(prev => {
+              const updated = prev + message.text;
+              console.log('Updated AI response display:', updated);
+              return updated;
+            });
+          }
+          break;
+
         case 'ai_response':
-          if (message.text && onAIResponse) {
-            onAIResponse(message.text);
+          // Final AI response - send to parent and clear streaming buffer
+          console.log('Received final AI response:', message.text);
+          if (message.text) {
+            if (onAIResponse) {
+              onAIResponse(message.text);
+            }
+            // Clear the tooltip response
+            setCurrentAIResponse('');
           }
           break;
           
@@ -302,6 +338,19 @@ export default function VoiceCallButton({
         }
       });
 
+      // Set up VAD callbacks for instant UI feedback
+      audioManagerRef.current.setSpeechCallbacks(
+        () => {
+          // Speech started - update UI immediately
+          console.log('[FRONTEND] VAD detected speech start - updating UI to USER_SPEAKING');
+          setCallState('USER_SPEAKING');
+        },
+        () => {
+          // Speech ended - don't update UI yet, wait for backend confirmation
+          console.log('[FRONTEND] VAD detected speech end - waiting for backend processing');
+        }
+      );
+
       // Establish WebSocket connection
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -412,6 +461,7 @@ export default function VoiceCallButton({
     setIsCallActive(false);
     setCallState('IDLE');
     setCurrentTranscript('');
+    setCurrentAIResponse('');
     shouldSendAudioRef.current = false;
     // Stop playback immediately
     if (audioManagerRef.current) {
@@ -474,7 +524,10 @@ export default function VoiceCallButton({
     }
   };
 
-  const handleButtonClick = () => {
+  const handleButtonClick = (e: React.MouseEvent) => {
+    e.preventDefault(); // Prevent form submission
+    e.stopPropagation(); // Stop event bubbling
+    
     if (!isCallActive) {
       startCall();
     } else if (callState === 'USER_SPEAKING') {
@@ -514,6 +567,7 @@ export default function VoiceCallButton({
       <button
         type="button"
         onClick={handleButtonClick}
+        onMouseDown={(e) => e.preventDefault()} // Prevent any default behavior
         disabled={disabled || connectionStatus === 'connecting' || micPermission === 'denied'}
         className={`w-10 h-10 rounded-full ${getButtonColor()} text-white flex items-center justify-center transition-all duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed shadow-lg`}
         title={getTooltipText()}
@@ -575,10 +629,19 @@ export default function VoiceCallButton({
         </>
       )}
 
-      {/* Live transcript tooltip */}
-      {currentTranscript && isCallActive && (
-        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-black/80 text-white text-xs rounded whitespace-nowrap max-w-xs truncate">
-          {currentTranscript}
+      {/* Live transcript/AI response tooltip */}
+      {(currentTranscript || currentAIResponse) && isCallActive && (
+        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-black/90 text-white text-xs rounded-lg max-w-md shadow-lg border border-white/20">
+          {currentTranscript && (
+            <div className="text-green-300 mb-1">
+              <span className="font-semibold">You: </span>{currentTranscript}
+            </div>
+          )}
+          {currentAIResponse && (
+            <div className="text-purple-300">
+              <span className="font-semibold">{character.name}: </span>{currentAIResponse}
+            </div>
+          )}
         </div>
       )}
 

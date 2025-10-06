@@ -1325,15 +1325,49 @@ export default function Chat() {
                         prompt: character.system_prompt || ''
                       }}
                       conversationId={currentConversationId || undefined}
+                      onTranscriptUpdate={(partialTranscript) => {
+                        // Update input field as user speaks
+                        setInput(partialTranscript);
+                      }}
                       onTranscript={(transcript) => {
-                        console.log('User spoke:', transcript);
-                        // Add user message to chat history
+                        console.log('User spoke (final):', transcript);
+                        // Add user message when speech ends
                         setMessages(prev => [...prev, { role: 'user', content: transcript }]);
+                        // Add empty assistant message for streaming
+                        setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+                        currentAssistantIndexRef.current = messagesRef.current.length + 1;
+                        assistantMessageRef.current = '';
+                      }}
+                      onAIResponseChunk={(chunk) => {
+                        // Stream AI response into chat
+                        assistantMessageRef.current += chunk;
+                        setMessages(prev => {
+                          const next = [...prev];
+                          const idx = currentAssistantIndexRef.current;
+                          if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
+                            next[idx] = { ...next[idx], content: assistantMessageRef.current };
+                          }
+                          return next;
+                        });
+                        // Auto-scroll during streaming
+                        setTimeout(() => {
+                          if (!stickToBottomRef.current) return;
+                          const el = messagesListRef.current;
+                          if (el) el.scrollTop = el.scrollHeight;
+                        }, 0);
                       }}
                       onAIResponse={(response) => {
-                        console.log('AI responded:', response);
-                        // Add AI response to chat history
-                        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+                        console.log('AI responded (final):', response);
+                        // Finalize the assistant message
+                        assistantMessageRef.current = response;
+                        setMessages(prev => {
+                          const next = [...prev];
+                          const idx = currentAssistantIndexRef.current;
+                          if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
+                            next[idx] = { ...next[idx], content: response };
+                          }
+                          return next;
+                        });
                       }}
                       onError={(error) => {
                         console.error('Voice call error:', error);
@@ -1497,15 +1531,49 @@ export default function Chat() {
                         prompt: character.system_prompt || ''
                       }}
                       conversationId={currentConversationId || undefined}
+                      onTranscriptUpdate={(partialTranscript) => {
+                        // Update input field as user speaks
+                        setInput(partialTranscript);
+                      }}
                       onTranscript={(transcript) => {
-                        console.log('User spoke:', transcript);
-                        // Add user message to chat history
+                        console.log('User spoke (final):', transcript);
+                        // Add user message when speech ends
                         setMessages(prev => [...prev, { role: 'user', content: transcript }]);
+                        // Add empty assistant message for streaming
+                        setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+                        currentAssistantIndexRef.current = messagesRef.current.length + 1;
+                        assistantMessageRef.current = '';
+                      }}
+                      onAIResponseChunk={(chunk) => {
+                        // Stream AI response into chat
+                        assistantMessageRef.current += chunk;
+                        setMessages(prev => {
+                          const next = [...prev];
+                          const idx = currentAssistantIndexRef.current;
+                          if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
+                            next[idx] = { ...next[idx], content: assistantMessageRef.current };
+                          }
+                          return next;
+                        });
+                        // Auto-scroll during streaming
+                        setTimeout(() => {
+                          if (!stickToBottomRef.current) return;
+                          const el = messagesListRef.current;
+                          if (el) el.scrollTop = el.scrollHeight;
+                        }, 0);
                       }}
                       onAIResponse={(response) => {
-                        console.log('AI responded:', response);
-                        // Add AI response to chat history
-                        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+                        console.log('AI responded (final):', response);
+                        // Finalize the assistant message
+                        assistantMessageRef.current = response;
+                        setMessages(prev => {
+                          const next = [...prev];
+                          const idx = currentAssistantIndexRef.current;
+                          if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
+                            next[idx] = { ...next[idx], content: response };
+                          }
+                          return next;
+                        });
                       }}
                       onError={(error) => {
                         console.error('Voice call error:', error);
