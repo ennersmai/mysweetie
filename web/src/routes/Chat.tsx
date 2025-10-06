@@ -450,19 +450,24 @@ export default function Chat() {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
         }
-        // Add small gap to avoid clicks between sentences
-        await new Promise(r => setTimeout(r, 80));
+        // Add punctuation-aware pause between sentences
+        const trimmed = (text || '').trim();
+        let pauseMs = 70;
+        if (/\.{3}$/.test(trimmed) || /…$/.test(trimmed)) pauseMs = 260; // ellipsis
+        else if (/[!?]$/.test(trimmed)) pauseMs = 180;
+        else if (/\.$/.test(trimmed)) pauseMs = 140;
+        else if (/[;,:]$/.test(trimmed)) pauseMs = 100;
+        await new Promise(r => setTimeout(r, pauseMs));
       }
     } finally {
       ttsProcessingRef.current = false;
     }
   }, [speakPcm]);
 
-  const enqueueTts = useCallback((speaker: string, text: string, force: boolean = false) => {
+  const enqueueTts = useCallback((speaker: string, text: string) => {
     const trimmed = cleanTtsText(text);
     if (!trimmed) return;
-    // Prevent flooding the queue with tiny fragments during active streaming
-    if (!force && ttsStreamingRef.current && trimmed.length < 40) return;
+    // Always queue; downstream queue processor will serialize playback
     
     console.log(`🎵 Enqueueing TTS: "${trimmed.substring(0, 50)}..." (processing: ${ttsProcessingRef.current}, streaming: ${ttsStreamingRef.current})`);
     
@@ -496,7 +501,7 @@ export default function Chat() {
       for (; i < parts.length - 1; i += 2) {
         assembled += parts[i] + (parts[i + 1] || '');
         const sentence = cleanTtsText(assembled);
-        if (sentence.length >= 6) enqueueTts((voiceKey || 'luna').toLowerCase(), sentence, true);
+        if (sentence.length >= 6) enqueueTts((voiceKey || 'luna').toLowerCase(), sentence);
         assembled = '';
       }
       // Whatever remains after processing full pairs stays in buffer
@@ -963,7 +968,7 @@ export default function Chat() {
               // Force enqueue to guarantee the last sentence is spoken
               // If very short, append a period to ensure audible end
               const finalText = remaining.length < 10 ? `${remaining}.` : remaining;
-              enqueueTts((voiceKey || 'luna').toLowerCase(), finalText, true);
+              enqueueTts((voiceKey || 'luna').toLowerCase(), finalText);
               ttsSentenceBufRef.current = '';
             }
           }
@@ -1048,7 +1053,7 @@ export default function Chat() {
                   }, 0);
                   if (voiceEnabled) {
                     // Enqueue full text if no chunks were processed
-                    enqueueTts((voiceKey || 'luna').toLowerCase(), finalText, true);
+                    enqueueTts((voiceKey || 'luna').toLowerCase(), finalText);
                   }
                 }
               }
