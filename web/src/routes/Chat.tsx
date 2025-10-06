@@ -1327,6 +1327,7 @@ export default function Chat() {
                       conversationId={currentConversationId || undefined}
                       onTranscriptUpdate={(partialTranscript) => {
                         // Update input field as user speaks
+                        console.log('Updating input field with transcript:', partialTranscript);
                         setInput(partialTranscript);
                       }}
                       onTranscript={(transcript) => {
@@ -1536,6 +1537,7 @@ export default function Chat() {
                       conversationId={currentConversationId || undefined}
                       onTranscriptUpdate={(partialTranscript) => {
                         // Update input field as user speaks
+                        console.log('Updating input field with transcript:', partialTranscript);
                         setInput(partialTranscript);
                       }}
                       onTranscript={(transcript) => {

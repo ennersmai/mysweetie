@@ -408,7 +408,12 @@ export default function VoiceCallButton({
         ws.onclose = (event) => {
           console.log('WebSocket closed:', event.code, event.reason);
           setConnectionStatus('disconnected');
-          setIsCallActive(false);
+          
+          // Only set inactive if we're not in the middle of ending the call
+          if (!isEndingCallRef.current) {
+            setIsCallActive(false);
+            setCallState('IDLE');
+          }
           
           if (audioManagerRef.current) {
             audioManagerRef.current.cleanup();
