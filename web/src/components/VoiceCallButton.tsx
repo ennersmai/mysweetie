@@ -558,6 +558,9 @@ export default function VoiceCallButton({
     } else if (callState === 'AI_SPEAKING') {
       // Allow interruption by clicking
       console.log('Manually interrupting AI speech');
+      if (audioManagerRef.current) {
+        audioManagerRef.current.stopPlayback();
+      }
       if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
         websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
       }

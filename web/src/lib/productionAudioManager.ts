@@ -27,7 +27,7 @@ export class ProductionAudioManager {
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
   private readonly vadThresholdRms = 0.008; // Less sensitive - raised to reduce noise
-  private readonly vadHangoverMs = 2000; // Longer hangover to avoid cutting words
+  private readonly vadHangoverMs = 3000; // Longer hangover to avoid cutting words
 
   async initialize(): Promise<boolean> {
     try {
@@ -110,6 +110,11 @@ export class ProductionAudioManager {
                   this.isInterrupted = true;
                   this.stopPlayback();
                   this.micMuted = false; // Unmute mic for user speech
+                  
+                  // Notify backend about interruption
+                  if (this.onPlaybackComplete) {
+                    this.onPlaybackComplete();
+                  }
                 }
                 
                 // Notify UI for visual feedback
