@@ -1331,14 +1331,11 @@ export default function Chat() {
                       }}
                       onTranscript={(transcript) => {
                         console.log('User spoke (final):', transcript);
-                        // Add user message and empty assistant message for streaming
+                        // Add user message to chat
+                        setMessages(prev => [...prev, { role: 'user' as const, content: transcript }]);
+                        // Add empty assistant message for streaming
                         setMessages(prev => {
-                          const newMessages: Message[] = [
-                            ...prev,
-                            { role: 'user' as const, content: transcript },
-                            { role: 'assistant' as const, content: '' }
-                          ];
-                          // Set the index to the last message (the empty assistant message)
+                          const newMessages = [...prev, { role: 'assistant' as const, content: '' }];
                           currentAssistantIndexRef.current = newMessages.length - 1;
                           return newMessages;
                         });
@@ -1543,14 +1540,11 @@ export default function Chat() {
                       }}
                       onTranscript={(transcript) => {
                         console.log('User spoke (final):', transcript);
-                        // Add user message and empty assistant message for streaming
+                        // Add user message to chat
+                        setMessages(prev => [...prev, { role: 'user' as const, content: transcript }]);
+                        // Add empty assistant message for streaming
                         setMessages(prev => {
-                          const newMessages: Message[] = [
-                            ...prev,
-                            { role: 'user' as const, content: transcript },
-                            { role: 'assistant' as const, content: '' }
-                          ];
-                          // Set the index to the last message (the empty assistant message)
+                          const newMessages = [...prev, { role: 'assistant' as const, content: '' }];
                           currentAssistantIndexRef.current = newMessages.length - 1;
                           return newMessages;
                         });

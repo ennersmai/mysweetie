@@ -19,6 +19,7 @@ export class ProductionAudioManager {
   private recordingStream: MediaStream | null = null;
   private readonly micBoostFactor = 4.0; // Increased from 2.5 for better pickup
   private micMuted = false; // Track if mic should be muted during TTS playback
+  private isInterrupted = false; // Track if TTS was interrupted by user speech
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -102,6 +103,15 @@ export class ProductionAudioManager {
                 this.vadSpeaking = true;
                 // eslint-disable-next-line no-console
                 console.log(`VAD: speaking detected (rms=${rms.toFixed(3)})`);
+                
+                // If user starts speaking during TTS, interrupt it
+                if (this.micMuted && this.isPlaying) {
+                  console.log('User interrupted TTS - stopping playback');
+                  this.isInterrupted = true;
+                  this.stopPlayback();
+                  this.micMuted = false; // Unmute mic for user speech
+                }
+                
                 // Notify UI for visual feedback
                 if (this.onSpeechStart) {
                   this.onSpeechStart();
@@ -201,7 +211,8 @@ export class ProductionAudioManager {
       return;
     }
     
-    // Mute mic during TTS playback to prevent echo
+    // Reset interruption flag and mute mic during TTS playback
+    this.isInterrupted = false;
     this.micMuted = true;
 
     try {
@@ -350,10 +361,15 @@ export class ProductionAudioManager {
       // Notify playback complete after a longer delay to ensure all audio has actually finished
       // This prevents the system from listening again while audio artifacts are still playing
         setTimeout(() => {
-          console.log(`ProductionAudioManager: Timeout callback executing - hasCallback: ${!!this.onPlaybackComplete}, isPlaying: ${this.isPlaying}`);
-          // Unmute mic now that TTS is complete
-          this.micMuted = false;
-          console.log('ProductionAudioManager: Mic unmuted, ready to listen');
+          console.log(`ProductionAudioManager: Timeout callback executing - hasCallback: ${!!this.onPlaybackComplete}, isPlaying: ${this.isPlaying}, interrupted: ${this.isInterrupted}`);
+          
+          // Only unmute mic if not interrupted (user didn't speak over TTS)
+          if (!this.isInterrupted) {
+            this.micMuted = false;
+            console.log('ProductionAudioManager: Mic unmuted, ready to listen');
+          } else {
+            console.log('ProductionAudioManager: TTS was interrupted by user speech - keeping mic active');
+          }
           
           if (this.onPlaybackComplete && !this.isPlaying) {
             console.log('ProductionAudioManager: 🔔 CALLING PLAYBACK COMPLETE CALLBACK');
