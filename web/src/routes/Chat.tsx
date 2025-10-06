@@ -151,6 +151,10 @@ export default function Chat() {
   const ttsStreamingRef = useRef<boolean>(false);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const ttsSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  // Accumulator to create larger, click-free PCM buffers
+  const ttsPcmAccumRef = useRef<number[]>([]);
+  const PCM_MIN_SAMPLES = 2400; // ~100ms at 24kHz
+  const PCM_FADE_SAMPLES = 96;  // ~4ms fade-in/out to avoid clicks at boundaries
 
   const cleanTtsText = (s: string) => {
     // Remove asterisk emphasis and any html tags, collapse whitespace
@@ -182,28 +186,33 @@ export default function Chat() {
   };
 
 
-  const schedulePcmChunk = (arrayBuffer: ArrayBuffer) => {
+  // Flush accumulated PCM into a single buffer with small fades at the edges
+  const flushAccumulatedPcm = (force: boolean = false) => {
     const audioCtx = audioCtxRef.current;
     if (!audioCtx) return;
-    
-    // Ensure buffer length is a multiple of 2 for Int16Array
-    const byteLength = arrayBuffer.byteLength;
-    const alignedLength = byteLength - (byteLength % 2);
-    
-    if (alignedLength === 0) {
-      console.warn('PCM chunk too small or misaligned, skipping');
-      return;
+    const acc = ttsPcmAccumRef.current;
+    if (!acc || acc.length === 0) return;
+    if (!force && acc.length < PCM_MIN_SAMPLES) return;
+
+    // Take at least PCM_MIN_SAMPLES, leave the rest for next flush
+    const take = force ? acc.length : Math.max(PCM_MIN_SAMPLES, Math.floor(acc.length / PCM_MIN_SAMPLES) * PCM_MIN_SAMPLES);
+    const chunk = acc.splice(0, take);
+
+    if (chunk.length === 0) return;
+
+    // Apply tiny fade-in/out to avoid clicks at boundaries
+    const n = chunk.length;
+    const fade = Math.min(PCM_FADE_SAMPLES, Math.floor(n / 8));
+    if (fade > 0) {
+      for (let i = 0; i < fade; i++) {
+        const gainIn = i / fade;
+        const gainOut = (fade - i) / fade;
+        chunk[i] *= gainIn;
+        chunk[n - 1 - i] *= gainOut;
+      }
     }
-    
-    const alignedBuffer = alignedLength === byteLength 
-      ? arrayBuffer 
-      : arrayBuffer.slice(0, alignedLength);
-    
-    const samples = new Int16Array(alignedBuffer);
-    const float = new Float32Array(samples.length);
-    for (let i = 0; i < samples.length; i++) float[i] = samples[i] / 32768;
-    
-    // Create buffer at TTS sample rate (24000 Hz) - AudioContext will resample automatically
+
+    const float = new Float32Array(chunk);
     const audioBuffer = audioCtx.createBuffer(1, float.length, 24000);
     audioBuffer.getChannelData(0).set(float);
 
@@ -211,23 +220,47 @@ export default function Chat() {
     source.buffer = audioBuffer;
     source.connect(audioCtx.destination);
 
-    const startAt = Math.max(audioCtx.currentTime + 0.05, ttsPlayheadRef.current);
+    const startAt = Math.max(audioCtx.currentTime + 0.02, ttsPlayheadRef.current);
     source.start(startAt);
     ttsSourcesRef.current.push(source);
     ttsPlayheadRef.current = startAt + audioBuffer.duration;
 
     source.onended = () => {
-      // When we reach the end of the last scheduled chunk, clear playing UI
       const remaining = ttsPlayheadRef.current - audioCtx.currentTime;
-      if (remaining <= 0.05) {
+      if (remaining <= 0.03) {
         setPlayingIndex(null);
-        // Set streaming to false when all audio for this sentence is done
         ttsStreamingRef.current = false;
         console.log('🎵 TTS audio finished, streaming set to false');
       }
-      // Remove from active sources list
       ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
     };
+  };
+
+  const schedulePcmChunk = (arrayBuffer: ArrayBuffer) => {
+    const audioCtx = audioCtxRef.current;
+    if (!audioCtx) return;
+
+    // Ensure buffer length is a multiple of 2 for Int16Array
+    const byteLength = arrayBuffer.byteLength;
+    const alignedLength = byteLength - (byteLength % 2);
+
+    if (alignedLength === 0) {
+      // Too small or misaligned; skip
+      return;
+    }
+
+    const alignedBuffer = alignedLength === byteLength
+      ? arrayBuffer
+      : arrayBuffer.slice(0, alignedLength);
+
+    const samples = new Int16Array(alignedBuffer);
+    // Append to accumulator as float32
+    for (let i = 0; i < samples.length; i++) {
+      ttsPcmAccumRef.current.push(samples[i] / 32768);
+    }
+
+    // Flush in ~100ms blocks to reduce boundary clicks
+    flushAccumulatedPcm(false);
   };
 
   const stopTtsNow = useCallback(() => {
@@ -251,6 +284,8 @@ export default function Chat() {
     ttsStreamingRef.current = false;
     ttsProcessingRef.current = false;
     setPlayingIndex(null);
+    // Clear any accumulated PCM to avoid tail artifacts
+    ttsPcmAccumRef.current = [];
   }, []);
 
   // Speak a single sentence via HTTP PCM endpoint
@@ -277,6 +312,8 @@ export default function Chat() {
     const controller = new AbortController();
     ttsAbortRef.current = controller;
     ttsStreamingRef.current = true;
+    // Reset PCM accumulator for a fresh stream
+    ttsPcmAccumRef.current = [];
     
     try {
       let res: Response;
@@ -305,6 +342,8 @@ export default function Chat() {
           schedulePcmChunk(ab);
         }
       }
+      // Ensure any remaining accumulated samples are played
+      flushAccumulatedPcm(true);
     } finally {
       // Don't set ttsStreamingRef.current = false here
       // It will be set to false when audio actually finishes playing
