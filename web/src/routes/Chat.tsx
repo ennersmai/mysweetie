@@ -448,7 +448,7 @@ export default function Chat() {
     }
     
     const reqId = ++ttsRequestSeqRef.current;
-    console.log(`🎤 Starting TTS[#${reqId}]: "${text.substring(0, 50)}..."`);
+    console.log(`🎤 Starting TTS[#${reqId}] with voice "${speaker}": "${text.substring(0, 50)}..."`);
     
     // Stop any existing audio sources before starting new TTS
     ttsSourcesRef.current.forEach((s) => {

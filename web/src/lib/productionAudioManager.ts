@@ -5,7 +5,8 @@
  */
 
 export class ProductionAudioManager {
-  private audioContext: AudioContext | null = null;
+  private recordingContext: AudioContext | null = null; // For VAD analysis (native sample rate)
+  private playbackContext: AudioContext | null = null; // For TTS playback (24kHz)
   private mediaStream: MediaStream | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private audioQueue: AudioBuffer[] = [];
@@ -28,16 +29,13 @@ export class ProductionAudioManager {
   private vadLastAboveThreshold = 0;
   private baseVadThreshold = 0.01; // Base threshold for normal operation
   private currentVadThreshold = 0.01; // Dynamic threshold that increases during TTS
-  private readonly vadHangoverMs = 1500; // Reduced for faster response
+  private readonly vadHangoverMs = 800; // Reduced for much faster response
   private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
-  private readonly vadMinFrames = 3; // Reduced for faster response
+  private readonly vadMinFrames = 2; // Reduced from 3 for faster response
   private recentRmsValues: number[] = []; // Track recent RMS values for adaptive threshold
 
   async initialize(): Promise<boolean> {
     try {
-      // Initialize audio context
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      
       // Initialize VAD state
       this.isPlayingTTS = false;
       console.log('ProductionAudioManager: Initializing audio system');
@@ -52,18 +50,26 @@ export class ProductionAudioManager {
         }
       });
 
+      // Create recording context at browser's native sample rate (usually 48kHz)
+      this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
+      
+      // Create separate playback context at 24kHz for TTS
+      this.playbackContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      console.log('ProductionAudioManager: Playback context created at', this.playbackContext.sampleRate, 'Hz');
+
       // Set up mic gain, analyser, and recording destination for VAD + boosted recording
       try {
-        if (this.audioContext) {
-          const rawSource = this.audioContext.createMediaStreamSource(this.mediaStream);
-          this.micGainNode = this.audioContext.createGain();
+        if (this.recordingContext) {
+          const rawSource = this.recordingContext.createMediaStreamSource(this.mediaStream);
+          this.micGainNode = this.recordingContext.createGain();
           this.micGainNode.gain.value = this.micBoostFactor;
 
-          this.analyserNode = this.audioContext.createAnalyser();
+          this.analyserNode = this.recordingContext.createAnalyser();
           this.analyserNode.fftSize = 1024;
           this.analyserNode.smoothingTimeConstant = 0.6;
 
-          const destination = this.audioContext.createMediaStreamDestination();
+          const destination = this.recordingContext.createMediaStreamDestination();
 
           rawSource.connect(this.micGainNode);
           this.micGainNode.connect(this.analyserNode);
@@ -193,8 +199,8 @@ export class ProductionAudioManager {
 
     // Start recording with smaller chunks for better STT accuracy
     try {
-      this.mediaRecorder.start(100); // Reduced from 250ms to 100ms for better STT accuracy
-      console.log('MediaRecorder started with 100ms timeslice - continuous audio streaming enabled');
+      this.mediaRecorder.start(50); // Reduced to 50ms for faster transmission
+      console.log('MediaRecorder started with 50ms timeslice - continuous audio streaming enabled');
     } catch (err) {
       console.error('Failed to start MediaRecorder:', err);
       return false;
@@ -215,8 +221,8 @@ export class ProductionAudioManager {
    * Play audio data (handles both PCM and encoded formats)
    */
   async playAudio(audioData: ArrayBuffer): Promise<void> {
-    if (!this.audioContext) {
-      console.error('Audio context not initialized');
+    if (!this.playbackContext) {
+      console.error('Playback context not initialized');
       return;
     }
     
@@ -232,7 +238,7 @@ export class ProductionAudioManager {
       } else {
         console.log(`ProductionAudioManager: Decoding encoded audio ${audioData.byteLength} bytes`);
         // Try to decode as encoded audio
-        const audioBuffer = await this.audioContext.decodeAudioData(audioData.slice(0));
+        const audioBuffer = await this.playbackContext.decodeAudioData(audioData.slice(0));
         console.log(`ProductionAudioManager: Decoded audio buffer ${audioBuffer.duration.toFixed(2)}s`);
         this.audioQueue.push(audioBuffer);
         
@@ -249,13 +255,13 @@ export class ProductionAudioManager {
   // PCM accumulation for smooth playback
   private pcmAccumulator: Int16Array[] = [];
   private pcmAccumulatorTimer: number | null = null;
-  private readonly PCM_ACCUMULATION_TIME = 800; // ms - accumulate for 800ms chunks for very smooth audio
+  private readonly PCM_ACCUMULATION_TIME = 200; // ms - reduced for faster TTS response
 
   /**
    * Accumulate PCM chunks for smoother playback
    */
   private playPCMChunkImmediately(audioData: ArrayBuffer): void {
-    if (!this.audioContext) return;
+    if (!this.playbackContext) return;
     
     try {
       const samples = new Int16Array(audioData);
@@ -273,11 +279,11 @@ export class ProductionAudioManager {
         this.flushPCMAccumulator();
       }, this.PCM_ACCUMULATION_TIME);
       
-      // If accumulator gets too large (>1200ms worth), flush immediately
+      // If accumulator gets too large (>400ms worth), flush immediately
       const totalSamples = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
       const durationMs = (totalSamples / 24000) * 1000;
       
-      if (durationMs > 1200) { // More than 1200ms accumulated
+      if (durationMs > 400) { // More than 400ms accumulated - flush for faster response
         if (this.pcmAccumulatorTimer) {
           clearTimeout(this.pcmAccumulatorTimer);
           this.pcmAccumulatorTimer = null;
@@ -294,7 +300,7 @@ export class ProductionAudioManager {
    * Flush accumulated PCM data into a single smooth audio buffer
    */
   private flushPCMAccumulator(): void {
-    if (this.pcmAccumulator.length === 0 || !this.audioContext) return;
+    if (this.pcmAccumulator.length === 0 || !this.playbackContext) return;
     
     try {
       // Combine all accumulated chunks
@@ -308,7 +314,7 @@ export class ProductionAudioManager {
       }
       
       // Create single smooth audio buffer
-      const audioBuffer = this.audioContext.createBuffer(1, combinedSamples.length, 24000);
+      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 24000);
       const channelData = audioBuffer.getChannelData(0);
       
       for (let i = 0; i < combinedSamples.length; i++) {
@@ -388,7 +394,7 @@ export class ProductionAudioManager {
             isPlaying: this.isPlaying
           });
         }
-      }, 200); // Reduced delay for faster response
+      }, 100); // Reduced from 200ms for faster response
       return;
     }
 
@@ -397,16 +403,16 @@ export class ProductionAudioManager {
     
     console.log(`ProductionAudioManager: Playing audio buffer ${audioBuffer.duration.toFixed(3)}s (${this.audioQueue.length} remaining)`);
     
-    if (this.audioContext) {
-      this.currentSource = this.audioContext.createBufferSource();
+    if (this.playbackContext) {
+      this.currentSource = this.playbackContext.createBufferSource();
       this.currentSource.buffer = audioBuffer;
       
       // Add gain for better volume
-      const gainNode = this.audioContext.createGain();
+      const gainNode = this.playbackContext.createGain();
       gainNode.gain.value = 1.5;
       
       this.currentSource.connect(gainNode);
-      gainNode.connect(this.audioContext.destination);
+      gainNode.connect(this.playbackContext.destination);
       
       this.currentSource.onended = () => {
         console.log(`ProductionAudioManager: Audio buffer finished playing`);
@@ -478,9 +484,15 @@ export class ProductionAudioManager {
       this.mediaStream = null;
     }
 
-    if (this.audioContext && this.audioContext.state !== 'closed') {
-      this.audioContext.close();
-      this.audioContext = null;
+    // Close both audio contexts
+    if (this.recordingContext && this.recordingContext.state !== 'closed') {
+      this.recordingContext.close();
+      this.recordingContext = null;
+    }
+
+    if (this.playbackContext && this.playbackContext.state !== 'closed') {
+      this.playbackContext.close();
+      this.playbackContext = null;
     }
 
     this.mediaRecorder = null;
