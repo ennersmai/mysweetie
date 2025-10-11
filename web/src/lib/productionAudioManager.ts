@@ -200,6 +200,61 @@ export class ProductionAudioManager {
                         }
                       };
                       
+                      this.secondaryRecorder.onstop = () => {
+                        console.log(`🛑 [SECONDARY] Stopped - promoting to primary`);
+                        
+                        // Trigger speech end callback
+                        if (this.currentAudioChunks.length > 0 && this.onSpeechEnd) {
+                          console.log(`🎤 [SECONDARY] Complete (${this.currentAudioChunks.length} chunks), calling onSpeechEnd`);
+                          this.onSpeechEnd();
+                        }
+                        
+                        // Create fresh primary for next utterance
+                        const stream = this.recordingStream || this.mediaStream;
+                        if (stream) {
+                          this.mediaRecorder = new MediaRecorder(stream, {
+                            mimeType: this.recordedMimeType,
+                            audioBitsPerSecond: 128000
+                          });
+                          
+                          // Setup primary handlers (copy from initial setup)
+                          this.mediaRecorder.ondataavailable = (ev: BlobEvent) => {
+                            if (ev.data && ev.data.size > 0) {
+                              if (this.isInterruptRestart) {
+                                console.log(`🗑️ Discarding: ${ev.data.size} bytes`);
+                                return;
+                              }
+                              if (!this.rawAudioMode) {
+                                this.currentAudioChunks.push(ev.data);
+                                console.log(`📦 Received: ${ev.data.size} bytes`);
+                              }
+                            }
+                          };
+                          
+                          this.mediaRecorder.onstop = () => {
+                            if (this.isInterruptRestart) {
+                              this.isInterruptRestart = false;
+                              return;
+                            }
+                            if (!this.isSendingAudio && this.currentAudioChunks.length > 0 && this.onSpeechEnd) {
+                              this.onSpeechEnd();
+                            }
+                            setTimeout(() => {
+                              if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+                                this.mediaRecorder.start();
+                              }
+                            }, 10);
+                          };
+                          
+                          this.mediaRecorder.start();
+                          console.log('✅ [PRIMARY] Recreated after secondary - ready for next');
+                        }
+                        
+                        // Cleanup secondary
+                        this.secondaryRecorder = null;
+                        this.isUsingSecondary = false;
+                      };
+                      
                       this.secondaryRecorder.start(); // Start NOW - captures first word!
                       this.isUsingSecondary = true;
                       console.log('⚡ SECONDARY started - capturing first word');
@@ -259,13 +314,18 @@ export class ProductionAudioManager {
                 this.manuallyStoppedPlayback = false;
                 console.log('🔓 Reset manuallyStoppedPlayback - ready for next AI response');
                 
-                // Stop MediaRecorder to finalize
-                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                  console.log(`📦 Stopping MediaRecorder to finalize complete utterance`);
+                // Stop the ACTIVE recorder to finalize
+                // Check secondary first (used during interrupts), then primary
+                if (this.isUsingSecondary && this.secondaryRecorder && this.secondaryRecorder.state === 'recording') {
+                  console.log(`📦 Stopping SECONDARY recorder (has full speech including first word)`);
+                  this.secondaryRecorder.stop();
+                  // The secondary's onstop was set up in the speech detection section above
+                } else if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                  console.log(`📦 Stopping PRIMARY MediaRecorder to finalize complete utterance`);
                   this.mediaRecorder.stop();
                   // The onstop handler will trigger onSpeechEnd and restart for next utterance
                 } else {
-                  console.log(`⚠️ MediaRecorder not recording, cannot finalize`);
+                  console.log(`⚠️ No MediaRecorder recording, cannot finalize`);
                 }
               }
             }
