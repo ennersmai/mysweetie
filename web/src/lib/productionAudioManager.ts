@@ -146,7 +146,7 @@ export class ProductionAudioManager {
               // During TTS: 10x normal threshold (balanced with 3x mic boost)
               // Threshold: 0.10 with 3x mic boost = natural speaking volume to interrupt
               // AGC off prevents TTS echo amplification
-              this.currentVadThreshold = this.baseVadThreshold * 2;
+              this.currentVadThreshold = this.baseVadThreshold * 1;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
