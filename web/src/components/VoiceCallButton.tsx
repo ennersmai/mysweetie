@@ -387,8 +387,11 @@ export default function VoiceCallButton({
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
             // If AI is speaking, this is an interruption
             if (callStateRef.current === 'AI_SPEAKING') {
-              console.log('🛑 [FRONTEND] User interrupting AI speech - sending interrupt');
+              console.log('🛑 [FRONTEND] User interrupting AI speech - sending interrupt + user_speech_started');
               websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
+              // CRITICAL: Also send user_speech_started so backend transitions to USER_SPEAKING
+              // This allows the backend to receive our audio blob when we finish speaking
+              websocketRef.current.send(JSON.stringify({ type: 'user_speech_started' }));
             } else {
               // Normal speech start - send user_speech_started message
               console.log('🎤 [FRONTEND] Sending user_speech_started message to backend');
