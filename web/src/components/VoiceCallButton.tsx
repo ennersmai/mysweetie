@@ -685,7 +685,12 @@ export default function VoiceCallButton({
         type="button"
         onClick={handleButtonClick}
         onMouseDown={(e) => e.preventDefault()} // Prevent any default behavior
-        disabled={disabled || connectionStatus === 'connecting' || micPermission === 'denied'}
+        disabled={
+          // During an active call, NEVER disable the button (user must be able to hang up)
+          isCallActive 
+            ? false 
+            : (disabled || connectionStatus === 'connecting' || micPermission === 'denied')
+        }
         className={`w-10 h-10 rounded-full ${getButtonColor()} text-white flex items-center justify-center transition-all duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed shadow-lg`}
         title={getTooltipText()}
         style={{

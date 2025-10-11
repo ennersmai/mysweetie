@@ -26,6 +26,7 @@ export class ProductionAudioManager {
   private manuallyStoppedPlayback = false; // Track if playback was manually stopped (to prevent onended from firing)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
+  private isIgnoringNextChunk = false; // Flag to ignore stale audio data after interrupt
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -201,6 +202,7 @@ export class ProductionAudioManager {
                   // We need a fresh recording starting NOW
                   if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
                     console.log('🔄 Restarting MediaRecorder to clear TTS audio from internal buffer');
+                    this.isIgnoringNextChunk = true; // Mark to ignore the stale ondataavailable
                     this.mediaRecorder.stop();
                     // Will be restarted in onstop handler
                   }
@@ -308,6 +310,13 @@ export class ProductionAudioManager {
     // CLIENT-SIDE ASSEMBLY: Buffer complete audio file (with pre-roll)
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
+        // Check if we should ignore this chunk (stale data from before interrupt)
+        if (this.isIgnoringNextChunk) {
+          console.log(`🗑️ Ignoring stale audio chunk (${event.data.size} bytes) - contains TTS audio before interrupt`);
+          this.isIgnoringNextChunk = false; // Reset flag
+          return; // Skip this chunk entirely
+        }
+        
         // RAW AUDIO MODE: Send chunks unconditionally for testing
         if (this.rawAudioMode && this.onAudioData) {
           if (Math.random() < 0.05) {
@@ -714,6 +723,7 @@ export class ProductionAudioManager {
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
+    this.isIgnoringNextChunk = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
