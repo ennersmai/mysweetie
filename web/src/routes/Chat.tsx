@@ -1625,22 +1625,18 @@ export default function Chat() {
                         console.log('User spoke (final):', transcript);
                         // Add user message to chat
                         setMessages(prev => [...prev, { role: 'user' as const, content: transcript }]);
-                        // Add assistant message with loading indicator
+                        // Add assistant message with loading indicator (empty triggers BouncingLoader)
                         setMessages(prev => {
-                          const newMessages = [...prev, { role: 'assistant' as const, content: '...' }];
+                          const newMessages = [...prev, { role: 'assistant' as const, content: '' }];
                           currentAssistantIndexRef.current = newMessages.length - 1;
                           return newMessages;
                         });
                         assistantMessageRef.current = '';
+                        setStreaming(true); // Enable streaming state for BouncingLoader
                       }}
                       onAIResponseChunk={(chunk) => {
-                        // Stream AI response into chat (replace "..." with actual content on first chunk)
-                        if (assistantMessageRef.current === '') {
-                          // First chunk - replace the "..." loading indicator
-                          assistantMessageRef.current = chunk;
-                        } else {
-                          assistantMessageRef.current += chunk;
-                        }
+                        // Stream AI response into chat
+                        assistantMessageRef.current += chunk;
                         setMessages(prev => {
                           const next = [...prev];
                           const idx = currentAssistantIndexRef.current;
@@ -1668,6 +1664,7 @@ export default function Chat() {
                           }
                           return next;
                         });
+                        setStreaming(false); // Disable streaming state
                       }}
                       onError={(error) => {
                         console.error('Voice call error:', error);
@@ -1840,22 +1837,18 @@ export default function Chat() {
                         console.log('User spoke (final):', transcript);
                         // Add user message to chat
                         setMessages(prev => [...prev, { role: 'user' as const, content: transcript }]);
-                        // Add assistant message with loading indicator
+                        // Add assistant message with loading indicator (empty triggers BouncingLoader)
                         setMessages(prev => {
-                          const newMessages = [...prev, { role: 'assistant' as const, content: '...' }];
+                          const newMessages = [...prev, { role: 'assistant' as const, content: '' }];
                           currentAssistantIndexRef.current = newMessages.length - 1;
                           return newMessages;
                         });
                         assistantMessageRef.current = '';
+                        setStreaming(true); // Enable streaming state for BouncingLoader
                       }}
                       onAIResponseChunk={(chunk) => {
-                        // Stream AI response into chat (replace "..." with actual content on first chunk)
-                        if (assistantMessageRef.current === '') {
-                          // First chunk - replace the "..." loading indicator
-                          assistantMessageRef.current = chunk;
-                        } else {
-                          assistantMessageRef.current += chunk;
-                        }
+                        // Stream AI response into chat
+                        assistantMessageRef.current += chunk;
                         setMessages(prev => {
                           const next = [...prev];
                           const idx = currentAssistantIndexRef.current;
@@ -1883,6 +1876,7 @@ export default function Chat() {
                           }
                           return next;
                         });
+                        setStreaming(false); // Disable streaming state
                       }}
                       onError={(error) => {
                         console.error('Voice call error:', error);
