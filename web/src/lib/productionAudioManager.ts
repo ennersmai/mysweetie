@@ -19,7 +19,7 @@ export class ProductionAudioManager {
   private onInterrupt: (() => void) | null = null; // Callback for interruption
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
-  private readonly micBoostFactor = 5; // VERY high boost - drowns out TTS echo completely
+  private readonly micBoostFactor = 5.0; // High boost for VAD detection (AGC disabled)
   private isPlayingTTS = false; // Track if TTS is currently playing
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
@@ -37,7 +37,7 @@ export class ProductionAudioManager {
   private currentVadThreshold = 0.01; // Dynamic threshold that increases during TTS
   private readonly vadHangoverMs = 800; // Reduced for much faster response
   private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
-  private readonly vadMinFrames = 1; // Instant response - fire on first frame above threshold
+  private readonly vadMinFrames = 2; // 2 frames = 40ms (balanced speed vs stability)
   private recentRmsValues: number[] = []; // Track recent RMS values for debugging
 
   async initialize(rawAudioMode: boolean = false): Promise<boolean> {
@@ -180,9 +180,9 @@ export class ProductionAudioManager {
                 this.currentAudioChunks = [];
                 
                 if (isInterrupt) {
-                  console.log('🎤 Interrupt detected - restarting to exclude TTS (1-frame VAD = faster trigger = less loss)');
+                  console.log('🎤 Interrupt detected - restarting to exclude TTS (4-frame VAD = 80ms delay)');
                   // Restart MediaRecorder to exclude TTS
-                  // With 1-frame VAD, we only lose ~20-40ms instead of 80-100ms
+                  // Loses ~80-100ms of first word, but ensures clean transcript
                   if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
                     this.isInterruptRestart = true;
                     this.mediaRecorder.stop();
@@ -231,6 +231,10 @@ export class ProductionAudioManager {
                 
                 // CLIENT-SIDE ASSEMBLY: Stop the active recorder
                 this.isSendingAudio = false;
+                
+                // Reset manual stop flag - user has finished speaking, ready for next AI response
+                this.manuallyStoppedPlayback = false;
+                console.log('🔓 Reset manuallyStoppedPlayback - ready for next AI response');
                 
                 // Stop MediaRecorder to finalize
                 if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
@@ -396,13 +400,19 @@ export class ProductionAudioManager {
       return;
     }
     
+    // CRITICAL: If playback was manually stopped (user interrupted), reject ALL new audio
+    // Backend might still be streaming, but we must ignore it
+    if (this.manuallyStoppedPlayback) {
+      console.log('🛑 Rejecting audio - playback was manually stopped by user interrupt');
+      return;
+    }
+    
     // Set TTS playing state ONLY if not already playing
     // This prevents resetting the flag when multiple sentences are streaming
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
-      // Reset manual stop flag for new session
-      this.manuallyStoppedPlayback = false;
+      // Do NOT reset manuallyStoppedPlayback here - it should only be reset when starting a NEW TTS session
     }
 
     try {
