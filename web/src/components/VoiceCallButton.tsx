@@ -653,24 +653,9 @@ export default function VoiceCallButton({
     
     if (!isCallActive) {
       startCall();
-    } else if (callState === 'USER_SPEAKING') {
-      // Manual trigger to end speech if VAD doesn't detect it
-      console.log('Manually ending speech detection');
-      // Send a message to backend to force transition to AI_PROCESSING
-      if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
-        websocketRef.current.send(JSON.stringify({ type: 'force_end_speech' }));
-      }
-    } else if (callState === 'AI_SPEAKING') {
-      // Allow interruption by clicking
-      console.log('🛑 Manually interrupting AI speech via button click');
-      if (audioManagerRef.current) {
-        audioManagerRef.current.stopPlayback();
-      }
-      if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
-        websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
-        console.log('🛑 Sent interrupt message to backend');
-      }
     } else {
+      // Always end call when button is clicked during active call, regardless of state
+      console.log('🔴 Ending call from any state (user clicked button)');
       endCall();
     }
   };

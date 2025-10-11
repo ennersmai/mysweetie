@@ -37,9 +37,7 @@ export class ProductionAudioManager {
   private readonly vadHangoverMs = 800; // Reduced for much faster response
   private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
   private readonly vadMinFrames = 2; // Reduced from 3 for faster response
-  private ttsStartTime = 0; // Timestamp when TTS playback started
-  private readonly TTS_GRACE_PERIOD_MS = 600; // Don't allow interrupts for first 600ms of TTS
-  private recentRmsValues: number[] = []; // Track recent RMS values for adaptive threshold
+  private recentRmsValues: number[] = []; // Track recent RMS values for debugging
 
   async initialize(rawAudioMode: boolean = false): Promise<boolean> {
     try {
@@ -173,18 +171,6 @@ export class ProductionAudioManager {
                 
                 // Check if this is an interrupt (speech during TTS)
                 const isInterrupt = this.isPlayingTTS && this.isPlaying;
-                
-                // Check if we're in the TTS grace period (prevent TTS from triggering itself)
-                const timeSinceTTSStart = performance.now() - this.ttsStartTime;
-                const inGracePeriod = isInterrupt && timeSinceTTSStart < this.TTS_GRACE_PERIOD_MS;
-                
-                if (inGracePeriod) {
-                  // Ignore this trigger - TTS just started and might be triggering itself
-                  console.log(`⏸️ Ignoring VAD trigger during TTS grace period (${timeSinceTTSStart.toFixed(0)}ms < ${this.TTS_GRACE_PERIOD_MS}ms)`);
-                  this.vadSpeaking = false;
-                  this.vadConsecutiveFrames = 0;
-                  return; // Exit early from this VAD check iteration
-                }
                 
                 // CLIENT-SIDE ASSEMBLY: Mark speech start (keep recording for pre-roll)
                 if (!isInterrupt) {
@@ -393,7 +379,6 @@ export class ProductionAudioManager {
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
-      this.ttsStartTime = performance.now(); // Record start time for grace period
       // Reset manual stop flag for new session
       this.manuallyStoppedPlayback = false;
     }
@@ -624,7 +609,6 @@ export class ProductionAudioManager {
     this.audioQueue = [];
     this.isPlaying = false;
     this.isPlayingTTS = false; // Reset TTS playing state
-    this.ttsStartTime = 0; // Reset grace period timer
     
     // Clear PCM accumulator to prevent any remaining audio from playing
     if (this.pcmAccumulatorTimer) {
@@ -660,7 +644,6 @@ export class ProductionAudioManager {
     if (this.isPlayingTTS) {
       console.log('✅ Marking TTS session as complete');
       this.isPlayingTTS = false;
-      this.ttsStartTime = 0; // Reset grace period timer
       
       // Only notify if the queue is actually empty (playback is done)
       if (!this.isPlaying && this.onPlaybackComplete) {
