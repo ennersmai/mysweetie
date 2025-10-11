@@ -26,6 +26,7 @@ export class ProductionAudioManager {
   private manuallyStoppedPlayback = false; // Track if playback was manually stopped (to prevent onended from firing)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
+  private isInterruptRestart = false; // Flag to restart instantly on interrupt (minimize delay)
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -174,11 +175,19 @@ export class ProductionAudioManager {
                 // Use isPlayingTTS alone, not isPlaying (queue might be empty between sentences)
                 const isInterrupt = this.isPlayingTTS;
                 
-                // CLIENT-SIDE ASSEMBLY: Clear buffer for new utterance
-                this.currentAudioChunks = [];
-                
-                // Don't restart - just clear buffer and let timeslice chunks accumulate fresh
-                console.log(`🎤 Speech detected${isInterrupt ? ' (INTERRUPT)' : ' (normal)'} - buffer cleared, now capturing ONLY user speech via timeslice chunks`);
+                if (isInterrupt) {
+                  console.log('🎤 Interrupt detected - stop/restart to exclude TTS, then capture from CURRENT moment');
+                  // Stop current recording (contains TTS)
+                  // The onstop handler will detect it's an interrupt and restart INSTANTLY
+                  if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    this.isInterruptRestart = true; // Flag for instant restart
+                    this.currentAudioChunks = []; // Clear before stop fires
+                    this.mediaRecorder.stop();
+                  }
+                } else {
+                  console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
+                  this.currentAudioChunks = []; // Clear buffer for new utterance
+                }
                 
                 this.isSendingAudio = true;
                 
@@ -306,52 +315,57 @@ export class ProductionAudioManager {
             this.onAudioData!(buf);
           });
         }
-        // NORMAL MODE: Buffer timeslice chunks
-        // Only accumulate chunks when VAD has detected speech (isSendingAudio = true)
-        else if (this.isSendingAudio) {
+        // NORMAL MODE: Buffer complete audio file (only if not discarding)
+        else if (!this.isInterruptRestart) {
           this.currentAudioChunks.push(event.data);
-          console.log(`📦 Buffered audio chunk: ${event.data.size} bytes (total chunks: ${this.currentAudioChunks.length})`);
+          console.log(`📦 Received complete audio file: ${event.data.size} bytes`);
         } else {
-          // Discard chunk (silence or TTS audio before speech detection)
-          if (Math.random() < 0.05) {
-            console.log(`🗑️ Discarding chunk: ${event.data.size} bytes (no active speech)`);
-          }
+          console.log(`🗑️ Discarding contaminated chunk: ${event.data.size} bytes (contains TTS before interrupt)`);
         }
       }
     };
     
-    // Handle MediaRecorder stop event (only called manually on speech end)
-    // With timeslice mode, MediaRecorder runs continuously and we stop it when VAD detects silence
+    // Handle MediaRecorder stop event (speech ended or interrupt restart)
     this.mediaRecorder.onstop = () => {
-      console.log(`🛑 MediaRecorder stopped - speech ended (${this.currentAudioChunks.length} chunks buffered)`);
+      console.log(`🛑 MediaRecorder stopped (interrupt: ${this.isInterruptRestart}, was recording speech: ${!this.isSendingAudio})`);
       
-      // Trigger speech end callback with all accumulated chunks
-      if (this.currentAudioChunks.length > 0) {
-        console.log(`🎤 Complete utterance captured (${this.currentAudioChunks.length} chunks), notifying callback`);
+      // INTERRUPT RESTART: Restart INSTANTLY (no setTimeout)
+      if (this.isInterruptRestart) {
+        this.isInterruptRestart = false; // Reset flag
+        if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+          this.mediaRecorder.start(); // Immediate restart - no delay
+          console.log('⚡ MediaRecorder restarted INSTANTLY after interrupt (zero setTimeout delay)');
+        }
+        return; // Don't process speech end
+      }
+      
+      // NORMAL: Speech ended - trigger callback then restart for next utterance
+      if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
+        console.log(`🎤 Complete utterance captured (${this.currentAudioChunks.length} chunk), notifying callback`);
         if (this.onSpeechEnd) {
           this.onSpeechEnd();
         }
       }
       
-      // Restart MediaRecorder immediately for next utterance
+      // Restart MediaRecorder for next utterance (small delay for normal case)
       setTimeout(() => {
         if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-          const timeslice = this.rawAudioMode ? 50 : 1000;
-          this.mediaRecorder.start(timeslice);
-          console.log(`✅ MediaRecorder restarted with ${timeslice}ms timeslice - ready for next utterance`);
+          this.mediaRecorder.start();
+          console.log('✅ MediaRecorder restarted - ready for next utterance');
         }
       }, 10);
     };
 
-    // Start recording with timeslice for interrupt handling
-    // Larger timeslice (1s) creates complete WebM segments that can be assembled
+    // Start recording
+    // RAW MODE: Use timeslice for continuous streaming
+    // NORMAL MODE: No timeslice = complete file when stopped
     try {
       if (this.rawAudioMode) {
-        this.mediaRecorder.start(50); // Raw mode: small chunks for testing
+        this.mediaRecorder.start(50); // Timeslice for streaming chunks
         console.log('🔧 RAW MODE: MediaRecorder started with 50ms timeslice');
       } else {
-        this.mediaRecorder.start(1000); // Normal mode: 1s chunks (complete WebM segments)
-        console.log('📦 MediaRecorder started with 1000ms timeslice - chunks can be assembled without restart delay');
+        this.mediaRecorder.start(); // No timeslice = complete file when stopped
+        console.log('📦 MediaRecorder started - will generate complete file on stop');
       }
     } catch (err) {
       console.error('Failed to start MediaRecorder:', err);
@@ -709,6 +723,7 @@ export class ProductionAudioManager {
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
+    this.isInterruptRestart = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
