@@ -141,9 +141,9 @@ export class ProductionAudioManager {
             
             // Simple, fixed threshold during TTS - easier to debug and tune
             if (this.isPlayingTTS) {
-              // During TTS: 20x normal threshold to prevent echo triggering VAD
-              // Even with echo cancellation, some TTS leaks through at high volumes
-              this.currentVadThreshold = this.baseVadThreshold * 20;
+              // During TTS: 10x normal threshold for natural interruption
+              // This prevents echo while still allowing normal speaking volume to interrupt
+              this.currentVadThreshold = this.baseVadThreshold * 10;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -152,7 +152,7 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (20x), playing=TRUE, speaking=${this.vadSpeaking}`
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (10x), playing=TRUE, speaking=${this.vadSpeaking}`
                 : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }
@@ -173,14 +173,13 @@ export class ProductionAudioManager {
                 // Check if this is an interrupt (speech during TTS)
                 const isInterrupt = this.isPlayingTTS && this.isPlaying;
                 
-                // CLIENT-SIDE ASSEMBLY: Mark speech start (keep recording for pre-roll)
-                if (!isInterrupt) {
-                  // Normal speech: Clear buffer to capture ONLY this utterance (with pre-roll)
-                  this.currentAudioChunks = [];
-                  console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
+                // CLIENT-SIDE ASSEMBLY: ALWAYS clear buffer on speech start
+                // We want ONLY the user's current utterance, not any TTS that leaked into the recording
+                this.currentAudioChunks = [];
+                if (isInterrupt) {
+                  console.log('🎤 Interrupt detected - clearing buffer to capture ONLY user speech (not TTS echo)');
                 } else {
-                  // Interrupt: KEEP existing chunks! MediaRecorder has been running and captured the interrupt speech
-                  console.log(`🎤 Interrupt speech detected - keeping ${this.currentAudioChunks.length} existing chunks from MediaRecorder`);
+                  console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
                 }
                 
                 this.isSendingAudio = true;
