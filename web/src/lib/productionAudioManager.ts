@@ -26,6 +26,7 @@ export class ProductionAudioManager {
   private isSendingAudio = false; // Track if we're actively sending audio (VAD-gated)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
+  private isRestartingRecorder = false; // Flag to ignore stale data during restart
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -164,16 +165,17 @@ export class ProductionAudioManager {
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
                 // CLIENT-SIDE ASSEMBLY: Restart MediaRecorder for clean recording
+                this.currentAudioChunks = [];
                 this.isSendingAudio = true;
-                this.currentAudioChunks = []; // Clear buffer for new utterance
                 
                 // Stop current recording to flush any data, then restart
                 if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                  console.log('📦 Restarting MediaRecorder for new utterance');
+                  console.log('🎤 Speech started - restarting MediaRecorder for new utterance');
+                  this.isRestartingRecorder = true; // Flag to ignore stale chunks
                   this.mediaRecorder.stop();
                   // Will be restarted in onstop handler
                 } else {
-                  console.log('📦 Started buffering audio chunks locally');
+                  console.log('📦 Started buffering audio');
                 }
                 
                 // If user starts speaking during TTS, interrupt it
@@ -287,10 +289,10 @@ export class ProductionAudioManager {
 
     this.mediaRecorder = new MediaRecorder(streamToUse, options);
     
-    // CLIENT-SIDE ASSEMBLY: Buffer chunks locally, assemble complete file on speech end
+    // CLIENT-SIDE ASSEMBLY: Buffer complete audio file
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
-        // RAW AUDIO MODE: Send all audio unconditionally for testing
+        // RAW AUDIO MODE: Send chunks unconditionally for testing
         if (this.rawAudioMode && this.onAudioData) {
           if (Math.random() < 0.05) {
             console.log(`🔧 RAW MODE: Sending ${event.data.size} bytes (bypassing VAD)`);
@@ -299,44 +301,51 @@ export class ProductionAudioManager {
             this.onAudioData!(buf);
           });
         }
-        // NORMAL MODE: Always buffer chunks (speech detection handled by stop/start)
-        else {
+        // NORMAL MODE: Buffer the complete audio file (generated on stop)
+        // Ignore stale data from recorder restart
+        else if (!this.isRestartingRecorder) {
           this.currentAudioChunks.push(event.data);
-          if (Math.random() < 0.05) {
-            console.log(`📦 Buffered chunk: ${event.data.size} bytes (total: ${this.currentAudioChunks.length})`);
-          }
+          console.log(`📦 Received complete audio file: ${event.data.size} bytes (chunks: ${this.currentAudioChunks.length})`);
+        } else {
+          console.log(`🚫 Ignoring stale chunk during restart: ${event.data.size} bytes`);
         }
       }
     };
     
     // Handle MediaRecorder stop event
     this.mediaRecorder.onstop = () => {
-      console.log(`🛑 MediaRecorder stopped, finalizing audio with ${this.currentAudioChunks.length} chunks`);
-      
-      // If we were recording speech (not just stopped for restart), trigger speech end
-      if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
-        console.log('🎤 Speech recording complete, notifying callback');
+      // If speech just started and we stopped to restart, restart immediately
+      if (this.isSendingAudio && this.isRestartingRecorder) {
+        console.log('🔄 Restarting MediaRecorder now');
+        setTimeout(() => {
+          if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+            this.mediaRecorder.start(); // No timeslice for complete file
+            this.isRestartingRecorder = false; // Clear flag
+            console.log('✅ MediaRecorder restarted - recording fresh utterance');
+          }
+        }, 10);
+      }
+      // If we were recording speech (stopped for speech end), trigger callback
+      else if (this.currentAudioChunks.length > 0) {
+        console.log(`🎤 Speech recording complete with ${this.currentAudioChunks.length} chunk(s), notifying callback`);
+        // ondataavailable should have already fired, trigger callback
         if (this.onSpeechEnd) {
           this.onSpeechEnd();
         }
       }
-      
-      // If speech just started and we stopped to restart, start recording again
-      if (this.isSendingAudio) {
-        console.log('🔄 Restarting MediaRecorder for new speech utterance');
-        setTimeout(() => {
-          if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-            this.mediaRecorder.start(50);
-            console.log('✅ MediaRecorder restarted');
-          }
-        }, 10);
-      }
     };
 
-    // Start recording with smaller chunks for better STT accuracy
+    // Start recording
+    // RAW MODE: Use timeslice for continuous streaming
+    // NORMAL MODE: No timeslice = complete file when stopped
     try {
-      this.mediaRecorder.start(50); // Reduced to 50ms for faster transmission
-      console.log('MediaRecorder started with 50ms timeslice - continuous audio streaming enabled');
+      if (this.rawAudioMode) {
+        this.mediaRecorder.start(50); // Timeslice for streaming chunks
+        console.log('🔧 RAW MODE: MediaRecorder started with 50ms timeslice');
+      } else {
+        this.mediaRecorder.start(); // No timeslice = complete file when stopped
+        console.log('📦 MediaRecorder started - will generate complete file on stop');
+      }
     } catch (err) {
       console.error('Failed to start MediaRecorder:', err);
       return false;
@@ -639,6 +648,7 @@ export class ProductionAudioManager {
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
+    this.isRestartingRecorder = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
