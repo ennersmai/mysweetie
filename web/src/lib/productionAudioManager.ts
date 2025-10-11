@@ -143,10 +143,10 @@ export class ProductionAudioManager {
             
             // Simple, fixed threshold during TTS - balanced for natural interruption
             if (this.isPlayingTTS) {
-              // During TTS: 12x normal threshold (AGC disabled prevents TTS amplification)
-              // Threshold: 0.12 (should block TTS echo, allow clear speech)
-              // With AGC off, your natural speech should easily reach 0.15+ RMS
-              this.currentVadThreshold = this.baseVadThreshold * 12;
+              // During TTS: 7x normal threshold (sweet spot with AGC disabled)
+              // Threshold: 0.07 (blocks TTS echo, allows normal speech to interrupt)
+              // AGC off = no amplification of TTS echo, so lower threshold is safe
+              this.currentVadThreshold = this.baseVadThreshold * 7;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -155,7 +155,7 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (12x), playing=TRUE, speaking=${this.vadSpeaking}`
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (7x), playing=TRUE, speaking=${this.vadSpeaking}`
                 : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }
