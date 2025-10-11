@@ -241,12 +241,10 @@ export default function VoiceCallButton({
           break;
           
         case 'tts_sentence_complete':
-          console.log('🔚 TTS sentence complete - flushing PCM accumulator for clean sentence boundary');
-          // Immediately flush PCM accumulator to ensure sentence separation
-          if (audioManagerRef.current && 'flushRemainingPCM' in audioManagerRef.current) {
-            (audioManagerRef.current as any).flushRemainingPCM();
-            console.log('✅ Sentence PCM flushed - ready for next sentence');
-          }
+          console.log('🔚 TTS sentence complete signal received (PCM will flush naturally via timer)');
+          // NOTE: We do NOT flush here because TTS audio arrives asynchronously
+          // Flushing now would create tiny fragmented buffers (e.g., 90ms chunks)
+          // The PCM accumulator's timer-based flush handles sentence boundaries properly
           break;
           
         case 'tts_stream_end':

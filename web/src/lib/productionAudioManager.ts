@@ -141,8 +141,9 @@ export class ProductionAudioManager {
             
             // Adaptive threshold: increase during TTS to prevent feedback
             if (this.isPlayingTTS) {
-              // During TTS, use a higher threshold to prevent TTS from triggering VAD
-              this.currentVadThreshold = this.baseVadThreshold * 3;
+              // During TTS, use a MUCH higher threshold to prevent TTS audio from triggering VAD
+              // TTS audio is very loud, so we need 30x the normal threshold
+              this.currentVadThreshold = this.baseVadThreshold * 30;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -362,6 +363,8 @@ export class ProductionAudioManager {
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
+      // Reset manual stop flag for new session
+      this.manuallyStoppedPlayback = false;
     }
 
     try {
@@ -612,6 +615,14 @@ export class ProductionAudioManager {
    */
   public completeTTSSession(): void {
     console.log('🏁 TTS session complete signal received from backend');
+    
+    // Check if playback was manually stopped (user interrupted)
+    if (this.manuallyStoppedPlayback) {
+      console.log('🛑 Ignoring completion (playback was manually stopped by user interrupt)');
+      // Reset the flag for next playback session
+      this.manuallyStoppedPlayback = false;
+      return;
+    }
     
     // If we were in a TTS session, mark it as complete
     if (this.isPlayingTTS) {
