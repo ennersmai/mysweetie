@@ -163,10 +163,18 @@ export class ProductionAudioManager {
                 const timestamp = performance.now();
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
-                // CLIENT-SIDE ASSEMBLY: Start buffering audio chunks locally
+                // CLIENT-SIDE ASSEMBLY: Restart MediaRecorder for clean recording
                 this.isSendingAudio = true;
                 this.currentAudioChunks = []; // Clear buffer for new utterance
-                console.log('📦 Started buffering audio chunks locally');
+                
+                // Stop current recording to flush any data, then restart
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                  console.log('📦 Restarting MediaRecorder for new utterance');
+                  this.mediaRecorder.stop();
+                  // Will be restarted in onstop handler
+                } else {
+                  console.log('📦 Started buffering audio chunks locally');
+                }
                 
                 // If user starts speaking during TTS, interrupt it
                 if (this.isPlayingTTS && this.isPlaying) {
@@ -203,13 +211,15 @@ export class ProductionAudioManager {
                 this.vadSpeaking = false;
                 console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
                 
-                // CLIENT-SIDE ASSEMBLY: Stop buffering
+                // CLIENT-SIDE ASSEMBLY: Stop MediaRecorder to finalize the file
                 this.isSendingAudio = false;
-                console.log(`📦 Stopped buffering. Total chunks collected: ${this.currentAudioChunks.length}`);
                 
-                // Notify UI (will trigger assembly and sending)
-                if (this.onSpeechEnd) {
-                  this.onSpeechEnd();
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                  console.log(`📦 Stopping MediaRecorder to finalize audio (${this.currentAudioChunks.length} chunks buffered)`);
+                  this.mediaRecorder.stop();
+                  // The onstop handler will trigger onSpeechEnd and restart recording
+                } else {
+                  console.log(`📦 MediaRecorder not recording, skipping stop`);
                 }
               }
             }
@@ -289,18 +299,37 @@ export class ProductionAudioManager {
             this.onAudioData!(buf);
           });
         }
-        // NORMAL MODE: Buffer chunks locally while speech is active
-        else if (this.isSendingAudio) {
+        // NORMAL MODE: Always buffer chunks (speech detection handled by stop/start)
+        else {
           this.currentAudioChunks.push(event.data);
           if (Math.random() < 0.05) {
-            console.log(`📦 Buffering audio chunk locally: ${event.data.size} bytes (total chunks: ${this.currentAudioChunks.length})`);
-          }
-        } else {
-          // Silently drop audio when VAD hasn't detected speech
-          if (Math.random() < 0.01) {
-            console.log(`🚫 Dropping audio chunk: ${event.data.size} bytes (VAD inactive)`);
+            console.log(`📦 Buffered chunk: ${event.data.size} bytes (total: ${this.currentAudioChunks.length})`);
           }
         }
+      }
+    };
+    
+    // Handle MediaRecorder stop event
+    this.mediaRecorder.onstop = () => {
+      console.log(`🛑 MediaRecorder stopped, finalizing audio with ${this.currentAudioChunks.length} chunks`);
+      
+      // If we were recording speech (not just stopped for restart), trigger speech end
+      if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
+        console.log('🎤 Speech recording complete, notifying callback');
+        if (this.onSpeechEnd) {
+          this.onSpeechEnd();
+        }
+      }
+      
+      // If speech just started and we stopped to restart, start recording again
+      if (this.isSendingAudio) {
+        console.log('🔄 Restarting MediaRecorder for new speech utterance');
+        setTimeout(() => {
+          if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+            this.mediaRecorder.start(50);
+            console.log('✅ MediaRecorder restarted');
+          }
+        }, 10);
       }
     };
 
@@ -574,13 +603,23 @@ export class ProductionAudioManager {
 
   getAssembledAudio(): Blob | null {
     if (this.currentAudioChunks.length === 0) {
-      console.warn('No audio chunks to assemble');
+      console.warn('⚠️ No audio chunks to assemble');
       return null;
     }
     
-    // Assemble all chunks into a single valid audio file using the same mime type as MediaRecorder
+    // Assemble all chunks into a single valid audio file
+    // When MediaRecorder is stopped, it produces a complete, valid file
     const finalBlob = new Blob(this.currentAudioChunks, { type: this.recordedMimeType });
-    console.log(`🎵 Assembled ${this.currentAudioChunks.length} chunks into final audio blob: ${finalBlob.size} bytes, type: ${this.recordedMimeType}`);
+    
+    // Read first few bytes for debugging
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buffer = reader.result as ArrayBuffer;
+      const view = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+      const hex = Array.from(view).map(b => b.toString(16).padStart(2, '0')).join('');
+      console.log(`🎵 Assembled ${this.currentAudioChunks.length} chunks → ${finalBlob.size} bytes, type: ${this.recordedMimeType}, header: ${hex}`);
+    };
+    reader.readAsArrayBuffer(finalBlob.slice(0, 4));
     
     // Clear the buffer
     this.currentAudioChunks = [];
