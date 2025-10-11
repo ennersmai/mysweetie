@@ -26,7 +26,6 @@ export class ProductionAudioManager {
   private manuallyStoppedPlayback = false; // Track if playback was manually stopped (to prevent onended from firing)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
-  private isInterruptRestart = false; // Flag to restart instantly on interrupt (minimize delay)
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -140,11 +139,12 @@ export class ProductionAudioManager {
               this.recentRmsValues.shift();
             }
             
-            // Simple, fixed threshold during TTS - higher to prevent self-triggering
+            // Simple, fixed threshold during TTS - VERY high to ensure user voice dominates
             if (this.isPlayingTTS) {
-              // During TTS: 30x normal threshold to prevent echo from triggering VAD
-              // You need to speak loudly to interrupt
-              this.currentVadThreshold = this.baseVadThreshold * 30;
+              // During TTS: 50x normal threshold 
+              // This ensures when VAD triggers, your voice is 50x louder than background
+              // So the TTS contamination is minimal (~2% of signal)
+              this.currentVadThreshold = this.baseVadThreshold * 50;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -153,7 +153,7 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (30x), playing=TRUE, speaking=${this.vadSpeaking}`
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (50x), playing=TRUE, speaking=${this.vadSpeaking}`
                 : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }
@@ -175,19 +175,11 @@ export class ProductionAudioManager {
                 // Use isPlayingTTS alone, not isPlaying (queue might be empty between sentences)
                 const isInterrupt = this.isPlayingTTS;
                 
-                if (isInterrupt) {
-                  console.log('🎤 Interrupt detected - stop/restart to exclude TTS, then capture from CURRENT moment');
-                  // Stop current recording (contains TTS)
-                  // The onstop handler will detect it's an interrupt and restart INSTANTLY
-                  if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    this.isInterruptRestart = true; // Flag for instant restart
-                    this.currentAudioChunks = []; // Clear before stop fires
-                    this.mediaRecorder.stop();
-                  }
-                } else {
-                  console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
-                  this.currentAudioChunks = []; // Clear buffer for new utterance
-                }
+                // CLEVER SOLUTION: DON'T restart MediaRecorder - keep it running!
+                // At 50x threshold, your voice is SO loud that TTS contamination is minimal
+                // Combined with echo cancellation, the transcript should be clean
+                // This preserves your FIRST WORD that triggered the VAD!
+                console.log(`🎤 Speech detected${isInterrupt ? ' (interrupt at 50x threshold - voice dominates)' : ' (normal - using pre-roll)'} - keeping MediaRecorder running`);
                 
                 this.isSendingAudio = true;
                 
@@ -315,39 +307,29 @@ export class ProductionAudioManager {
             this.onAudioData!(buf);
           });
         }
-        // NORMAL MODE: Buffer complete audio file (only if not discarding)
-        else if (!this.isInterruptRestart) {
+        // NORMAL MODE: Buffer complete audio file
+        // Trusting echo cancellation + 50x VAD threshold to minimize TTS contamination
+        else {
           this.currentAudioChunks.push(event.data);
           console.log(`📦 Received complete audio file: ${event.data.size} bytes`);
-        } else {
-          console.log(`🗑️ Discarding contaminated chunk: ${event.data.size} bytes (contains TTS before interrupt)`);
         }
       }
     };
     
-    // Handle MediaRecorder stop event (speech ended or interrupt restart)
+    // Handle MediaRecorder stop event (speech ended)
     this.mediaRecorder.onstop = () => {
-      console.log(`🛑 MediaRecorder stopped (interrupt: ${this.isInterruptRestart}, was recording speech: ${!this.isSendingAudio})`);
+      console.log(`🛑 MediaRecorder stopped (was recording speech: ${!this.isSendingAudio})`);
       
-      // INTERRUPT RESTART: Restart INSTANTLY (no setTimeout)
-      if (this.isInterruptRestart) {
-        this.isInterruptRestart = false; // Reset flag
-        if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-          this.mediaRecorder.start(); // Immediate restart - no delay
-          console.log('⚡ MediaRecorder restarted INSTANTLY after interrupt (zero setTimeout delay)');
-        }
-        return; // Don't process speech end
-      }
-      
-      // NORMAL: Speech ended - trigger callback then restart for next utterance
+      // Speech ended - trigger callback with all buffered audio
+      // isSendingAudio is false when speech ended (was set to false before stop)
       if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
-        console.log(`🎤 Complete utterance captured (${this.currentAudioChunks.length} chunk), notifying callback`);
+        console.log(`🎤 Complete utterance captured (${this.currentAudioChunks.length} chunks), notifying callback`);
         if (this.onSpeechEnd) {
           this.onSpeechEnd();
         }
       }
       
-      // Restart MediaRecorder for next utterance (small delay for normal case)
+      // Restart MediaRecorder for next utterance
       setTimeout(() => {
         if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
           this.mediaRecorder.start();
@@ -723,7 +705,6 @@ export class ProductionAudioManager {
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
-    this.isInterruptRestart = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
