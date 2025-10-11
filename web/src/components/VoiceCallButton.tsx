@@ -383,8 +383,13 @@ export default function VoiceCallButton({
           }
         },
         () => {
-          // Speech ended - VAD has already stopped sending audio chunks
+          // Speech ended - Tell backend to process the audio
           console.log('[FRONTEND] VAD detected speech end');
+          
+          if (websocketRef.current?.readyState === WebSocket.OPEN) {
+            console.log('🔇 [FRONTEND] Sending user_speech_ended message to backend');
+            websocketRef.current.send(JSON.stringify({ type: 'user_speech_ended' }));
+          }
         }
       );
 
