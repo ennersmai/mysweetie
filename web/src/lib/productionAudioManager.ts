@@ -19,7 +19,7 @@ export class ProductionAudioManager {
   private onInterrupt: (() => void) | null = null; // Callback for interruption
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
-  private readonly micBoostFactor = 3.0; // Amplify voice for better VAD detection (AGC disabled)
+  private readonly micBoostFactor = 4; // Amplify voice for better VAD detection (AGC disabled)
   private isPlayingTTS = false; // Track if TTS is currently playing
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
@@ -146,7 +146,7 @@ export class ProductionAudioManager {
               // During TTS: 10x normal threshold (balanced with 3x mic boost)
               // Threshold: 0.10 with 3x mic boost = natural speaking volume to interrupt
               // AGC off prevents TTS echo amplification
-              this.currentVadThreshold = this.baseVadThreshold * 6;
+              this.currentVadThreshold = this.baseVadThreshold * 3;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
