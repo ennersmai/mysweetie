@@ -139,11 +139,12 @@ export class ProductionAudioManager {
               this.recentRmsValues.shift();
             }
             
-            // Adaptive threshold: increase during TTS to prevent feedback
+            // Adaptive threshold: increase during TTS to prevent feedback, but allow barge-in
             if (this.isPlayingTTS) {
-              // During TTS, use a MUCH higher threshold to prevent TTS audio from triggering VAD
-              // TTS audio is very loud, so we need 30x the normal threshold
-              this.currentVadThreshold = this.baseVadThreshold * 30;
+              // During TTS, use a lower "barge-in" threshold for instant interruption
+              // This is high enough to ignore echo, but low enough to catch normal speech
+              // 3x threshold = sensitive enough for natural interruption, high enough to ignore echo
+              this.currentVadThreshold = this.baseVadThreshold * 3;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -164,49 +165,47 @@ export class ProductionAudioManager {
                 const timestamp = performance.now();
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
-                // CLIENT-SIDE ASSEMBLY: Mark speech start (keep recording for pre-roll)
-                // Clear buffer to capture ONLY this utterance (with pre-roll)
-                this.currentAudioChunks = [];
-                this.isSendingAudio = true;
-                console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
+                // Check if this is an interrupt (speech during TTS)
+                const isInterrupt = this.isPlayingTTS && this.isPlaying;
                 
-                // If user starts speaking during TTS, interrupt it
-                if (this.isPlayingTTS && this.isPlaying) {
+                // CLIENT-SIDE ASSEMBLY: Mark speech start (keep recording for pre-roll)
+                if (!isInterrupt) {
+                  // Normal speech: Clear buffer to capture ONLY this utterance (with pre-roll)
+                  this.currentAudioChunks = [];
+                  console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
+                } else {
+                  // Interrupt: KEEP existing chunks! MediaRecorder has been running and captured the interrupt speech
+                  console.log(`🎤 Interrupt speech detected - keeping ${this.currentAudioChunks.length} existing chunks from MediaRecorder`);
+                }
+                
+                this.isSendingAudio = true;
+                
+                // If user starts speaking during TTS, interrupt it IMMEDIATELY
+                if (isInterrupt) {
                   const interruptStart = performance.now();
-                  console.log(`🛑 VAD: User interrupted TTS at ${interruptStart.toFixed(0)}ms - stopping playback`);
+                  console.log(`🛑 VAD: User interrupted TTS at ${interruptStart.toFixed(0)}ms - stopping playback IMMEDIATELY`);
                   
                   // CRITICAL: Drop threshold IMMEDIATELY so we can continue tracking user's speech
                   this.currentVadThreshold = this.baseVadThreshold;
                   console.log(`🔧 VAD threshold dropped to normal (${this.currentVadThreshold.toFixed(4)}) to track user speech`);
                   
+                  // Stop TTS playback
                   this.stopPlayback();
                   
-                  // Send explicit interrupt command to backend (Task 2A)
+                  // Send explicit interrupt command to backend
                   if (this.onInterrupt) {
                     console.log('⚡ Sending interrupt command to backend');
                     this.onInterrupt();
                   }
                   
-                  // NOTE: We do NOT call onPlaybackComplete() here!
-                  // The 'interrupt' message is sufficient - the backend will handle state transitions.
-                  // Calling onPlaybackComplete() would send tts_playback_finished and cause state machine errors.
-                  
-                  // CRITICAL: We also do NOT call onSpeechStart() after an interrupt!
-                  // The interrupt already handled the state transition to LISTENING.
-                  // Reset VAD state so the next utterance is detected properly.
-                  this.vadSpeaking = false;
-                  this.isSendingAudio = false;
-                  this.vadConsecutiveFrames = 0;
-                  this.currentAudioChunks = [];
-                  console.log('🔄 VAD state reset after interrupt - ready to detect next utterance');
-                  
                   const interruptEnd = performance.now();
                   console.log(`⏱️ Interrupt latency: ${(interruptEnd - interruptStart).toFixed(2)}ms`);
-                } else {
-                  // Normal speech start (not interrupting) - notify backend
-                  if (this.onSpeechStart) {
-                    this.onSpeechStart();
-                  }
+                }
+                
+                // ALWAYS notify backend that user started speaking (whether interrupting or not)
+                // This ensures immediate transition to USER_SPEAKING state
+                if (this.onSpeechStart) {
+                  this.onSpeechStart();
                 }
               }
             } else {
