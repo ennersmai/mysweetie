@@ -23,10 +23,9 @@ export class ProductionAudioManager {
   private isPlayingTTS = false; // Track if TTS is currently playing
   private isInterrupted = false; // Track if TTS was interrupted by user speech
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
-  private isSendingAudio = false; // Track if we're actively sending audio (VAD-gated)
+  private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
-  private isRestartingRecorder = false; // Flag to ignore stale data during restart
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -164,19 +163,11 @@ export class ProductionAudioManager {
                 const timestamp = performance.now();
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
-                // CLIENT-SIDE ASSEMBLY: Restart MediaRecorder for clean recording
+                // CLIENT-SIDE ASSEMBLY: Mark speech start (keep recording for pre-roll)
+                // Clear buffer to capture ONLY this utterance (with pre-roll)
                 this.currentAudioChunks = [];
                 this.isSendingAudio = true;
-                
-                // Stop current recording to flush any data, then restart
-                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                  console.log('🎤 Speech started - restarting MediaRecorder for new utterance');
-                  this.isRestartingRecorder = true; // Flag to ignore stale chunks
-                  this.mediaRecorder.stop();
-                  // Will be restarted in onstop handler
-                } else {
-                  console.log('📦 Started buffering audio');
-                }
+                console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
                 
                 // If user starts speaking during TTS, interrupt it
                 if (this.isPlayingTTS && this.isPlaying) {
@@ -213,15 +204,15 @@ export class ProductionAudioManager {
                 this.vadSpeaking = false;
                 console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
                 
-                // CLIENT-SIDE ASSEMBLY: Stop MediaRecorder to finalize the file
+                // CLIENT-SIDE ASSEMBLY: Stop MediaRecorder to finalize complete file
                 this.isSendingAudio = false;
                 
                 if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                  console.log(`📦 Stopping MediaRecorder to finalize audio (${this.currentAudioChunks.length} chunks buffered)`);
+                  console.log(`📦 Stopping MediaRecorder to finalize complete utterance (includes pre-roll)`);
                   this.mediaRecorder.stop();
-                  // The onstop handler will trigger onSpeechEnd and restart recording
+                  // The onstop handler will trigger onSpeechEnd and restart for next utterance
                 } else {
-                  console.log(`📦 MediaRecorder not recording, skipping stop`);
+                  console.log(`⚠️ MediaRecorder not recording, cannot finalize`);
                 }
               }
             }
@@ -289,7 +280,7 @@ export class ProductionAudioManager {
 
     this.mediaRecorder = new MediaRecorder(streamToUse, options);
     
-    // CLIENT-SIDE ASSEMBLY: Buffer complete audio file
+    // CLIENT-SIDE ASSEMBLY: Buffer complete audio file (with pre-roll)
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
         // RAW AUDIO MODE: Send chunks unconditionally for testing
@@ -301,38 +292,34 @@ export class ProductionAudioManager {
             this.onAudioData!(buf);
           });
         }
-        // NORMAL MODE: Buffer the complete audio file (generated on stop)
-        // Ignore stale data from recorder restart
-        else if (!this.isRestartingRecorder) {
+        // NORMAL MODE: Buffer complete audio file (includes pre-roll)
+        else {
           this.currentAudioChunks.push(event.data);
-          console.log(`📦 Received complete audio file: ${event.data.size} bytes (chunks: ${this.currentAudioChunks.length})`);
-        } else {
-          console.log(`🚫 Ignoring stale chunk during restart: ${event.data.size} bytes`);
+          console.log(`📦 Received complete audio file with pre-roll: ${event.data.size} bytes`);
         }
       }
     };
     
-    // Handle MediaRecorder stop event
+    // Handle MediaRecorder stop event (speech ended)
     this.mediaRecorder.onstop = () => {
-      // If speech just started and we stopped to restart, restart immediately
-      if (this.isSendingAudio && this.isRestartingRecorder) {
-        console.log('🔄 Restarting MediaRecorder now');
-        setTimeout(() => {
-          if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-            this.mediaRecorder.start(); // No timeslice for complete file
-            this.isRestartingRecorder = false; // Clear flag
-            console.log('✅ MediaRecorder restarted - recording fresh utterance');
-          }
-        }, 10);
-      }
-      // If we were recording speech (stopped for speech end), trigger callback
-      else if (this.currentAudioChunks.length > 0) {
-        console.log(`🎤 Speech recording complete with ${this.currentAudioChunks.length} chunk(s), notifying callback`);
-        // ondataavailable should have already fired, trigger callback
+      console.log(`🛑 MediaRecorder stopped (was recording speech: ${!this.isSendingAudio})`);
+      
+      // Speech ended - trigger callback then restart for next utterance
+      // isSendingAudio is false when speech ended (was set to false before stop)
+      if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
+        console.log(`🎤 Complete utterance captured (${this.currentAudioChunks.length} chunk), notifying callback`);
         if (this.onSpeechEnd) {
           this.onSpeechEnd();
         }
       }
+      
+      // Always restart MediaRecorder for next utterance
+      setTimeout(() => {
+        if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+          this.mediaRecorder.start(); // Restart for next utterance
+          console.log('✅ MediaRecorder restarted - ready for next utterance');
+        }
+      }, 10);
     };
 
     // Start recording
@@ -648,7 +635,6 @@ export class ProductionAudioManager {
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
-    this.isRestartingRecorder = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
