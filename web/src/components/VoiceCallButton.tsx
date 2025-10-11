@@ -153,7 +153,8 @@ export default function VoiceCallButton({
         case 'state_change':
           if (message.state) {
             console.log(`🔄 [FRONTEND STATE] Received state change: ${message.state}`);
-            console.log(`🔄 [FRONTEND STATE] Previous state: ${callStateRef.current}`);
+            const previousState = callStateRef.current;
+            console.log(`🔄 [FRONTEND STATE] Previous state: ${previousState}`);
             setCallState(message.state);
             callStateRef.current = message.state;
             // Send audio when in LISTENING or USER_SPEAKING
@@ -163,6 +164,12 @@ export default function VoiceCallButton({
             // Debug state transitions
             if (message.state === 'LISTENING') {
               console.log(`🔄 [FRONTEND STATE] ✅ Now in LISTENING mode - ready to accept user input`);
+              
+              // If we're transitioning from AI_SPEAKING to LISTENING, the entire TTS session is complete
+              if (previousState === 'AI_SPEAKING' && audioManagerRef.current) {
+                console.log('🏁 [FRONTEND STATE] Transition AI_SPEAKING → LISTENING: marking TTS session complete');
+                audioManagerRef.current.completeTTSSession();
+              }
             } else if (message.state === 'AI_SPEAKING') {
               console.log(`🔄 [FRONTEND STATE] 🔊 AI is speaking - audio should be muted`);
             } else if (message.state === 'USER_SPEAKING') {

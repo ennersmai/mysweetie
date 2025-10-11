@@ -21,9 +21,9 @@ export class ProductionAudioManager {
   private recordingStream: MediaStream | null = null;
   private readonly micBoostFactor = 1.5; // Reduced from 4.0 to prevent distortion
   private isPlayingTTS = false; // Track if TTS is currently playing
-  private isInterrupted = false; // Track if TTS was interrupted by user speech
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
+  private manuallyStoppedPlayback = false; // Track if playback was manually stopped (to prevent onended from firing)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
 
@@ -173,7 +173,6 @@ export class ProductionAudioManager {
                 if (this.isPlayingTTS && this.isPlaying) {
                   const interruptStart = performance.now();
                   console.log(`🛑 VAD: User interrupted TTS at ${interruptStart.toFixed(0)}ms - stopping playback`);
-                  this.isInterrupted = true;
                   this.stopPlayback();
                   
                   // Send explicit interrupt command to backend (Task 2A)
@@ -362,7 +361,6 @@ export class ProductionAudioManager {
     // This prevents resetting the flag when multiple sentences are streaming
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
-      this.isInterrupted = false;
       this.isPlayingTTS = true;
     }
 
@@ -519,6 +517,8 @@ export class ProductionAudioManager {
 
     // CRITICAL: Set isPlaying = true SYNCHRONOUSLY before any async operations
     this.isPlaying = true;
+    // Reset manual stop flag (we're starting natural playback)
+    this.manuallyStoppedPlayback = false;
     
     // Get next buffer from queue
     const audioBuffer = this.audioQueue.shift()!;
@@ -540,6 +540,12 @@ export class ProductionAudioManager {
         console.log(`✓ Buffer finished playing`);
         this.currentSource = null;
         
+        // Check if playback was manually stopped (e.g., user interrupted)
+        if (this.manuallyStoppedPlayback) {
+          console.log('🛑 Ignoring onended (playback was manually stopped)');
+          return;
+        }
+        
         // Check if there are more buffers in queue
         if (this.audioQueue.length > 0) {
           console.log(`⏭️  More buffers in queue (${this.audioQueue.length}), playing next`);
@@ -549,21 +555,16 @@ export class ProductionAudioManager {
           // Queue is empty - THIS is the only place isPlaying should be set to false
           console.log('🏁 Last buffer finished, queue empty - setting isPlaying = false');
           this.isPlaying = false;
-          this.isPlayingTTS = false;
           
-          // Notify playback complete
-          setTimeout(() => {
-            if (!this.isInterrupted) {
-              console.log('🎵 TTS session completed normally');
-            } else {
-              console.log('🛑 TTS session was interrupted by user speech');
-            }
-            
-            if (this.onPlaybackComplete) {
-              console.log('🔔 Notifying backend: TTS playback complete');
-              this.onPlaybackComplete();
-            }
-          }, 100);
+          // Check if the TTS session was already marked as complete
+          if (!this.isPlayingTTS && this.onPlaybackComplete) {
+            // The backend already signaled that all TTS is done, and now the queue is empty
+            console.log('✅ TTS session complete and queue empty - notifying backend');
+            this.onPlaybackComplete();
+          } else if (this.isPlayingTTS) {
+            // More sentences may be coming
+            console.log('⏸️  Queue empty but keeping isPlayingTTS=true (more sentences may be coming)');
+          }
         }
       };
       
@@ -572,6 +573,9 @@ export class ProductionAudioManager {
   }
 
   stopPlayback(): void {
+    // Set flag to prevent onended callback from running
+    this.manuallyStoppedPlayback = true;
+    
     if (this.currentSource) {
       try {
         this.currentSource.stop();
@@ -600,6 +604,30 @@ export class ProductionAudioManager {
   setPlaybackCompleteCallback(callback: (() => void) | null): void {
     console.log('ProductionAudioManager: Setting playback complete callback:', callback ? 'SET' : 'NULL');
     this.onPlaybackComplete = callback;
+  }
+
+  /**
+   * Call this when the backend signals that ALL TTS for the AI response is complete
+   * (not just one sentence, but the entire response)
+   */
+  public completeTTSSession(): void {
+    console.log('🏁 TTS session complete signal received from backend');
+    
+    // If we were in a TTS session, mark it as complete
+    if (this.isPlayingTTS) {
+      console.log('✅ Marking TTS session as complete');
+      this.isPlayingTTS = false;
+      
+      // Only notify if the queue is actually empty (playback is done)
+      if (!this.isPlaying && this.onPlaybackComplete) {
+        console.log('🔔 Notifying backend: TTS playback complete');
+        this.onPlaybackComplete();
+      } else if (this.isPlaying) {
+        console.log('⏳ Audio still playing, will notify when queue empties');
+      }
+    } else {
+      console.log('ℹ️  No active TTS session to complete');
+    }
   }
 
   setSpeechCallbacks(onSpeechStart: (() => void) | null, onSpeechEnd: (() => void) | null): void {
