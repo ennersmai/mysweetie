@@ -439,12 +439,6 @@ export default function VoiceCallButton({
           shouldSendAudioRef.current = true;
           console.log('[FRONTEND] Starting audio recording, shouldSendAudio:', shouldSendAudioRef.current);
           
-          // RAW AUDIO MODE: Immediately send user_speech_started to backend
-          if (rawAudioMode) {
-            console.log('🔧 RAW AUDIO MODE: Sending user_speech_started immediately');
-            ws.send(JSON.stringify({ type: 'user_speech_started' }));
-          }
-          
           // Start audio recording with VAD-gated streaming
           if (audioManagerRef.current) {
             audioManagerRef.current.startRecording((audioData) => {
@@ -457,6 +451,17 @@ export default function VoiceCallButton({
                 console.warn(`🎤 Cannot send audio chunk: WebSocket not open`);
               }
             });
+          }
+          
+          // RAW AUDIO MODE: Send user_speech_started after a brief delay
+          // This ensures the backend session is fully initialized and has sent its initial state
+          if (rawAudioMode) {
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                console.log('🔧 RAW AUDIO MODE: Sending user_speech_started after session init');
+                ws.send(JSON.stringify({ type: 'user_speech_started' }));
+              }
+            }, 100); // 100ms delay to ensure backend session is ready
           }
           
           resolve(true);
