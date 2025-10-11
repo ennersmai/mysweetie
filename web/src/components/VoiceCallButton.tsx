@@ -39,7 +39,7 @@ export interface VoiceCallButtonProps {
 }
 
 export interface CallMessage {
-  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'ai_response_chunk' | 'tts_finished' | 'tts_stream_end';
+  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'ai_response_chunk' | 'tts_finished' | 'tts_stream_end' | 'tts_sentence_complete';
   command?: string;
   text?: string;
   is_final?: boolean;
@@ -230,6 +230,15 @@ export default function VoiceCallButton({
           console.log('Received final AI response:', message.text);
           if (message.text && onAIResponse) {
             onAIResponse(message.text);
+          }
+          break;
+          
+        case 'tts_sentence_complete':
+          console.log('🔚 TTS sentence complete - flushing PCM accumulator for clean sentence boundary');
+          // Immediately flush PCM accumulator to ensure sentence separation
+          if (audioManagerRef.current && 'flushRemainingPCM' in audioManagerRef.current) {
+            (audioManagerRef.current as any).flushRemainingPCM();
+            console.log('✅ Sentence PCM flushed - ready for next sentence');
           }
           break;
           
