@@ -25,6 +25,7 @@ export class ProductionAudioManager {
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively sending audio (VAD-gated)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
+  private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -237,16 +238,38 @@ export class ProductionAudioManager {
 
     this.onAudioData = onAudioData;
 
-    // Determine best supported format - balanced bitrate for quality and size
+    // Explicitly request Groq-compatible audio format
+    // Groq Whisper API works best with audio/webm;codecs=opus
+    let mimeType = 'audio/webm;codecs=opus';
+    
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      console.warn(`⚠️ ${mimeType} not supported, trying fallbacks...`);
+      
+      // Try fallback formats
+      const fallbacks = [
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/ogg'
+      ];
+      
+      for (const format of fallbacks) {
+        if (MediaRecorder.isTypeSupported(format)) {
+          mimeType = format;
+          console.log(`✅ Using fallback format: ${mimeType}`);
+          break;
+        }
+      }
+    }
+    
     const options: MediaRecorderOptions = {
-      audioBitsPerSecond: 128000 // Reduced from 256000 to prevent over-compression
+      mimeType: mimeType,
+      audioBitsPerSecond: 128000 // Balanced for quality and size
     };
     
-    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-      options.mimeType = 'audio/webm;codecs=opus';
-    } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-      options.mimeType = 'audio/webm';
-    }
+    // Store the mime type for use in getAssembledAudio()
+    this.recordedMimeType = mimeType;
+    
+    console.log(`🎙️ MediaRecorder configured with mimeType: ${options.mimeType}, bitrate: ${options.audioBitsPerSecond}`);
 
     if (this.rawAudioMode) {
       console.log('🔧 RAW AUDIO MODE: Using original echo-cancelled MediaStream for MediaRecorder');
@@ -555,9 +578,9 @@ export class ProductionAudioManager {
       return null;
     }
     
-    // Assemble all chunks into a single valid audio file
-    const finalBlob = new Blob(this.currentAudioChunks, { type: 'audio/webm' });
-    console.log(`🎵 Assembled ${this.currentAudioChunks.length} chunks into final audio blob: ${finalBlob.size} bytes`);
+    // Assemble all chunks into a single valid audio file using the same mime type as MediaRecorder
+    const finalBlob = new Blob(this.currentAudioChunks, { type: this.recordedMimeType });
+    console.log(`🎵 Assembled ${this.currentAudioChunks.length} chunks into final audio blob: ${finalBlob.size} bytes, type: ${this.recordedMimeType}`);
     
     // Clear the buffer
     this.currentAudioChunks = [];
