@@ -191,13 +191,22 @@ export class ProductionAudioManager {
                   // The 'interrupt' message is sufficient - the backend will handle state transitions.
                   // Calling onPlaybackComplete() would send tts_playback_finished and cause state machine errors.
                   
+                  // CRITICAL: We also do NOT call onSpeechStart() after an interrupt!
+                  // The interrupt already handled the state transition to LISTENING.
+                  // Reset VAD state so the next utterance is detected properly.
+                  this.vadSpeaking = false;
+                  this.isSendingAudio = false;
+                  this.vadConsecutiveFrames = 0;
+                  this.currentAudioChunks = [];
+                  console.log('🔄 VAD state reset after interrupt - ready to detect next utterance');
+                  
                   const interruptEnd = performance.now();
                   console.log(`⏱️ Interrupt latency: ${(interruptEnd - interruptStart).toFixed(2)}ms`);
-                }
-                
-                // Notify UI for visual feedback (this will trigger user_speech_started message)
-                if (this.onSpeechStart) {
-                  this.onSpeechStart();
+                } else {
+                  // Normal speech start (not interrupting) - notify backend
+                  if (this.onSpeechStart) {
+                    this.onSpeechStart();
+                  }
                 }
               }
             } else {
