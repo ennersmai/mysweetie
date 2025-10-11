@@ -358,14 +358,20 @@ export class ProductionAudioManager {
       return;
     }
     
-    // Reset interruption flag and set TTS playing state
-    this.isInterrupted = false;
-    this.isPlayingTTS = true;
+    // Set TTS playing state ONLY if not already playing
+    // This prevents resetting the flag when multiple sentences are streaming
+    if (!this.isPlayingTTS) {
+      console.log('🎵 Starting TTS playback session');
+      this.isInterrupted = false;
+      this.isPlayingTTS = true;
+    }
 
     try {
-      // PCM audio from Rime.ai TTS - play immediately, no buffering
+      // PCM audio from Rime.ai TTS - add to accumulator/queue
       if (this.isPCMData(audioData)) {
-        console.log(`ProductionAudioManager: Playing PCM chunk immediately ${audioData.byteLength} bytes`);
+        if (Math.random() < 0.1) {
+          console.log(`📦 Queuing PCM chunk ${audioData.byteLength} bytes`);
+        }
         this.playPCMChunkImmediately(audioData);
       } else {
         console.log(`ProductionAudioManager: Decoding encoded audio ${audioData.byteLength} bytes`);
@@ -453,18 +459,21 @@ export class ProductionAudioManager {
         channelData[i] = combinedSamples[i] / 32768.0;
       }
       
-      console.log(`ProductionAudioManager: Flushed ${this.pcmAccumulator.length} PCM chunks → ${audioBuffer.duration.toFixed(3)}s smooth buffer`);
+      console.log(`📦 Flushed ${this.pcmAccumulator.length} PCM chunks → ${audioBuffer.duration.toFixed(3)}s buffer added to queue (queue length: ${this.audioQueue.length + 1})`);
       
       // Clear accumulator
       this.pcmAccumulator = [];
       this.pcmAccumulatorTimer = null;
       
-      // Add to playback queue
+      // Add to playback queue (will play sequentially)
       this.audioQueue.push(audioBuffer);
       
       // Start playback if not already playing
       if (!this.isPlaying) {
+        console.log('🎵 Queue was idle, starting playback');
         this.playNextInQueue();
+      } else {
+        console.log(`⏳ Currently playing, buffer queued (${this.audioQueue.length} in queue)`);
       }
       
     } catch (error) {
@@ -474,9 +483,9 @@ export class ProductionAudioManager {
     }
   }
 
-  // Flush any remaining PCM data when TTS stream ends
+  // Flush any remaining PCM data when TTS stream ends (called per sentence)
   flushRemainingPCM(): void {
-    console.log('ProductionAudioManager: flushRemainingPCM called - flushing accumulator');
+    console.log('🔚 TTS sentence complete - flushing remaining PCM accumulator');
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
       this.pcmAccumulatorTimer = null;
@@ -501,39 +510,31 @@ export class ProductionAudioManager {
 
   private playNextInQueue(): void {
     if (this.audioQueue.length === 0) {
-      console.log('ProductionAudioManager: Audio queue empty - playback complete');
+      console.log('✅ Audio queue empty - all sentences played');
       this.isPlaying = false;
       this.isPlayingTTS = false; // No longer playing TTS
-      console.log(`ProductionAudioManager: About to check callback - hasCallback: ${!!this.onPlaybackComplete}, isPlaying: ${this.isPlaying}`);
       
       // Notify playback complete after a short delay to ensure audio has finished
       setTimeout(() => {
-        console.log(`ProductionAudioManager: Timeout callback executing - hasCallback: ${!!this.onPlaybackComplete}, isPlaying: ${this.isPlaying}, interrupted: ${this.isInterrupted}`);
-        
         if (!this.isInterrupted) {
-          console.log('ProductionAudioManager: TTS completed normally');
+          console.log('🎵 TTS session completed normally');
         } else {
-          console.log('ProductionAudioManager: TTS was interrupted by user speech');
+          console.log('🛑 TTS session was interrupted by user speech');
         }
         
         if (this.onPlaybackComplete && !this.isPlaying) {
-          console.log('ProductionAudioManager: 🔔 CALLING PLAYBACK COMPLETE CALLBACK');
+          console.log('🔔 Notifying backend: TTS playback complete');
           this.onPlaybackComplete();
-          console.log('ProductionAudioManager: ✅ Playback complete callback executed successfully');
-        } else {
-          console.warn('ProductionAudioManager: ❌ Playback complete but conditions not met:', {
-            hasCallback: !!this.onPlaybackComplete,
-            isPlaying: this.isPlaying
-          });
         }
-      }, 100); // Reduced from 200ms for faster response
+      }, 100);
       return;
     }
 
+    // Play next buffer in queue
     this.isPlaying = true;
     const audioBuffer = this.audioQueue.shift()!;
     
-    console.log(`ProductionAudioManager: Playing audio buffer ${audioBuffer.duration.toFixed(3)}s (${this.audioQueue.length} remaining)`);
+    console.log(`▶️  Playing buffer ${audioBuffer.duration.toFixed(3)}s (${this.audioQueue.length} remaining in queue)`);
     
     if (this.playbackContext) {
       this.currentSource = this.playbackContext.createBufferSource();
@@ -547,8 +548,9 @@ export class ProductionAudioManager {
       gainNode.connect(this.playbackContext.destination);
       
       this.currentSource.onended = () => {
-        console.log(`ProductionAudioManager: Audio buffer finished playing`);
+        console.log(`✓ Buffer finished playing`);
         this.currentSource = null;
+        // Automatically play next buffer in queue
         this.playNextInQueue();
       };
       
