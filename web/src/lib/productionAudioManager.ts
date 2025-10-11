@@ -19,7 +19,7 @@ export class ProductionAudioManager {
   private onInterrupt: (() => void) | null = null; // Callback for interruption
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
-  private readonly micBoostFactor = 1; // Amplify voice for better VAD detection (AGC disabled)
+  private readonly micBoostFactor = 3; // Amplify voice for better VAD detection (AGC disabled)
   private isPlayingTTS = false; // Track if TTS is currently playing
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
