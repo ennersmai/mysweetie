@@ -19,7 +19,7 @@ export class ProductionAudioManager {
   private onInterrupt: (() => void) | null = null; // Callback for interruption
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
-  private readonly micBoostFactor = 5.0; // Amplify voice for better VAD detection (AGC disabled)
+  private readonly micBoostFactor = 12.0; // VERY high boost - drowns out TTS echo completely
   private isPlayingTTS = false; // Track if TTS is currently playing
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
@@ -27,8 +27,6 @@ export class ProductionAudioManager {
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
   private isInterruptRestart = false; // Flag for MediaRecorder restart on interrupt
-  private secondaryRecorder: MediaRecorder | null = null; // Backup recorder for instant interrupt capture
-  private isUsingSecondary = false; // Track if we're currently using secondary recorder
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -39,7 +37,7 @@ export class ProductionAudioManager {
   private currentVadThreshold = 0.01; // Dynamic threshold that increases during TTS
   private readonly vadHangoverMs = 800; // Reduced for much faster response
   private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
-  private readonly vadMinFrames = 2; // Reduced from 3 for faster response
+  private readonly vadMinFrames = 1; // Instant response - fire on first frame above threshold
   private recentRmsValues: number[] = []; // Track recent RMS values for debugging
 
   async initialize(rawAudioMode: boolean = false): Promise<boolean> {
@@ -182,34 +180,12 @@ export class ProductionAudioManager {
                 this.currentAudioChunks = [];
                 
                 if (isInterrupt) {
-                  console.log('🎤 Interrupt detected - starting SECONDARY recorder INSTANTLY!');
-                  
+                  console.log('🎤 Interrupt detected - restarting to exclude TTS (1-frame VAD = faster trigger = less loss)');
+                  // Restart MediaRecorder to exclude TTS
+                  // With 1-frame VAD, we only lose ~20-40ms instead of 80-100ms
                   if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    const stream = this.recordingStream || this.mediaStream;
-                    if (stream) {
-                      // Start secondary recorder RIGHT NOW (before stopping primary)
-                      this.secondaryRecorder = new MediaRecorder(stream, {
-                        mimeType: this.recordedMimeType,
-                        audioBitsPerSecond: 128000
-                      });
-                      
-                      // Secondary only collects data (no onstop logic)
-                      this.secondaryRecorder.ondataavailable = (event) => {
-                        if (event.data && event.data.size > 0 && this.isUsingSecondary) {
-                          this.currentAudioChunks.push(event.data);
-                          console.log(`📦 [SECONDARY] Captured chunk: ${event.data.size} bytes`);
-                        }
-                      };
-                      
-                      this.secondaryRecorder.start(); // Start NOW
-                      this.isUsingSecondary = true;
-                      console.log('⚡ SECONDARY started INSTANTLY - capturing first word');
-                      
-                      // Now stop and discard primary
-                      this.isInterruptRestart = true;
-                      this.mediaRecorder.stop();
-                      console.log('🗑️ Stopping PRIMARY (discarding TTS)');
-                    }
+                    this.isInterruptRestart = true;
+                    this.mediaRecorder.stop();
                   }
                 } else {
                   console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
@@ -256,71 +232,9 @@ export class ProductionAudioManager {
                 // CLIENT-SIDE ASSEMBLY: Stop the active recorder
                 this.isSendingAudio = false;
                 
-                // If we have a secondary recorder (from interrupt), finalize it
-                if (this.isUsingSecondary && this.secondaryRecorder) {
-                  console.log(`📦 Stopping SECONDARY (has full speech including first word)`);
-                  
-                  if (this.secondaryRecorder.state === 'recording') {
-                    this.secondaryRecorder.stop();
-                  }
-                  
-                  // Wait for final data, then trigger callback
-                  setTimeout(() => {
-                    console.log(`🎤 [SECONDARY] Complete - triggering callback with ${this.currentAudioChunks.length} chunks`);
-                    if (this.onSpeechEnd) {
-                      this.onSpeechEnd();
-                    }
-                    
-                    // Destroy secondary and create fresh primary for next utterance
-                    this.secondaryRecorder = null;
-                    this.isUsingSecondary = false;
-                    
-                    const stream = this.recordingStream || this.mediaStream;
-                    if (stream) {
-                      this.mediaRecorder = new MediaRecorder(stream, {
-                        mimeType: this.recordedMimeType,
-                        audioBitsPerSecond: 128000
-                      });
-                      
-                      // Re-setup primary recorder handlers (same as initial setup)
-                      this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data && event.data.size > 0) {
-                          if (this.isInterruptRestart) {
-                            console.log(`🗑️ Discarding contaminated chunk: ${event.data.size} bytes`);
-                            return;
-                          }
-                          if (this.rawAudioMode && this.onAudioData) {
-                            event.data.arrayBuffer().then((buf) => this.onAudioData!(buf));
-                          } else {
-                            this.currentAudioChunks.push(event.data);
-                            console.log(`📦 Received complete audio file: ${event.data.size} bytes`);
-                          }
-                        }
-                      };
-                      
-                      this.mediaRecorder.onstop = () => {
-                        if (this.isInterruptRestart) {
-                          this.isInterruptRestart = false;
-                          console.log('🗑️ [PRIMARY] Discarded - secondary recorder is now capturing speech');
-                          return;
-                        }
-                        if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
-                          if (this.onSpeechEnd) this.onSpeechEnd();
-                        }
-                        setTimeout(() => {
-                          if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-                            this.mediaRecorder.start();
-                          }
-                        }, 10);
-                      };
-                      
-                      this.mediaRecorder.start();
-                      console.log('✅ Fresh PRIMARY recorder created after secondary - ready for next utterance');
-                    }
-                  }, 50); // Small delay to ensure ondataavailable fires
-                  
-                } else if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                  console.log(`📦 Stopping PRIMARY MediaRecorder to finalize complete utterance`);
+                // Stop MediaRecorder to finalize
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                  console.log(`📦 Stopping MediaRecorder to finalize complete utterance`);
                   this.mediaRecorder.stop();
                   // The onstop handler will trigger onSpeechEnd and restart for next utterance
                 } else {
@@ -814,15 +728,6 @@ export class ProductionAudioManager {
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
     this.isInterruptRestart = false;
-    this.isUsingSecondary = false;
-    
-    // Cleanup secondary recorder if it exists
-    if (this.secondaryRecorder) {
-      if (this.secondaryRecorder.state === 'recording') {
-        this.secondaryRecorder.stop();
-      }
-      this.secondaryRecorder = null;
-    }
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
