@@ -23,6 +23,7 @@ export class ProductionAudioManager {
   private isPlayingTTS = false; // Track if TTS is currently playing
   private isInterrupted = false; // Track if TTS was interrupted by user speech
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
+  private isSendingAudio = false; // Track if we're actively sending audio (VAD-gated)
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -160,6 +161,10 @@ export class ProductionAudioManager {
                 const timestamp = performance.now();
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
+                // VAD-GATED: Start sending audio to backend
+                this.isSendingAudio = true;
+                console.log('🚀 VAD-GATED: Now sending audio chunks to backend');
+                
                 // If user starts speaking during TTS, interrupt it
                 if (this.isPlayingTTS && this.isPlaying) {
                   const interruptStart = performance.now();
@@ -182,7 +187,7 @@ export class ProductionAudioManager {
                   console.log(`⏱️ Interrupt latency: ${(interruptEnd - interruptStart).toFixed(2)}ms`);
                 }
                 
-                // Notify UI for visual feedback
+                // Notify UI for visual feedback (this will trigger user_speech_started message)
                 if (this.onSpeechStart) {
                   this.onSpeechStart();
                 }
@@ -194,6 +199,11 @@ export class ProductionAudioManager {
               if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
                 this.vadSpeaking = false;
                 console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
+                
+                // VAD-GATED: Stop sending audio to backend
+                this.isSendingAudio = false;
+                console.log('🛑 VAD-GATED: Stopped sending audio chunks to backend');
+                
                 // Notify UI
                 if (this.onSpeechEnd) {
                   this.onSpeechEnd();
@@ -242,17 +252,23 @@ export class ProductionAudioManager {
 
     this.mediaRecorder = new MediaRecorder(streamToUse, options);
     
-    // Provide audio chunks continuously while recording
+    // VAD-GATED AUDIO STREAMING: Only send audio when VAD detects speech
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0 && this.onAudioData) {
-        // Always send audio data - let backend handle state management
-        // Log occasionally to verify audio is being sent
-        if (Math.random() < 0.05) {
-          console.log(`MediaRecorder sending: ${event.data.size} bytes (TTS playing: ${this.isPlayingTTS})`);
+        // Only send audio if VAD has detected speech (isSendingAudio = true)
+        if (this.isSendingAudio) {
+          if (Math.random() < 0.05) {
+            console.log(`✅ MediaRecorder sending: ${event.data.size} bytes (VAD active)`);
+          }
+          event.data.arrayBuffer().then((buf) => {
+            this.onAudioData!(buf);
+          });
+        } else {
+          // Silently drop audio when VAD hasn't detected speech
+          if (Math.random() < 0.01) {
+            console.log(`🚫 MediaRecorder dropping: ${event.data.size} bytes (VAD inactive, no speech detected)`);
+          }
         }
-        event.data.arrayBuffer().then((buf) => {
-          this.onAudioData!(buf);
-        });
       }
     };
 
@@ -535,6 +551,7 @@ export class ProductionAudioManager {
     this.analyserNode = null;
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
+    this.isSendingAudio = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {

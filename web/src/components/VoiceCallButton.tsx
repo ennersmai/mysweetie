@@ -364,20 +364,26 @@ export default function VoiceCallButton({
         }
       });
 
-      // Set up VAD callbacks for instant UI feedback
+      // Set up VAD callbacks for VAD-gated audio streaming
       audioManagerRef.current.setSpeechCallbacks(
         () => {
-          // Speech started - log and handle interruption if AI is speaking
+          // Speech started - CRITICAL: Tell backend user has started speaking
           console.log('[FRONTEND] VAD detected speech start');
           
-          // If AI is speaking and user starts talking, send interrupt immediately
-          if (callStateRef.current === 'AI_SPEAKING' && websocketRef.current?.readyState === WebSocket.OPEN) {
-            console.log('🛑 [FRONTEND] User interrupting AI speech - sending interrupt');
-            websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
+          if (websocketRef.current?.readyState === WebSocket.OPEN) {
+            // If AI is speaking, this is an interruption
+            if (callStateRef.current === 'AI_SPEAKING') {
+              console.log('🛑 [FRONTEND] User interrupting AI speech - sending interrupt');
+              websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
+            } else {
+              // Normal speech start - send user_speech_started message
+              console.log('🎤 [FRONTEND] Sending user_speech_started message to backend');
+              websocketRef.current.send(JSON.stringify({ type: 'user_speech_started' }));
+            }
           }
         },
         () => {
-          // Speech ended - log but wait for backend confirmation
+          // Speech ended - VAD has already stopped sending audio chunks
           console.log('[FRONTEND] VAD detected speech end');
         }
       );
@@ -428,15 +434,16 @@ export default function VoiceCallButton({
           shouldSendAudioRef.current = true;
           console.log('[FRONTEND] Starting audio recording, shouldSendAudio:', shouldSendAudioRef.current);
           
-          // Start audio recording
+          // Start audio recording with VAD-gated streaming
           if (audioManagerRef.current) {
             audioManagerRef.current.startRecording((audioData) => {
-              // Only send audio when we should be listening
-              if (ws.readyState === WebSocket.OPEN && shouldSendAudioRef.current) {
-                console.log(`🎤 Sending audio chunk: ${audioData.byteLength} bytes`);
+              // VAD-GATED: Audio is only passed here when VAD has detected speech
+              // No need to check shouldSendAudioRef - VAD gates it in productionAudioManager
+              if (ws.readyState === WebSocket.OPEN) {
+                console.log(`🎤 Sending audio chunk: ${audioData.byteLength} bytes (VAD-gated)`);
                 ws.send(audioData);
               } else {
-                console.log(`🎤 Skipping audio chunk: WebSocket open=${ws.readyState === WebSocket.OPEN}, shouldSend=${shouldSendAudioRef.current}`);
+                console.warn(`🎤 Cannot send audio chunk: WebSocket not open`);
               }
             });
           }
