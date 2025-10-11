@@ -26,7 +26,6 @@ export class ProductionAudioManager {
   private manuallyStoppedPlayback = false; // Track if playback was manually stopped (to prevent onended from firing)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
-  private isIgnoringNextChunk = false; // Flag to ignore stale audio data after interrupt
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -140,11 +139,11 @@ export class ProductionAudioManager {
               this.recentRmsValues.shift();
             }
             
-            // Simple, fixed threshold during TTS - easier to debug and tune
+            // Simple, fixed threshold during TTS - higher to prevent self-triggering
             if (this.isPlayingTTS) {
-              // During TTS: 10x normal threshold for natural interruption
-              // This prevents echo while still allowing normal speaking volume to interrupt
-              this.currentVadThreshold = this.baseVadThreshold * 10;
+              // During TTS: 30x normal threshold to prevent echo from triggering VAD
+              // You need to speak loudly to interrupt
+              this.currentVadThreshold = this.baseVadThreshold * 30;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -153,7 +152,7 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (10x), playing=TRUE, speaking=${this.vadSpeaking}`
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (30x), playing=TRUE, speaking=${this.vadSpeaking}`
                 : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }
@@ -196,16 +195,6 @@ export class ProductionAudioManager {
                   
                   // Stop TTS playback
                   this.stopPlayback();
-                  
-                  // CRITICAL: Restart MediaRecorder to clear its internal buffer
-                  // The MediaRecorder has captured TTS audio before the interrupt
-                  // We need a fresh recording starting NOW
-                  if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    console.log('🔄 Restarting MediaRecorder to clear TTS audio from internal buffer');
-                    this.isIgnoringNextChunk = true; // Mark to ignore the stale ondataavailable
-                    this.mediaRecorder.stop();
-                    // Will be restarted in onstop handler
-                  }
                   
                   // Send explicit interrupt command to backend
                   if (this.onInterrupt) {
@@ -310,13 +299,6 @@ export class ProductionAudioManager {
     // CLIENT-SIDE ASSEMBLY: Buffer complete audio file (with pre-roll)
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
-        // Check if we should ignore this chunk (stale data from before interrupt)
-        if (this.isIgnoringNextChunk) {
-          console.log(`🗑️ Ignoring stale audio chunk (${event.data.size} bytes) - contains TTS audio before interrupt`);
-          this.isIgnoringNextChunk = false; // Reset flag
-          return; // Skip this chunk entirely
-        }
-        
         // RAW AUDIO MODE: Send chunks unconditionally for testing
         if (this.rawAudioMode && this.onAudioData) {
           if (Math.random() < 0.05) {
@@ -723,7 +705,6 @@ export class ProductionAudioManager {
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
-    this.isIgnoringNextChunk = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {

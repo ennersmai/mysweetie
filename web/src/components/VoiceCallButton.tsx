@@ -653,14 +653,31 @@ export default function VoiceCallButton({
     e.preventDefault(); // Prevent form submission
     e.stopPropagation(); // Stop event bubbling
     
-    console.log(`🖱️ Button clicked - isCallActive: ${isCallActive}, callState: ${callState}, disabled: ${disabled}`);
+    const buttonDisabled = isCallActive 
+      ? false 
+      : (disabled || connectionStatus === 'connecting' || micPermission === 'denied');
+    
+    console.log(`🖱️ Button clicked:
+      - isCallActive: ${isCallActive}
+      - callState: ${callState}
+      - disabled prop: ${disabled}
+      - connectionStatus: ${connectionStatus}
+      - micPermission: ${micPermission}
+      - computed disabled: ${buttonDisabled}
+      - isEndingCallRef: ${isEndingCallRef.current}`);
+    
+    // If button is disabled, log why
+    if (buttonDisabled) {
+      console.log('⚠️ Button is disabled, click ignored');
+      return;
+    }
     
     if (!isCallActive) {
       console.log('📞 Starting new call');
       startCall();
     } else {
       // Always end call when button is clicked during active call, regardless of state
-      console.log(`🔴 Ending call - current state: ${callState}, forcing end from any state`);
+      console.log(`🔴 FORCE ending call - current state: ${callState}`);
       endCall(true); // Force=true to bypass any guards
     }
   };
