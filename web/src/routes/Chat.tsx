@@ -1654,6 +1654,14 @@ export default function Chat() {
                       }}
                       onAIResponse={(response) => {
                         console.log('AI responded (final):', response);
+                        
+                        // If empty response (e.g. call ended before AI replied), just reset streaming state
+                        if (!response || response.trim() === '') {
+                          console.log('Empty AI response (call ended) - just resetting streaming state');
+                          setStreaming(false);
+                          return;
+                        }
+                        
                         // Finalize the assistant message
                         assistantMessageRef.current = response;
                         setMessages(prev => {
@@ -1866,6 +1874,14 @@ export default function Chat() {
                       }}
                       onAIResponse={(response) => {
                         console.log('AI responded (final):', response);
+                        
+                        // If empty response (e.g. call ended before AI replied), just reset streaming state
+                        if (!response || response.trim() === '') {
+                          console.log('Empty AI response (call ended) - just resetting streaming state');
+                          setStreaming(false);
+                          return;
+                        }
+                        
                         // Finalize the assistant message
                         assistantMessageRef.current = response;
                         setMessages(prev => {

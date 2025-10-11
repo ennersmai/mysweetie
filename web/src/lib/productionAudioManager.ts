@@ -171,8 +171,9 @@ export class ProductionAudioManager {
                 const timestamp = performance.now();
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
-                // Check if this is an interrupt (speech during TTS)
-                const isInterrupt = this.isPlayingTTS && this.isPlaying;
+                // Check if this is an interrupt (speech during TTS session)
+                // Use isPlayingTTS alone, not isPlaying (queue might be empty between sentences)
+                const isInterrupt = this.isPlayingTTS;
                 
                 // CLIENT-SIDE ASSEMBLY: Clear buffer for new utterance
                 this.currentAudioChunks = [];
