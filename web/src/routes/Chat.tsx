@@ -1625,17 +1625,22 @@ export default function Chat() {
                         console.log('User spoke (final):', transcript);
                         // Add user message to chat
                         setMessages(prev => [...prev, { role: 'user' as const, content: transcript }]);
-                        // Add empty assistant message for streaming
+                        // Add assistant message with loading indicator
                         setMessages(prev => {
-                          const newMessages = [...prev, { role: 'assistant' as const, content: '' }];
+                          const newMessages = [...prev, { role: 'assistant' as const, content: '...' }];
                           currentAssistantIndexRef.current = newMessages.length - 1;
                           return newMessages;
                         });
                         assistantMessageRef.current = '';
                       }}
                       onAIResponseChunk={(chunk) => {
-                        // Stream AI response into chat
-                        assistantMessageRef.current += chunk;
+                        // Stream AI response into chat (replace "..." with actual content on first chunk)
+                        if (assistantMessageRef.current === '') {
+                          // First chunk - replace the "..." loading indicator
+                          assistantMessageRef.current = chunk;
+                        } else {
+                          assistantMessageRef.current += chunk;
+                        }
                         setMessages(prev => {
                           const next = [...prev];
                           const idx = currentAssistantIndexRef.current;
@@ -1835,17 +1840,22 @@ export default function Chat() {
                         console.log('User spoke (final):', transcript);
                         // Add user message to chat
                         setMessages(prev => [...prev, { role: 'user' as const, content: transcript }]);
-                        // Add empty assistant message for streaming
+                        // Add assistant message with loading indicator
                         setMessages(prev => {
-                          const newMessages = [...prev, { role: 'assistant' as const, content: '' }];
+                          const newMessages = [...prev, { role: 'assistant' as const, content: '...' }];
                           currentAssistantIndexRef.current = newMessages.length - 1;
                           return newMessages;
                         });
                         assistantMessageRef.current = '';
                       }}
                       onAIResponseChunk={(chunk) => {
-                        // Stream AI response into chat
-                        assistantMessageRef.current += chunk;
+                        // Stream AI response into chat (replace "..." with actual content on first chunk)
+                        if (assistantMessageRef.current === '') {
+                          // First chunk - replace the "..." loading indicator
+                          assistantMessageRef.current = chunk;
+                        } else {
+                          assistantMessageRef.current += chunk;
+                        }
                         setMessages(prev => {
                           const next = [...prev];
                           const idx = currentAssistantIndexRef.current;

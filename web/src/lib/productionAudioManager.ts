@@ -174,6 +174,11 @@ export class ProductionAudioManager {
                 if (this.isPlayingTTS && this.isPlaying) {
                   const interruptStart = performance.now();
                   console.log(`🛑 VAD: User interrupted TTS at ${interruptStart.toFixed(0)}ms - stopping playback`);
+                  
+                  // CRITICAL: Drop threshold IMMEDIATELY so we can continue tracking user's speech
+                  this.currentVadThreshold = this.baseVadThreshold;
+                  console.log(`🔧 VAD threshold dropped to normal (${this.currentVadThreshold.toFixed(4)}) to track user speech`);
+                  
                   this.stopPlayback();
                   
                   // Send explicit interrupt command to backend (Task 2A)
