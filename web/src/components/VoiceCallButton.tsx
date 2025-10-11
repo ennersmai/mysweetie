@@ -388,6 +388,11 @@ export default function VoiceCallButton({
         }
       );
 
+      // RAW AUDIO MODE: Immediately signal backend to start accepting audio
+      if (rawAudioMode) {
+        console.log('🔧 RAW AUDIO MODE: Setting up manual speech state');
+      }
+
       // Establish WebSocket connection
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -433,6 +438,12 @@ export default function VoiceCallButton({
           callStateRef.current = 'LISTENING';
           shouldSendAudioRef.current = true;
           console.log('[FRONTEND] Starting audio recording, shouldSendAudio:', shouldSendAudioRef.current);
+          
+          // RAW AUDIO MODE: Immediately send user_speech_started to backend
+          if (rawAudioMode) {
+            console.log('🔧 RAW AUDIO MODE: Sending user_speech_started immediately');
+            ws.send(JSON.stringify({ type: 'user_speech_started' }));
+          }
           
           // Start audio recording with VAD-gated streaming
           if (audioManagerRef.current) {

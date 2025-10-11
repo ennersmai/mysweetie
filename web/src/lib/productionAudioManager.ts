@@ -253,10 +253,20 @@ export class ProductionAudioManager {
     this.mediaRecorder = new MediaRecorder(streamToUse, options);
     
     // VAD-GATED AUDIO STREAMING: Only send audio when VAD detects speech
+    // EXCEPT in raw audio mode - send everything for testing
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0 && this.onAudioData) {
-        // Only send audio if VAD has detected speech (isSendingAudio = true)
-        if (this.isSendingAudio) {
+        // RAW AUDIO MODE: Send all audio unconditionally for testing
+        if (this.rawAudioMode) {
+          if (Math.random() < 0.05) {
+            console.log(`🔧 RAW MODE: Sending ${event.data.size} bytes (bypassing VAD)`);
+          }
+          event.data.arrayBuffer().then((buf) => {
+            this.onAudioData!(buf);
+          });
+        }
+        // NORMAL MODE: Only send audio if VAD has detected speech
+        else if (this.isSendingAudio) {
           if (Math.random() < 0.05) {
             console.log(`✅ MediaRecorder sending: ${event.data.size} bytes (VAD active)`);
           }
