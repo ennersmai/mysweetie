@@ -383,12 +383,24 @@ export default function VoiceCallButton({
           }
         },
         () => {
-          // Speech ended - Tell backend to process the audio
+          // Speech ended - Assemble and send complete audio file
           console.log('[FRONTEND] VAD detected speech end');
           
-          if (websocketRef.current?.readyState === WebSocket.OPEN) {
-            console.log('🔇 [FRONTEND] Sending user_speech_ended message to backend');
-            websocketRef.current.send(JSON.stringify({ type: 'user_speech_ended' }));
+          if (websocketRef.current?.readyState === WebSocket.OPEN && audioManagerRef.current) {
+            // CLIENT-SIDE ASSEMBLY: Get the complete audio blob
+            const audioBlob = audioManagerRef.current.getAssembledAudio();
+            
+            if (audioBlob) {
+              console.log(`🎵 [FRONTEND] Sending assembled audio blob: ${audioBlob.size} bytes`);
+              // Send binary audio data first
+              websocketRef.current.send(audioBlob);
+              
+              // Then immediately send speech_ended message
+              console.log('🔇 [FRONTEND] Sending user_speech_ended message to backend');
+              websocketRef.current.send(JSON.stringify({ type: 'user_speech_ended' }));
+            } else {
+              console.warn('[FRONTEND] No audio to send - skipping user_speech_ended');
+            }
           }
         }
       );
@@ -444,17 +456,17 @@ export default function VoiceCallButton({
           shouldSendAudioRef.current = true;
           console.log('[FRONTEND] Starting audio recording, shouldSendAudio:', shouldSendAudioRef.current);
           
-          // Start audio recording with VAD-gated streaming
+          // Start audio recording with client-side assembly
+          // In normal mode: chunks are buffered locally, assembled on speech end
+          // In raw mode: chunks still stream for testing
           if (audioManagerRef.current) {
             audioManagerRef.current.startRecording((audioData) => {
-              // VAD-GATED: Audio is only passed here when VAD has detected speech
-              // No need to check shouldSendAudioRef - VAD gates it in productionAudioManager
-              if (ws.readyState === WebSocket.OPEN) {
-                console.log(`🎤 Sending audio chunk: ${audioData.byteLength} bytes (VAD-gated)`);
+              // RAW AUDIO MODE: Stream chunks for testing (bypass client-side assembly)
+              if (rawAudioMode && ws.readyState === WebSocket.OPEN) {
+                console.log(`🔧 RAW MODE: Sending audio chunk: ${audioData.byteLength} bytes`);
                 ws.send(audioData);
-              } else {
-                console.warn(`🎤 Cannot send audio chunk: WebSocket not open`);
               }
+              // NORMAL MODE: Chunks are buffered in productionAudioManager, not sent here
             });
           }
           

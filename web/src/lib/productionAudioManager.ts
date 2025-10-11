@@ -24,6 +24,7 @@ export class ProductionAudioManager {
   private isInterrupted = false; // Track if TTS was interrupted by user speech
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively sending audio (VAD-gated)
+  private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -161,9 +162,10 @@ export class ProductionAudioManager {
                 const timestamp = performance.now();
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
-                // VAD-GATED: Start sending audio to backend
+                // CLIENT-SIDE ASSEMBLY: Start buffering audio chunks locally
                 this.isSendingAudio = true;
-                console.log('🚀 VAD-GATED: Now sending audio chunks to backend');
+                this.currentAudioChunks = []; // Clear buffer for new utterance
+                console.log('📦 Started buffering audio chunks locally');
                 
                 // If user starts speaking during TTS, interrupt it
                 if (this.isPlayingTTS && this.isPlaying) {
@@ -200,11 +202,11 @@ export class ProductionAudioManager {
                 this.vadSpeaking = false;
                 console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
                 
-                // VAD-GATED: Stop sending audio to backend
+                // CLIENT-SIDE ASSEMBLY: Stop buffering
                 this.isSendingAudio = false;
-                console.log('🛑 VAD-GATED: Stopped sending audio chunks to backend');
+                console.log(`📦 Stopped buffering. Total chunks collected: ${this.currentAudioChunks.length}`);
                 
-                // Notify UI
+                // Notify UI (will trigger assembly and sending)
                 if (this.onSpeechEnd) {
                   this.onSpeechEnd();
                 }
@@ -252,12 +254,11 @@ export class ProductionAudioManager {
 
     this.mediaRecorder = new MediaRecorder(streamToUse, options);
     
-    // VAD-GATED AUDIO STREAMING: Only send audio when VAD detects speech
-    // EXCEPT in raw audio mode - send everything for testing
+    // CLIENT-SIDE ASSEMBLY: Buffer chunks locally, assemble complete file on speech end
     this.mediaRecorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0 && this.onAudioData) {
+      if (event.data && event.data.size > 0) {
         // RAW AUDIO MODE: Send all audio unconditionally for testing
-        if (this.rawAudioMode) {
+        if (this.rawAudioMode && this.onAudioData) {
           if (Math.random() < 0.05) {
             console.log(`🔧 RAW MODE: Sending ${event.data.size} bytes (bypassing VAD)`);
           }
@@ -265,18 +266,16 @@ export class ProductionAudioManager {
             this.onAudioData!(buf);
           });
         }
-        // NORMAL MODE: Only send audio if VAD has detected speech
+        // NORMAL MODE: Buffer chunks locally while speech is active
         else if (this.isSendingAudio) {
+          this.currentAudioChunks.push(event.data);
           if (Math.random() < 0.05) {
-            console.log(`✅ MediaRecorder sending: ${event.data.size} bytes (VAD active)`);
+            console.log(`📦 Buffering audio chunk locally: ${event.data.size} bytes (total chunks: ${this.currentAudioChunks.length})`);
           }
-          event.data.arrayBuffer().then((buf) => {
-            this.onAudioData!(buf);
-          });
         } else {
           // Silently drop audio when VAD hasn't detected speech
           if (Math.random() < 0.01) {
-            console.log(`🚫 MediaRecorder dropping: ${event.data.size} bytes (VAD inactive, no speech detected)`);
+            console.log(`🚫 Dropping audio chunk: ${event.data.size} bytes (VAD inactive)`);
           }
         }
       }
@@ -548,6 +547,22 @@ export class ProductionAudioManager {
   setInterruptCallback(callback: (() => void) | null): void {
     console.log('ProductionAudioManager: Setting interrupt callback:', callback ? 'SET' : 'NULL');
     this.onInterrupt = callback;
+  }
+
+  getAssembledAudio(): Blob | null {
+    if (this.currentAudioChunks.length === 0) {
+      console.warn('No audio chunks to assemble');
+      return null;
+    }
+    
+    // Assemble all chunks into a single valid audio file
+    const finalBlob = new Blob(this.currentAudioChunks, { type: 'audio/webm' });
+    console.log(`🎵 Assembled ${this.currentAudioChunks.length} chunks into final audio blob: ${finalBlob.size} bytes`);
+    
+    // Clear the buffer
+    this.currentAudioChunks = [];
+    
+    return finalBlob;
   }
 
   cleanup(): void {
