@@ -139,12 +139,12 @@ export class ProductionAudioManager {
               this.recentRmsValues.shift();
             }
             
-            // Simple, fixed threshold during TTS - VERY high to ensure user voice dominates
+            // Simple, fixed threshold during TTS - balanced for natural interruption
             if (this.isPlayingTTS) {
-              // During TTS: 50x normal threshold 
-              // This ensures when VAD triggers, your voice is 50x louder than background
-              // So the TTS contamination is minimal (~2% of signal)
-              this.currentVadThreshold = this.baseVadThreshold * 50;
+              // During TTS: 8x normal threshold (sweet spot)
+              // Threshold: 0.08, normal speech: ~0.0875 RMS - triggers reliably!
+              // Combined with echo cancellation + no restart = keeps first word!
+              this.currentVadThreshold = this.baseVadThreshold * 8;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -153,7 +153,7 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (50x), playing=TRUE, speaking=${this.vadSpeaking}`
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (8x), playing=TRUE, speaking=${this.vadSpeaking}`
                 : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }
