@@ -187,10 +187,9 @@ export class ProductionAudioManager {
                     this.onInterrupt();
                   }
                   
-                  // Notify backend about interruption immediately
-                  if (this.onPlaybackComplete) {
-                    this.onPlaybackComplete();
-                  }
+                  // NOTE: We do NOT call onPlaybackComplete() here!
+                  // The 'interrupt' message is sufficient - the backend will handle state transitions.
+                  // Calling onPlaybackComplete() would send tts_playback_finished and cause state machine errors.
                   
                   const interruptEnd = performance.now();
                   console.log(`⏱️ Interrupt latency: ${(interruptEnd - interruptStart).toFixed(2)}ms`);
