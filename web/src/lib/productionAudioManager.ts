@@ -141,8 +141,9 @@ export class ProductionAudioManager {
             
             // Simple, fixed threshold during TTS - easier to debug and tune
             if (this.isPlayingTTS) {
-              // During TTS: 10x normal threshold to prevent echo triggering VAD
-              this.currentVadThreshold = this.baseVadThreshold * 10;
+              // During TTS: 20x normal threshold to prevent echo triggering VAD
+              // Even with echo cancellation, some TTS leaks through at high volumes
+              this.currentVadThreshold = this.baseVadThreshold * 20;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -151,7 +152,7 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (10x), playing=TRUE, speaking=${this.vadSpeaking}`
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (20x), playing=TRUE, speaking=${this.vadSpeaking}`
                 : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }

@@ -566,14 +566,14 @@ export default function VoiceCallButton({
     }
   };
 
-  const endCall = () => {
-    if (isEndingCallRef.current) {
+  const endCall = (force = false) => {
+    if (isEndingCallRef.current && !force) {
       console.log('Already ending call, skipping duplicate endCall');
       return;
     }
     
     isEndingCallRef.current = true;
-    console.log('Ending call...');
+    console.log('Ending call...' + (force ? ' (FORCED)' : ''));
     
     setIsCallActive(false);
     setCallState('IDLE');
@@ -655,8 +655,8 @@ export default function VoiceCallButton({
       startCall();
     } else {
       // Always end call when button is clicked during active call, regardless of state
-      console.log('🔴 Ending call from any state (user clicked button)');
-      endCall();
+      console.log('🔴 User clicked button to end call - forcing end from any state');
+      endCall(true); // Force=true to bypass any guards
     }
   };
 
