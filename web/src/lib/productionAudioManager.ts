@@ -37,6 +37,8 @@ export class ProductionAudioManager {
   private readonly vadHangoverMs = 800; // Reduced for much faster response
   private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
   private readonly vadMinFrames = 2; // Reduced from 3 for faster response
+  private ttsStartTime = 0; // Timestamp when TTS playback started
+  private readonly TTS_GRACE_PERIOD_MS = 600; // Don't allow interrupts for first 600ms of TTS
   private recentRmsValues: number[] = []; // Track recent RMS values for adaptive threshold
 
   async initialize(rawAudioMode: boolean = false): Promise<boolean> {
@@ -133,24 +135,16 @@ export class ProductionAudioManager {
             const rms = Math.sqrt(sum / timeDomain.length);
             const now = performance.now();
             
-            // Update recent RMS values for adaptive threshold
+            // Update recent RMS values for debugging
             this.recentRmsValues.push(rms);
             if (this.recentRmsValues.length > 50) {
               this.recentRmsValues.shift();
             }
             
-            // Calculate average recent RMS (background noise/TTS level)
-            const avgRms = this.recentRmsValues.reduce((a, b) => a + b, 0) / this.recentRmsValues.length;
-            
-            // Adaptive threshold: increase during TTS to prevent feedback, but allow barge-in
+            // Simple, fixed threshold during TTS - easier to debug and tune
             if (this.isPlayingTTS) {
-              // During TTS, use BOTH a higher base threshold AND require speech to be 3x louder than background
-              // Base: 10x normal threshold (ignore quiet echo)
-              // Relative: Must be 3x louder than recent average (TTS volume)
-              // This prevents TTS self-triggering while allowing natural interruption
-              const baseThreshold = this.baseVadThreshold * 10;
-              const relativeThreshold = avgRms * 3;
-              this.currentVadThreshold = Math.max(baseThreshold, relativeThreshold);
+              // During TTS: 10x normal threshold to prevent echo triggering VAD
+              this.currentVadThreshold = this.baseVadThreshold * 10;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -159,8 +153,8 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)}, avgRms=${avgRms.toFixed(4)}, playing=TRUE, speaking=${this.vadSpeaking}`
-                : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)}, playing=false, speaking=${this.vadSpeaking}`;
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (10x), playing=TRUE, speaking=${this.vadSpeaking}`
+                : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }
             
@@ -179,6 +173,18 @@ export class ProductionAudioManager {
                 
                 // Check if this is an interrupt (speech during TTS)
                 const isInterrupt = this.isPlayingTTS && this.isPlaying;
+                
+                // Check if we're in the TTS grace period (prevent TTS from triggering itself)
+                const timeSinceTTSStart = performance.now() - this.ttsStartTime;
+                const inGracePeriod = isInterrupt && timeSinceTTSStart < this.TTS_GRACE_PERIOD_MS;
+                
+                if (inGracePeriod) {
+                  // Ignore this trigger - TTS just started and might be triggering itself
+                  console.log(`⏸️ Ignoring VAD trigger during TTS grace period (${timeSinceTTSStart.toFixed(0)}ms < ${this.TTS_GRACE_PERIOD_MS}ms)`);
+                  this.vadSpeaking = false;
+                  this.vadConsecutiveFrames = 0;
+                  return; // Exit early from this VAD check iteration
+                }
                 
                 // CLIENT-SIDE ASSEMBLY: Mark speech start (keep recording for pre-roll)
                 if (!isInterrupt) {
@@ -387,6 +393,7 @@ export class ProductionAudioManager {
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
+      this.ttsStartTime = performance.now(); // Record start time for grace period
       // Reset manual stop flag for new session
       this.manuallyStoppedPlayback = false;
     }
@@ -617,6 +624,7 @@ export class ProductionAudioManager {
     this.audioQueue = [];
     this.isPlaying = false;
     this.isPlayingTTS = false; // Reset TTS playing state
+    this.ttsStartTime = 0; // Reset grace period timer
     
     // Clear PCM accumulator to prevent any remaining audio from playing
     if (this.pcmAccumulatorTimer) {
@@ -652,6 +660,7 @@ export class ProductionAudioManager {
     if (this.isPlayingTTS) {
       console.log('✅ Marking TTS session as complete');
       this.isPlayingTTS = false;
+      this.ttsStartTime = 0; // Reset grace period timer
       
       // Only notify if the queue is actually empty (playback is done)
       if (!this.isPlaying && this.onPlaybackComplete) {
