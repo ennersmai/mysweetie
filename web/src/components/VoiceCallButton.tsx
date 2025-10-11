@@ -567,13 +567,15 @@ export default function VoiceCallButton({
   };
 
   const endCall = (force = false) => {
+    console.log(`🔴 endCall() invoked - force: ${force}, isEndingCallRef: ${isEndingCallRef.current}, isCallActive: ${isCallActive}, callState: ${callState}`);
+    
     if (isEndingCallRef.current && !force) {
-      console.log('Already ending call, skipping duplicate endCall');
+      console.log('⚠️ Already ending call, skipping duplicate endCall');
       return;
     }
     
     isEndingCallRef.current = true;
-    console.log('Ending call...' + (force ? ' (FORCED)' : ''));
+    console.log('✅ Ending call...' + (force ? ' (FORCED)' : ''));
     
     setIsCallActive(false);
     setCallState('IDLE');
@@ -651,11 +653,14 @@ export default function VoiceCallButton({
     e.preventDefault(); // Prevent form submission
     e.stopPropagation(); // Stop event bubbling
     
+    console.log(`🖱️ Button clicked - isCallActive: ${isCallActive}, callState: ${callState}, disabled: ${disabled}`);
+    
     if (!isCallActive) {
+      console.log('📞 Starting new call');
       startCall();
     } else {
       // Always end call when button is clicked during active call, regardless of state
-      console.log('🔴 User clicked button to end call - forcing end from any state');
+      console.log(`🔴 Ending call - current state: ${callState}, forcing end from any state`);
       endCall(true); // Force=true to bypass any guards
     }
   };
@@ -685,7 +690,9 @@ export default function VoiceCallButton({
         title={getTooltipText()}
         style={{
           transform: `scale(${getButtonScale()})`,
-          transition: 'transform 0.1s ease-out'
+          transition: 'transform 0.1s ease-out',
+          zIndex: 50, // Ensure button is always on top
+          pointerEvents: 'auto' // Ensure button always receives clicks
         }}
       >
         {connectionStatus === 'connecting' ? (

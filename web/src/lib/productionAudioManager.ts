@@ -196,6 +196,15 @@ export class ProductionAudioManager {
                   // Stop TTS playback
                   this.stopPlayback();
                   
+                  // CRITICAL: Restart MediaRecorder to clear its internal buffer
+                  // The MediaRecorder has captured TTS audio before the interrupt
+                  // We need a fresh recording starting NOW
+                  if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    console.log('🔄 Restarting MediaRecorder to clear TTS audio from internal buffer');
+                    this.mediaRecorder.stop();
+                    // Will be restarted in onstop handler
+                  }
+                  
                   // Send explicit interrupt command to backend
                   if (this.onInterrupt) {
                     console.log('⚡ Sending interrupt command to backend');
