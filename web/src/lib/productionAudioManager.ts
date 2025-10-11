@@ -306,6 +306,12 @@ export class ProductionAudioManager {
     // CLIENT-SIDE ASSEMBLY: Buffer complete audio file (with pre-roll)
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
+        // Check if we're restarting due to interrupt - discard this contaminated chunk
+        if (this.isInterruptRestart) {
+          console.log(`🗑️ Discarding contaminated audio chunk (${event.data.size} bytes) - contains TTS before interrupt`);
+          return; // Skip this chunk
+        }
+        
         // RAW AUDIO MODE: Send chunks unconditionally for testing
         if (this.rawAudioMode && this.onAudioData) {
           if (Math.random() < 0.05) {

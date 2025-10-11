@@ -121,9 +121,9 @@ export default function VoiceCallButton({
   }, [isCallActive, callState]);
 
   const handleWebSocketMessage = useCallback((event: MessageEvent) => {
-    // Ignore messages if WebSocket has been closed (call ended)
-    if (!websocketRef.current) {
-      console.log('⚠️ Ignoring WebSocket message (call already ended)');
+    // Ignore messages if call is ending or has ended
+    if (!websocketRef.current || isEndingCallRef.current) {
+      console.log('⚠️ Ignoring WebSocket message (call ended or ending)');
       return;
     }
     
@@ -605,6 +605,13 @@ export default function VoiceCallButton({
     if (sessionIdRef.current) {
       apiClient.post(`/call/${sessionIdRef.current}/end`, {}).catch(console.error);
       sessionIdRef.current = null;
+    }
+    
+    // Notify parent that call ended (reset streaming state in Chat)
+    // Send empty AI response to finalize any pending message
+    if (onAIResponse) {
+      console.log('📞 Notifying parent: call ended, finalizing AI response');
+      onAIResponse(''); // This will reset streaming state in Chat
     }
     
     // Now update UI states (after WebSocket is closed)
