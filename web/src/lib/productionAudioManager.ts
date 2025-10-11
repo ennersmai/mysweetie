@@ -16,11 +16,13 @@ export class ProductionAudioManager {
   private onPlaybackComplete: (() => void) | null = null;
   private onSpeechStart: (() => void) | null = null;
   private onSpeechEnd: (() => void) | null = null;
+  private onInterrupt: (() => void) | null = null; // Callback for interruption
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
   private readonly micBoostFactor = 1.5; // Reduced from 4.0 to prevent distortion
   private isPlayingTTS = false; // Track if TTS is currently playing
   private isInterrupted = false; // Track if TTS was interrupted by user speech
+  private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -34,13 +36,19 @@ export class ProductionAudioManager {
   private readonly vadMinFrames = 2; // Reduced from 3 for faster response
   private recentRmsValues: number[] = []; // Track recent RMS values for adaptive threshold
 
-  async initialize(): Promise<boolean> {
+  async initialize(rawAudioMode: boolean = false): Promise<boolean> {
     try {
       // Initialize VAD state
       this.isPlayingTTS = false;
-      console.log('ProductionAudioManager: Initializing audio system');
+      this.rawAudioMode = rawAudioMode;
       
-      // Request microphone access
+      if (rawAudioMode) {
+        console.log('🔧 RAW AUDIO MODE ENABLED - Bypassing VAD for AEC verification');
+      } else {
+        console.log('ProductionAudioManager: Initializing audio system with VAD');
+      }
+      
+      // Request microphone access with explicit echo cancellation
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -50,13 +58,46 @@ export class ProductionAudioManager {
         }
       });
 
+      // Verify and log what constraints were actually applied
+      const track = this.mediaStream.getAudioTracks()[0];
+      const settings = track.getSettings();
+      const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+      
+      console.log('🎤 Audio Track Capabilities:', {
+        echoCancellation: capabilities.echoCancellation || 'N/A',
+        noiseSuppression: capabilities.noiseSuppression || 'N/A',
+        autoGainControl: capabilities.autoGainControl || 'N/A'
+      });
+      
+      console.log('🎤 Audio Track Settings (Applied):', {
+        echoCancellation: settings.echoCancellation,
+        noiseSuppression: settings.noiseSuppression,
+        autoGainControl: settings.autoGainControl,
+        sampleRate: settings.sampleRate,
+        channelCount: settings.channelCount
+      });
+      
+      if (!settings.echoCancellation) {
+        console.warn('⚠️ WARNING: Echo cancellation is NOT enabled! This may cause feedback.');
+      } else {
+        console.log('✅ Echo cancellation is ENABLED');
+      }
+
+      // Create separate playback context at 24kHz for TTS (always needed)
+      this.playbackContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      console.log('ProductionAudioManager: Playback context created at', this.playbackContext.sampleRate, 'Hz');
+
+      // RAW AUDIO MODE: Skip VAD setup entirely
+      if (rawAudioMode) {
+        console.log('🔧 RAW AUDIO MODE: Skipping VAD setup, using echo-cancelled stream directly');
+        this.recordingStream = this.mediaStream; // Use original echo-cancelled stream
+        return true;
+      }
+
+      // NORMAL MODE: Set up VAD with separate analysis pipeline
       // Create recording context at browser's native sample rate (usually 48kHz)
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
-      
-      // Create separate playback context at 24kHz for TTS
-      this.playbackContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      console.log('ProductionAudioManager: Playback context created at', this.playbackContext.sampleRate, 'Hz');
 
       // Set up mic gain, analyser, and recording destination for VAD + boosted recording
       try {
@@ -116,18 +157,29 @@ export class ProductionAudioManager {
               // Only confirm speech after consecutive frames
               if (!this.vadSpeaking && this.vadConsecutiveFrames >= this.vadMinFrames) {
                 this.vadSpeaking = true;
-                console.log(`🎤 VAD: SPEECH DETECTED (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
+                const timestamp = performance.now();
+                console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
                 
                 // If user starts speaking during TTS, interrupt it
                 if (this.isPlayingTTS && this.isPlaying) {
-                  console.log('🛑 VAD: User interrupted TTS - stopping playback');
+                  const interruptStart = performance.now();
+                  console.log(`🛑 VAD: User interrupted TTS at ${interruptStart.toFixed(0)}ms - stopping playback`);
                   this.isInterrupted = true;
                   this.stopPlayback();
+                  
+                  // Send explicit interrupt command to backend (Task 2A)
+                  if (this.onInterrupt) {
+                    console.log('⚡ Sending interrupt command to backend');
+                    this.onInterrupt();
+                  }
                   
                   // Notify backend about interruption immediately
                   if (this.onPlaybackComplete) {
                     this.onPlaybackComplete();
                   }
+                  
+                  const interruptEnd = performance.now();
+                  console.log(`⏱️ Interrupt latency: ${(interruptEnd - interruptStart).toFixed(2)}ms`);
                 }
                 
                 // Notify UI for visual feedback
@@ -163,7 +215,10 @@ export class ProductionAudioManager {
   }
 
   startRecording(onAudioData: (data: ArrayBuffer) => void): boolean {
-    if (!this.recordingStream) {
+    // Use original echo-cancelled stream in raw mode, or processed stream in normal mode
+    const streamToUse = this.rawAudioMode ? this.mediaStream : this.recordingStream;
+    
+    if (!streamToUse) {
       console.error('Media stream not initialized');
       return false;
     }
@@ -181,7 +236,11 @@ export class ProductionAudioManager {
       options.mimeType = 'audio/webm';
     }
 
-    this.mediaRecorder = new MediaRecorder(this.recordingStream, options);
+    if (this.rawAudioMode) {
+      console.log('🔧 RAW AUDIO MODE: Using original echo-cancelled MediaStream for MediaRecorder');
+    }
+
+    this.mediaRecorder = new MediaRecorder(streamToUse, options);
     
     // Provide audio chunks continuously while recording
     this.mediaRecorder.ondataavailable = (event) => {
@@ -458,6 +517,11 @@ export class ProductionAudioManager {
   setSpeechCallbacks(onSpeechStart: (() => void) | null, onSpeechEnd: (() => void) | null): void {
     this.onSpeechStart = onSpeechStart;
     this.onSpeechEnd = onSpeechEnd;
+  }
+
+  setInterruptCallback(callback: (() => void) | null): void {
+    console.log('ProductionAudioManager: Setting interrupt callback:', callback ? 'SET' : 'NULL');
+    this.onInterrupt = callback;
   }
 
   cleanup(): void {

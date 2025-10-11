@@ -314,13 +314,30 @@ export default function VoiceCallButton({
       // Initialize audio manager
       audioManagerRef.current = new ProductionAudioManager();
       
-      const initialized = await audioManagerRef.current.initialize();
+      // Check for raw audio mode (debug flag via localStorage)
+      const rawAudioMode = localStorage.getItem('voice_raw_audio_mode') === 'true';
+      if (rawAudioMode) {
+        console.log('🔧 RAW AUDIO MODE enabled via localStorage');
+      }
+      
+      const initialized = await audioManagerRef.current.initialize(rawAudioMode);
       
       if (!initialized) {
         onError?.('Failed to initialize audio system. Please check your browser settings.');
         setConnectionStatus('disconnected');
         return false;
       }
+
+      // Set up interrupt callback (Task 2A) - send immediate interrupt to backend
+      audioManagerRef.current.setInterruptCallback(() => {
+        if (websocketRef.current?.readyState === WebSocket.OPEN) {
+          const interruptTimestamp = performance.now();
+          console.log(`⚡ [FRONTEND] Sending interrupt command at ${interruptTimestamp.toFixed(0)}ms`);
+          websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
+        } else {
+          console.warn('[FRONTEND] Cannot send interrupt - WebSocket not open');
+        }
+      });
 
       // Set up audio manager callback to notify backend when TTS is actually done playing
       audioManagerRef.current.setPlaybackCompleteCallback(() => {
