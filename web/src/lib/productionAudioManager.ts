@@ -27,6 +27,8 @@ export class ProductionAudioManager {
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
   private isInterruptRestart = false; // Flag for MediaRecorder restart on interrupt
+  private secondaryRecorder: MediaRecorder | null = null; // Backup recorder for instant interrupt capture
+  private isUsingSecondary = false; // Track if we're currently using secondary recorder
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -180,12 +182,33 @@ export class ProductionAudioManager {
                 this.currentAudioChunks = [];
                 
                 if (isInterrupt) {
-                  console.log('🎤 Interrupt detected - restarting to exclude TTS (4-frame VAD = 80ms delay)');
-                  // Restart MediaRecorder to exclude TTS
-                  // Loses ~80-100ms of first word, but ensures clean transcript
+                  console.log('🎤 Interrupt detected - starting SECONDARY recorder to capture first word');
+                  
                   if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    this.isInterruptRestart = true;
-                    this.mediaRecorder.stop();
+                    const stream = this.recordingStream || this.mediaStream;
+                    if (stream) {
+                      // Start secondary recorder BEFORE stopping primary
+                      this.secondaryRecorder = new MediaRecorder(stream, {
+                        mimeType: this.recordedMimeType,
+                        audioBitsPerSecond: 128000
+                      });
+                      
+                      this.secondaryRecorder.ondataavailable = (event: BlobEvent) => {
+                        if (event.data && event.data.size > 0 && this.isUsingSecondary) {
+                          this.currentAudioChunks.push(event.data);
+                          console.log(`📦 [SECONDARY] Captured: ${event.data.size} bytes`);
+                        }
+                      };
+                      
+                      this.secondaryRecorder.start(); // Start NOW - captures first word!
+                      this.isUsingSecondary = true;
+                      console.log('⚡ SECONDARY started - capturing first word');
+                      
+                      // Now stop primary (discard TTS)
+                      this.isInterruptRestart = true;
+                      this.mediaRecorder.stop();
+                      console.log('🗑️ Stopping PRIMARY (discarding TTS)');
+                    }
                   }
                 } else {
                   console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
@@ -738,6 +761,15 @@ export class ProductionAudioManager {
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
     this.isInterruptRestart = false;
+    this.isUsingSecondary = false;
+    
+    // Cleanup secondary recorder if it exists
+    if (this.secondaryRecorder) {
+      if (this.secondaryRecorder.state === 'recording') {
+        this.secondaryRecorder.stop();
+      }
+      this.secondaryRecorder = null;
+    }
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
