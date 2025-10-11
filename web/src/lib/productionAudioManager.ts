@@ -509,32 +509,21 @@ export class ProductionAudioManager {
   }
 
   private playNextInQueue(): void {
+    // Check if queue is empty
     if (this.audioQueue.length === 0) {
-      console.log('✅ Audio queue empty - all sentences played');
-      this.isPlaying = false;
-      this.isPlayingTTS = false; // No longer playing TTS
-      
-      // Notify playback complete after a short delay to ensure audio has finished
-      setTimeout(() => {
-        if (!this.isInterrupted) {
-          console.log('🎵 TTS session completed normally');
-        } else {
-          console.log('🛑 TTS session was interrupted by user speech');
-        }
-        
-        if (this.onPlaybackComplete && !this.isPlaying) {
-          console.log('🔔 Notifying backend: TTS playback complete');
-          this.onPlaybackComplete();
-        }
-      }, 100);
+      console.log('✅ Audio queue empty - no more buffers to play');
+      // NOTE: Do NOT set isPlaying = false here!
+      // It will be set to false in the onended callback of the last buffer
       return;
     }
 
-    // Play next buffer in queue
+    // CRITICAL: Set isPlaying = true SYNCHRONOUSLY before any async operations
     this.isPlaying = true;
+    
+    // Get next buffer from queue
     const audioBuffer = this.audioQueue.shift()!;
     
-    console.log(`▶️  Playing buffer ${audioBuffer.duration.toFixed(3)}s (${this.audioQueue.length} remaining in queue)`);
+    console.log(`▶️  Playing buffer ${audioBuffer.duration.toFixed(3)}s (isPlaying: ${this.isPlaying}, ${this.audioQueue.length} remaining in queue)`);
     
     if (this.playbackContext) {
       this.currentSource = this.playbackContext.createBufferSource();
@@ -550,8 +539,32 @@ export class ProductionAudioManager {
       this.currentSource.onended = () => {
         console.log(`✓ Buffer finished playing`);
         this.currentSource = null;
-        // Automatically play next buffer in queue
-        this.playNextInQueue();
+        
+        // Check if there are more buffers in queue
+        if (this.audioQueue.length > 0) {
+          console.log(`⏭️  More buffers in queue (${this.audioQueue.length}), playing next`);
+          // Recursively play next buffer (isPlaying stays true)
+          this.playNextInQueue();
+        } else {
+          // Queue is empty - THIS is the only place isPlaying should be set to false
+          console.log('🏁 Last buffer finished, queue empty - setting isPlaying = false');
+          this.isPlaying = false;
+          this.isPlayingTTS = false;
+          
+          // Notify playback complete
+          setTimeout(() => {
+            if (!this.isInterrupted) {
+              console.log('🎵 TTS session completed normally');
+            } else {
+              console.log('🛑 TTS session was interrupted by user speech');
+            }
+            
+            if (this.onPlaybackComplete) {
+              console.log('🔔 Notifying backend: TTS playback complete');
+              this.onPlaybackComplete();
+            }
+          }, 100);
+        }
       };
       
       this.currentSource.start();
