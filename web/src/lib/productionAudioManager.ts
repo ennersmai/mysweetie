@@ -139,12 +139,18 @@ export class ProductionAudioManager {
               this.recentRmsValues.shift();
             }
             
+            // Calculate average recent RMS (background noise/TTS level)
+            const avgRms = this.recentRmsValues.reduce((a, b) => a + b, 0) / this.recentRmsValues.length;
+            
             // Adaptive threshold: increase during TTS to prevent feedback, but allow barge-in
             if (this.isPlayingTTS) {
-              // During TTS, use a lower "barge-in" threshold for instant interruption
-              // This is high enough to ignore echo, but low enough to catch normal speech
-              // 3x threshold = sensitive enough for natural interruption, high enough to ignore echo
-              this.currentVadThreshold = this.baseVadThreshold * 3;
+              // During TTS, use BOTH a higher base threshold AND require speech to be 3x louder than background
+              // Base: 10x normal threshold (ignore quiet echo)
+              // Relative: Must be 3x louder than recent average (TTS volume)
+              // This prevents TTS self-triggering while allowing natural interruption
+              const baseThreshold = this.baseVadThreshold * 10;
+              const relativeThreshold = avgRms * 3;
+              this.currentVadThreshold = Math.max(baseThreshold, relativeThreshold);
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -152,15 +158,21 @@ export class ProductionAudioManager {
             
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
-              console.log(`VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)}, playing=${this.isPlayingTTS}, speaking=${this.vadSpeaking}`);
+              const debugInfo = this.isPlayingTTS 
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)}, avgRms=${avgRms.toFixed(4)}, playing=TRUE, speaking=${this.vadSpeaking}`
+                : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)}, playing=false, speaking=${this.vadSpeaking}`;
+              console.log(debugInfo);
             }
             
             if (rms >= this.currentVadThreshold) {
               this.vadLastAboveThreshold = now;
               this.vadConsecutiveFrames++;
               
+              // Require more consecutive frames during TTS to prevent spurious triggers from audio glitches
+              const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
+              
               // Only confirm speech after consecutive frames
-              if (!this.vadSpeaking && this.vadConsecutiveFrames >= this.vadMinFrames) {
+              if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
                 this.vadSpeaking = true;
                 const timestamp = performance.now();
                 console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
