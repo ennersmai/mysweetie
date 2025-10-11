@@ -19,7 +19,7 @@ export class ProductionAudioManager {
   private onInterrupt: (() => void) | null = null; // Callback for interruption
   private micGainNode: GainNode | null = null;
   private recordingStream: MediaStream | null = null;
-  private readonly micBoostFactor = 1.5; // Reduced from 4.0 to prevent distortion
+  private readonly micBoostFactor = 3.0; // Amplify voice for better VAD detection (AGC disabled)
   private isPlayingTTS = false; // Track if TTS is currently playing
   private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
   private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
@@ -143,10 +143,10 @@ export class ProductionAudioManager {
             
             // Simple, fixed threshold during TTS - balanced for natural interruption
             if (this.isPlayingTTS) {
-              // During TTS: 7x normal threshold (sweet spot with AGC disabled)
-              // Threshold: 0.07 (blocks TTS echo, allows normal speech to interrupt)
-              // AGC off = no amplification of TTS echo, so lower threshold is safe
-              this.currentVadThreshold = this.baseVadThreshold * 7;
+              // During TTS: 10x normal threshold (balanced with 3x mic boost)
+              // Threshold: 0.10 with 3x mic boost = natural speaking volume to interrupt
+              // AGC off prevents TTS echo amplification
+              this.currentVadThreshold = this.baseVadThreshold * 10;
             } else {
               // Normal operation - use base threshold
               this.currentVadThreshold = this.baseVadThreshold;
@@ -155,7 +155,7 @@ export class ProductionAudioManager {
             // Log VAD activity occasionally for debugging
             if (Math.random() < 0.01) {
               const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (7x), playing=TRUE, speaking=${this.vadSpeaking}`
+                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (10x), playing=TRUE, speaking=${this.vadSpeaking}`
                 : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
               console.log(debugInfo);
             }
