@@ -121,6 +121,12 @@ export default function VoiceCallButton({
   }, [isCallActive, callState]);
 
   const handleWebSocketMessage = useCallback((event: MessageEvent) => {
+    // Ignore messages if WebSocket has been closed (call ended)
+    if (!websocketRef.current) {
+      console.log('⚠️ Ignoring WebSocket message (call already ended)');
+      return;
+    }
+    
     try {
       if (event.data instanceof ArrayBuffer) {
         // Binary audio data from AI
@@ -577,20 +583,16 @@ export default function VoiceCallButton({
     isEndingCallRef.current = true;
     console.log('✅ Ending call...' + (force ? ' (FORCED)' : ''));
     
-    setIsCallActive(false);
-    setCallState('IDLE');
-    setCurrentTranscript('');
-    shouldSendAudioRef.current = false;
+    // CRITICAL: Close WebSocket FIRST to stop incoming messages
+    if (websocketRef.current) {
+      console.log('🔌 Closing WebSocket to stop incoming messages');
+      websocketRef.current.close();
+      websocketRef.current = null;
+    }
     
     // Stop playback immediately
     if (audioManagerRef.current) {
       audioManagerRef.current.stopPlayback();
-    }
-    
-    // Close WebSocket
-    if (websocketRef.current) {
-      websocketRef.current.close();
-      websocketRef.current = null;
     }
 
     // Cleanup audio
@@ -604,14 +606,17 @@ export default function VoiceCallButton({
       apiClient.post(`/call/${sessionIdRef.current}/end`, {}).catch(console.error);
       sessionIdRef.current = null;
     }
-
+    
+    // Now update UI states (after WebSocket is closed)
+    setIsCallActive(false);
+    setCallState('IDLE');
+    setCurrentTranscript('');
+    shouldSendAudioRef.current = false;
     setConnectionStatus('disconnected');
     
-    // Reset the flag after a delay to allow for re-initialization
-    setTimeout(() => {
-      isEndingCallRef.current = false;
-      console.log('Call ended, ready for new call');
-    }, 500);
+    // Reset the flag immediately so button becomes clickable again
+    isEndingCallRef.current = false;
+    console.log('✅ Call ended, button ready for new call');
   };
 
   const getButtonScale = (): number => {

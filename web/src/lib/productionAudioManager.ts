@@ -26,6 +26,7 @@ export class ProductionAudioManager {
   private manuallyStoppedPlayback = false; // Track if playback was manually stopped (to prevent onended from firing)
   private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
   private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
+  private isInterruptRestart = false; // Flag to indicate MediaRecorder restart due to interrupt
 
   // Simple VAD
   private analyserNode: AnalyserNode | null = null;
@@ -173,11 +174,17 @@ export class ProductionAudioManager {
                 // Check if this is an interrupt (speech during TTS)
                 const isInterrupt = this.isPlayingTTS && this.isPlaying;
                 
-                // CLIENT-SIDE ASSEMBLY: ALWAYS clear buffer on speech start
-                // We want ONLY the user's current utterance, not any TTS that leaked into the recording
+                // CLIENT-SIDE ASSEMBLY: Clear buffer for new utterance
                 this.currentAudioChunks = [];
+                
                 if (isInterrupt) {
-                  console.log('🎤 Interrupt detected - clearing buffer to capture ONLY user speech (not TTS echo)');
+                  console.log('🎤 Interrupt detected - need fresh MediaRecorder to exclude TTS audio');
+                  // CRITICAL: Stop current recording that contains TTS audio
+                  // The onstop handler will restart it fresh
+                  if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    this.isInterruptRestart = true; // Flag to indicate this is an interrupt restart
+                    this.mediaRecorder.stop();
+                  }
                 } else {
                   console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
                 }
@@ -316,11 +323,24 @@ export class ProductionAudioManager {
       }
     };
     
-    // Handle MediaRecorder stop event (speech ended)
+    // Handle MediaRecorder stop event (speech ended or interrupt restart)
     this.mediaRecorder.onstop = () => {
-      console.log(`🛑 MediaRecorder stopped (was recording speech: ${!this.isSendingAudio})`);
+      console.log(`🛑 MediaRecorder stopped (interrupt restart: ${this.isInterruptRestart}, was recording speech: ${!this.isSendingAudio})`);
       
-      // Speech ended - trigger callback then restart for next utterance
+      // Check if this is an interrupt restart
+      if (this.isInterruptRestart) {
+        console.log('🔄 Interrupt restart - immediately starting fresh recorder (discarding TTS audio)');
+        this.isInterruptRestart = false; // Reset flag
+        
+        // Immediately restart with fresh recording
+        if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+          this.mediaRecorder.start();
+          console.log('✅ MediaRecorder restarted fresh after interrupt - NOW recording ONLY user speech');
+        }
+        return; // Skip speech end callback
+      }
+      
+      // Normal speech ended - trigger callback then restart for next utterance
       // isSendingAudio is false when speech ended (was set to false before stop)
       if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
         console.log(`🎤 Complete utterance captured (${this.currentAudioChunks.length} chunk), notifying callback`);
@@ -329,7 +349,7 @@ export class ProductionAudioManager {
         }
       }
       
-      // Always restart MediaRecorder for next utterance
+      // Restart MediaRecorder for next utterance (with small delay for normal case)
       setTimeout(() => {
         if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
           this.mediaRecorder.start(); // Restart for next utterance
@@ -705,6 +725,7 @@ export class ProductionAudioManager {
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
+    this.isInterruptRestart = false;
 
     // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
