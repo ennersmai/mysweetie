@@ -24,7 +24,7 @@ export class ProductionAudioManager {
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
   private ringBuffer: Float32Array[] = [];
-  private readonly RING_BUFFER_SIZE = 20; // ~400ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
+  private readonly RING_BUFFER_SIZE = 35; // ~700ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
   private finalAudioBlob: Blob | null = null;
 
@@ -140,7 +140,7 @@ export class ProductionAudioManager {
     
     // Conservative threshold during TTS to prevent false triggers but allow interrupts
     if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 3; // 3x during TTS
+      this.currentVadThreshold = this.baseVadThreshold * 2.5; // 2.5x during TTS (was 3x)
     } else {
       this.currentVadThreshold = this.baseVadThreshold;
     }
@@ -155,7 +155,7 @@ export class ProductionAudioManager {
     // Log VAD activity occasionally for debugging
     if (Math.random() < 0.01) {
       const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (3x), playing=TRUE, speaking=${this.vadSpeaking}`
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (2.5x), playing=TRUE, speaking=${this.vadSpeaking}`
         : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
       console.log(debugInfo);
     }
@@ -165,7 +165,7 @@ export class ProductionAudioManager {
       this.vadConsecutiveFrames++;
       
       // Require more consecutive frames during TTS to prevent false triggers
-      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 3 : this.vadMinFrames;
+      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2.5 : this.vadMinFrames;
       
       // Only confirm speech after consecutive frames
       if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
