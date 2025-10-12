@@ -247,10 +247,9 @@ export default function VoiceCallButton({
           break;
           
         case 'tts_sentence_complete':
-          console.log('🔚 TTS sentence complete signal received (PCM will flush naturally via timer)');
-          // NOTE: We do NOT flush here because TTS audio arrives asynchronously
-          // Flushing now would create tiny fragmented buffers (e.g., 90ms chunks)
-          // The PCM accumulator's timer-based flush handles sentence boundaries properly
+          console.log('🔚 TTS sentence complete signal received - IGNORING for complete text processing');
+          // Ignore sentence boundaries - we want to process the entire text as one unit
+          // Only flush when the entire TTS stream is complete
           break;
           
         case 'tts_stream_end':
