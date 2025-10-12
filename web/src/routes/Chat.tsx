@@ -71,6 +71,44 @@ export default function Chat() {
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
 
+  // Word unspooling for synchronized text rendering with TTS
+  const startWordUnspooling = useCallback(() => {
+    if (wordUnspoolTimerRef.current) {
+      return; // Already unspooling
+    }
+    
+    const unspoolNext = () => {
+      if (wordQueueRef.current.length === 0) {
+        wordUnspoolTimerRef.current = null;
+        return;
+      }
+      
+      const word = wordQueueRef.current.shift()!;
+      assistantMessageRef.current += word;
+      
+      setMessages(prev => {
+        const next = [...prev];
+        const idx = currentAssistantIndexRef.current;
+        if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
+          next[idx] = { ...next[idx], content: assistantMessageRef.current };
+        }
+        return next;
+      });
+      
+      // Auto-scroll during word rendering
+      setTimeout(() => {
+        if (!stickToBottomRef.current) return;
+        const el = messagesListRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }, 10);
+      
+      // Schedule next word (natural speaking pace: ~200ms per word = 300 WPM)
+      wordUnspoolTimerRef.current = window.setTimeout(unspoolNext, 150);
+    };
+    
+    unspoolNext();
+  }, []);
+
   // Auto-resize textarea function
   const autoResizeTextarea = (textarea: HTMLTextAreaElement) => {
     textarea.style.height = 'auto';
@@ -87,6 +125,9 @@ export default function Chat() {
   const wordBufferRef = useRef('');
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const currentAssistantIndexRef = useRef<number | null>(null);
+  // Word queue for synchronized text rendering with TTS
+  const wordQueueRef = useRef<string[]>([]);
+  const wordUnspoolTimerRef = useRef<number | null>(null);
   const [editTarget, setEditTarget] = useState<{ index: number; id?: string; text: string } | null>(null);
   const [editText, setEditText] = useState('');
   const [longPressMessage, setLongPressMessage] = useState<{ index: number; isUser: boolean } | null>(null);
@@ -1632,25 +1673,20 @@ export default function Chat() {
                           return newMessages;
                         });
                         assistantMessageRef.current = '';
+                        // Clear word queue for new response
+                        wordQueueRef.current = [];
+                        if (wordUnspoolTimerRef.current) {
+                          clearTimeout(wordUnspoolTimerRef.current);
+                          wordUnspoolTimerRef.current = null;
+                        }
                         setStreaming(true); // Enable streaming state for BouncingLoader
                       }}
                       onAIResponseChunk={(chunk) => {
-                        // Stream AI response into chat
-                        assistantMessageRef.current += chunk;
-                        setMessages(prev => {
-                          const next = [...prev];
-                          const idx = currentAssistantIndexRef.current;
-                          if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
-                            next[idx] = { ...next[idx], content: assistantMessageRef.current };
-                          }
-                          return next;
-                        });
-                        // Auto-scroll during streaming
-                        setTimeout(() => {
-                          if (!stickToBottomRef.current) return;
-                          const el = messagesListRef.current;
-                          if (el) el.scrollTop = el.scrollHeight;
-                        }, 0);
+                        // Queue word for synchronized rendering with TTS
+                        wordQueueRef.current.push(chunk);
+                        
+                        // Start unspooling if not already running
+                        startWordUnspooling();
                       }}
                       onAIResponse={(response) => {
                         console.log('AI responded (final):', response);
@@ -1852,25 +1888,20 @@ export default function Chat() {
                           return newMessages;
                         });
                         assistantMessageRef.current = '';
+                        // Clear word queue for new response
+                        wordQueueRef.current = [];
+                        if (wordUnspoolTimerRef.current) {
+                          clearTimeout(wordUnspoolTimerRef.current);
+                          wordUnspoolTimerRef.current = null;
+                        }
                         setStreaming(true); // Enable streaming state for BouncingLoader
                       }}
                       onAIResponseChunk={(chunk) => {
-                        // Stream AI response into chat
-                        assistantMessageRef.current += chunk;
-                        setMessages(prev => {
-                          const next = [...prev];
-                          const idx = currentAssistantIndexRef.current;
-                          if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
-                            next[idx] = { ...next[idx], content: assistantMessageRef.current };
-                          }
-                          return next;
-                        });
-                        // Auto-scroll during streaming
-                        setTimeout(() => {
-                          if (!stickToBottomRef.current) return;
-                          const el = messagesListRef.current;
-                          if (el) el.scrollTop = el.scrollHeight;
-                        }, 0);
+                        // Queue word for synchronized rendering with TTS
+                        wordQueueRef.current.push(chunk);
+                        
+                        // Start unspooling if not already running
+                        startWordUnspooling();
                       }}
                       onAIResponse={(response) => {
                         console.log('AI responded (final):', response);
