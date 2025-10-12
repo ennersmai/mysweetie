@@ -1474,7 +1474,7 @@ export default function Chat() {
 
                 {/* Assistant controls above bubble */}
                 {m.role === 'assistant' && (
-                  <div className={`absolute -top-3 left-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2`}>
+                  <div className={`absolute -top-3 right-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2`}>
                     <button
                       type="button"
                       title="Delete message"
