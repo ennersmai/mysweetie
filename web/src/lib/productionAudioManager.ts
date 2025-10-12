@@ -24,7 +24,7 @@ export class ProductionAudioManager {
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
   private ringBuffer: Float32Array[] = [];
-  private readonly RING_BUFFER_SIZE = 300; // ~6000ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
+  private readonly RING_BUFFER_SIZE = 450; // ~1200ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
   private finalAudioBlob: Blob | null = null;
 
