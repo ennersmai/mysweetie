@@ -32,7 +32,7 @@ export class ProductionAudioManager {
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
   private baseVadThreshold = 0.1; // Higher threshold to avoid false triggers from background noise
-  private currentVadThreshold = 0.02;
+  private currentVadThreshold = 0.1;
   private readonly vadHangoverMs = 800;
   private vadConsecutiveFrames = 0;
   private readonly vadMinFrames = 2; // Responsive to speech
