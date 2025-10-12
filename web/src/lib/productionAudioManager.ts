@@ -279,12 +279,12 @@ export class ProductionAudioManager {
     const view = new DataView(buffer);
     
     // "RIFF" chunk descriptor
-    view.setUint32(0, 0x46464952, false); // "RIFF" (big-endian string)
+    view.setUint32(0, 0x52494646, false); // "RIFF" = 0x52('R') 49('I') 46('F') 46('F')
     view.setUint32(4, 36 + dataLength, true); // File size - 8
-    view.setUint32(8, 0x45564157, false); // "WAVE"
+    view.setUint32(8, 0x57415645, false); // "WAVE" = 0x57('W') 41('A') 56('V') 45('E')
     
     // "fmt " sub-chunk
-    view.setUint32(12, 0x20746d66, false); // "fmt "
+    view.setUint32(12, 0x666d7420, false); // "fmt " = 0x66('f') 6d('m') 74('t') 20(' ')
     view.setUint32(16, 16, true); // Subchunk size (16 for PCM)
     view.setUint16(20, 1, true); // Audio format (1 = PCM)
     view.setUint16(22, channels, true);
@@ -294,7 +294,7 @@ export class ProductionAudioManager {
     view.setUint16(34, 16, true); // Bits per sample
     
     // "data" sub-chunk
-    view.setUint32(36, 0x61746164, false); // "data"
+    view.setUint32(36, 0x64617461, false); // "data" = 0x64('d') 61('a') 74('t') 61('a')
     view.setUint32(40, dataLength, true);
     
     return buffer;
