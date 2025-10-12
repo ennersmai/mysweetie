@@ -31,12 +31,17 @@ export class ProductionAudioManager {
   // VAD state
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private baseVadThreshold = 0.01;
-  private currentVadThreshold = 0.01;
+  private baseVadThreshold = 0.03; // Increased base threshold for noise resistance
+  private currentVadThreshold = 0.03;
   private readonly vadHangoverMs = 800;
   private vadConsecutiveFrames = 0;
-  private readonly vadMinFrames = 2;
-  private readonly micBoostFactor = 5.0;
+  private readonly vadMinFrames = 3; // Increased from 2 to 3 for more stability
+  private readonly micBoostFactor = 3.0; // Reduced from 5.0 to 3.0 to reduce noise amplification
+  
+  // Noise floor detection
+  private noiseFloor = 0.005; // Minimum RMS to consider as potential speech
+  private noiseFloorSamples: number[] = [];
+  private readonly NOISE_FLOOR_SAMPLES = 50; // Samples to calculate noise floor
 
   // PCM accumulation for TTS playback
   private pcmAccumulator: Int16Array[] = [];
@@ -136,11 +141,26 @@ export class ProductionAudioManager {
     }
     const rms = Math.sqrt(sum / pcmData.length) * this.micBoostFactor;
     
+    // Update noise floor detection (only when not speaking and not playing TTS)
+    if (!this.vadSpeaking && !this.isPlayingTTS) {
+      this.noiseFloorSamples.push(rms);
+      if (this.noiseFloorSamples.length > this.NOISE_FLOOR_SAMPLES) {
+        this.noiseFloorSamples.shift();
+      }
+      
+      // Calculate adaptive noise floor (90th percentile of recent samples)
+      if (this.noiseFloorSamples.length >= 20) {
+        const sorted = [...this.noiseFloorSamples].sort((a, b) => a - b);
+        const percentile90 = Math.floor(sorted.length * 0.9);
+        this.noiseFloor = Math.max(0.005, sorted[percentile90] * 1.5); // 1.5x the 90th percentile
+      }
+    }
+    
     const now = performance.now();
     
-    // Conservative threshold during TTS to prevent false triggers but allow interrupts
+    // Much more conservative threshold during TTS to prevent false triggers from background noise
     if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 3; // 3x during TTS
+      this.currentVadThreshold = this.baseVadThreshold * 8; // 8x during TTS for noise resistance
     } else {
       this.currentVadThreshold = this.baseVadThreshold;
     }
@@ -150,27 +170,31 @@ export class ProductionAudioManager {
       console.log(`🔍 VAD Threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)}, isPlayingTTS: ${this.isPlayingTTS})`);
     }
     
-    // Short grace period: Ignore VAD for only 200ms after TTS starts
-    const inGracePeriod = this.isPlayingTTS && (now - this.ttsStartTime) < 200;
+    // Extended grace period: Ignore VAD for 500ms after TTS starts to prevent immediate false triggers
+    const inGracePeriod = this.isPlayingTTS && (now - this.ttsStartTime) < 500;
     if (inGracePeriod) {
-      // Skip VAD processing only for very brief period
+      // Skip VAD processing during initial TTS playback
       return;
     }
     
     // Log VAD activity occasionally for debugging
     if (Math.random() < 0.01) {
       const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (3x), playing=TRUE, speaking=${this.vadSpeaking}`
-        : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (8x), noiseFloor=${this.noiseFloor.toFixed(4)}, playing=TRUE, speaking=${this.vadSpeaking}`
+        : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), noiseFloor=${this.noiseFloor.toFixed(4)}, playing=false, speaking=${this.vadSpeaking}`;
       console.log(debugInfo);
     }
     
-    if (rms >= this.currentVadThreshold) {
+    // Check if RMS is above both threshold and noise floor
+    const aboveThreshold = rms >= this.currentVadThreshold;
+    const aboveNoiseFloor = rms >= this.noiseFloor;
+    
+    if (aboveThreshold && aboveNoiseFloor) {
       this.vadLastAboveThreshold = now;
       this.vadConsecutiveFrames++;
       
-      // Require more consecutive frames during TTS to prevent false triggers
-      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 3 : this.vadMinFrames;
+      // Require more consecutive frames during TTS to prevent false triggers from background noise
+      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 4 : this.vadMinFrames;
       
       // Only confirm speech after consecutive frames
       if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
