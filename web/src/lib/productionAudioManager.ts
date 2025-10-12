@@ -145,6 +145,11 @@ export class ProductionAudioManager {
       this.currentVadThreshold = this.baseVadThreshold;
     }
     
+    // Debug: Log threshold changes to track the issue
+    if (Math.random() < 0.02) {
+      console.log(`🔍 VAD Threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)}, isPlayingTTS: ${this.isPlayingTTS})`);
+    }
+    
     // Short grace period: Ignore VAD for only 200ms after TTS starts
     const inGracePeriod = this.isPlayingTTS && (now - this.ttsStartTime) < 200;
     if (inGracePeriod) {
@@ -546,6 +551,7 @@ export class ProductionAudioManager {
     this.vadConsecutiveFrames = 0;
     this.vadLastAboveThreshold = 0;
     this.currentVadThreshold = this.baseVadThreshold;
+    console.log(`🔄 VAD state reset in stopPlayback - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
     
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
@@ -580,7 +586,7 @@ export class ProductionAudioManager {
       this.vadConsecutiveFrames = 0;
       this.vadLastAboveThreshold = 0;
       this.currentVadThreshold = this.baseVadThreshold; // Reset to normal threshold
-      console.log('🔄 VAD state reset after TTS completion');
+      console.log(`🔄 VAD state reset after TTS completion - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
