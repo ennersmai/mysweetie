@@ -137,9 +137,9 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // Adaptive threshold during TTS
+    // Adaptive threshold during TTS - higher to prevent TTS from triggering STT
     if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 2; // 2x during TTS
+      this.currentVadThreshold = this.baseVadThreshold * 4; // 4x during TTS (was 2x)
     } else {
       this.currentVadThreshold = this.baseVadThreshold;
     }
@@ -147,7 +147,7 @@ export class ProductionAudioManager {
     // Log VAD activity occasionally for debugging
     if (Math.random() < 0.01) {
       const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (2x), playing=TRUE, speaking=${this.vadSpeaking}`
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (4x), playing=TRUE, speaking=${this.vadSpeaking}`
         : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
       console.log(debugInfo);
     }
