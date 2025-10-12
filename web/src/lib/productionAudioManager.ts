@@ -106,10 +106,21 @@ export class ProductionAudioManager {
       this.workletNode.port.onmessage = (event) => {
         const pcmData: Float32Array = event.data;
         
-        // Always maintain ring buffer (last ~400ms of audio)
+        // Always maintain ring buffer (last ~1200ms of audio)
         this.ringBuffer.push(pcmData);
         if (this.ringBuffer.length > this.RING_BUFFER_SIZE) {
           this.ringBuffer.shift();
+        }
+        
+        // Debug: Log ring buffer status occasionally
+        if (Math.random() < 0.001) {
+          console.log(`🔍 Ring buffer status: ${this.ringBuffer.length}/${this.RING_BUFFER_SIZE} chunks, TTS playing: ${this.isPlayingTTS}`);
+        }
+        
+        // Ensure recording context stays active during TTS
+        if (this.recordingContext && this.recordingContext.state === 'suspended') {
+          console.log('🔧 Resuming suspended recording context');
+          this.recordingContext.resume();
         }
         
         // Run VAD on this chunk
@@ -211,6 +222,15 @@ export class ProductionAudioManager {
         this.utteranceBuffer = [...this.ringBuffer];
         this.isSendingAudio = true;
         console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll)`);
+        
+        // Debug: Log ring buffer status for interrupts
+        if (isInterrupt) {
+          console.log(`🔍 INTERRUPT DEBUG: Ring buffer has ${this.ringBuffer.length} chunks`);
+          if (this.ringBuffer.length > 0) {
+            const totalSamples = this.ringBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+            console.log(`🔍 INTERRUPT DEBUG: Total pre-roll samples: ${totalSamples} (~${(totalSamples / 48000 * 1000).toFixed(0)}ms)`);
+          }
+        }
         
         // Handle interrupt
         if (isInterrupt) {
