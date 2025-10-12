@@ -35,8 +35,8 @@ export class ProductionAudioManager {
   private currentVadThreshold = 0.02;
   private readonly vadHangoverMs = 800;
   private vadConsecutiveFrames = 0;
-  private readonly vadMinFrames = 2; // Back to 2 for responsiveness
-  private readonly micBoostFactor = 4.0; // Balanced mic boost
+  private readonly vadMinFrames = 2; // Responsive to speech
+  private readonly micBoostFactor = 5.0; // Higher mic boost for better detection
   
   // Noise floor detection
   private noiseFloor = 0.005; // Minimum RMS to consider as potential speech
@@ -193,8 +193,8 @@ export class ProductionAudioManager {
       this.vadLastAboveThreshold = now;
       this.vadConsecutiveFrames++;
       
-      // Require more consecutive frames during TTS to prevent false triggers from background noise
-      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
+      // Same consecutive frames for both cases - responsive to speech
+      const requiredFrames = this.vadMinFrames;
       
       // Only confirm speech after consecutive frames
       if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
