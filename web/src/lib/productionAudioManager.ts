@@ -31,7 +31,7 @@ export class ProductionAudioManager {
   // VAD state
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private baseVadThreshold = 0.005; // More sensitive threshold for quiet microphones
+  private baseVadThreshold = 0.1; // Higher threshold to avoid false triggers from background noise
   private currentVadThreshold = 0.02;
   private readonly vadHangoverMs = 800;
   private vadConsecutiveFrames = 0;
