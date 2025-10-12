@@ -169,12 +169,12 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // Conservative threshold during TTS to prevent false triggers from background noise
-    if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 3; // 3x during TTS for noise resistance
-    } else {
-      this.currentVadThreshold = this.baseVadThreshold;
-    }
+            // Conservative threshold during TTS to prevent false triggers from background noise
+            if (this.isPlayingTTS) {
+              this.currentVadThreshold = this.baseVadThreshold * 2.5; // 2.5x during TTS for noise resistance
+            } else {
+              this.currentVadThreshold = this.baseVadThreshold;
+            }
     
     // Debug: Log threshold changes to track the issue
     if (Math.random() < 0.02) {
