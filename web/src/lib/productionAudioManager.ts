@@ -20,7 +20,6 @@ export class ProductionAudioManager {
   private isSendingAudio = false;
   private manuallyStoppedPlayback = false;
   private ttsStartTime = 0;
-  private readonly TTS_GRACE_PERIOD_MS = 1000; // 1 second grace period after TTS starts
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
@@ -139,28 +138,24 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // Much more aggressive threshold during TTS to prevent false triggers
+    // Moderate threshold during TTS to prevent false triggers but allow interrupts
     if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 8; // 8x during TTS (was 4x)
+      this.currentVadThreshold = this.baseVadThreshold * 2; // 2x during TTS (was 8x)
     } else {
       this.currentVadThreshold = this.baseVadThreshold;
     }
     
-    // TTS Grace Period: Ignore VAD completely for 1 second after TTS starts
-    const inGracePeriod = this.isPlayingTTS && (now - this.ttsStartTime) < this.TTS_GRACE_PERIOD_MS;
+    // Short grace period: Ignore VAD for only 200ms after TTS starts
+    const inGracePeriod = this.isPlayingTTS && (now - this.ttsStartTime) < 200;
     if (inGracePeriod) {
-      // Skip VAD processing entirely during grace period
-      if (Math.random() < 0.05) {
-        const graceRemaining = this.TTS_GRACE_PERIOD_MS - (now - this.ttsStartTime);
-        console.log(`🛡️ TTS Grace Period active: ${graceRemaining.toFixed(0)}ms remaining - ignoring VAD`);
-      }
+      // Skip VAD processing only for very brief period
       return;
     }
     
     // Log VAD activity occasionally for debugging
     if (Math.random() < 0.01) {
       const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (8x), playing=TRUE, speaking=${this.vadSpeaking}`
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (2x), playing=TRUE, speaking=${this.vadSpeaking}`
         : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
       console.log(debugInfo);
     }
@@ -169,16 +164,12 @@ export class ProductionAudioManager {
       this.vadLastAboveThreshold = now;
       this.vadConsecutiveFrames++;
       
-      // Require many more consecutive frames during TTS to prevent false triggers
-      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 4 : this.vadMinFrames;
+      // Require slightly more consecutive frames during TTS to prevent false triggers
+      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
       
       // Only confirm speech after consecutive frames
       if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
-        // Additional safety: If TTS is playing and we have audio in queue, be extra cautious
-        if (this.isPlayingTTS && (this.isPlaying || this.audioQueue.length > 0)) {
-          console.log(`🛡️ TTS is actively playing - ignoring potential false VAD trigger (rms=${rms.toFixed(3)})`);
-          return;
-        }
+        // Allow interrupts - don't block legitimate user speech
         
         this.vadSpeaking = true;
         const timestamp = performance.now();
