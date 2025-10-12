@@ -138,9 +138,9 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // Moderate threshold during TTS to prevent false triggers but allow interrupts
+    // Conservative threshold during TTS to prevent false triggers but allow interrupts
     if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 2; // 2x during TTS (was 8x)
+      this.currentVadThreshold = this.baseVadThreshold * 3; // 3x during TTS
     } else {
       this.currentVadThreshold = this.baseVadThreshold;
     }
@@ -155,7 +155,7 @@ export class ProductionAudioManager {
     // Log VAD activity occasionally for debugging
     if (Math.random() < 0.01) {
       const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (2x), playing=TRUE, speaking=${this.vadSpeaking}`
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (3x), playing=TRUE, speaking=${this.vadSpeaking}`
         : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
       console.log(debugInfo);
     }
@@ -164,8 +164,8 @@ export class ProductionAudioManager {
       this.vadLastAboveThreshold = now;
       this.vadConsecutiveFrames++;
       
-      // Require slightly more consecutive frames during TTS to prevent false triggers
-      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
+      // Require more consecutive frames during TTS to prevent false triggers
+      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 3 : this.vadMinFrames;
       
       // Only confirm speech after consecutive frames
       if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
