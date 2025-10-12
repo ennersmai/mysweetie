@@ -19,6 +19,8 @@ export class ProductionAudioManager {
   private isPlayingTTS = false;
   private isSendingAudio = false;
   private manuallyStoppedPlayback = false;
+  private ttsStartTime = 0;
+  private readonly TTS_GRACE_PERIOD_MS = 1000; // 1 second grace period after TTS starts
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
@@ -137,17 +139,28 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // Adaptive threshold during TTS - higher to prevent TTS from triggering STT
+    // Much more aggressive threshold during TTS to prevent false triggers
     if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 4; // 4x during TTS (was 2x)
+      this.currentVadThreshold = this.baseVadThreshold * 8; // 8x during TTS (was 4x)
     } else {
       this.currentVadThreshold = this.baseVadThreshold;
+    }
+    
+    // TTS Grace Period: Ignore VAD completely for 1 second after TTS starts
+    const inGracePeriod = this.isPlayingTTS && (now - this.ttsStartTime) < this.TTS_GRACE_PERIOD_MS;
+    if (inGracePeriod) {
+      // Skip VAD processing entirely during grace period
+      if (Math.random() < 0.05) {
+        const graceRemaining = this.TTS_GRACE_PERIOD_MS - (now - this.ttsStartTime);
+        console.log(`🛡️ TTS Grace Period active: ${graceRemaining.toFixed(0)}ms remaining - ignoring VAD`);
+      }
+      return;
     }
     
     // Log VAD activity occasionally for debugging
     if (Math.random() < 0.01) {
       const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (4x), playing=TRUE, speaking=${this.vadSpeaking}`
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (8x), playing=TRUE, speaking=${this.vadSpeaking}`
         : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
       console.log(debugInfo);
     }
@@ -156,11 +169,17 @@ export class ProductionAudioManager {
       this.vadLastAboveThreshold = now;
       this.vadConsecutiveFrames++;
       
-      // Require more consecutive frames during TTS
-      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
+      // Require many more consecutive frames during TTS to prevent false triggers
+      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 4 : this.vadMinFrames;
       
       // Only confirm speech after consecutive frames
       if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
+        // Additional safety: If TTS is playing and we have audio in queue, be extra cautious
+        if (this.isPlayingTTS && (this.isPlaying || this.audioQueue.length > 0)) {
+          console.log(`🛡️ TTS is actively playing - ignoring potential false VAD trigger (rms=${rms.toFixed(3)})`);
+          return;
+        }
+        
         this.vadSpeaking = true;
         const timestamp = performance.now();
         console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
@@ -333,6 +352,7 @@ export class ProductionAudioManager {
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
+      this.ttsStartTime = performance.now(); // Start grace period
     }
 
     try {
@@ -528,6 +548,7 @@ export class ProductionAudioManager {
     this.audioQueue = [];
     this.isPlaying = false;
     this.isPlayingTTS = false;
+    this.ttsStartTime = 0; // Reset grace period
     
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
@@ -555,6 +576,7 @@ export class ProductionAudioManager {
     if (this.isPlayingTTS) {
       console.log('✅ Marking TTS session as complete');
       this.isPlayingTTS = false;
+      this.ttsStartTime = 0; // Reset grace period
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
