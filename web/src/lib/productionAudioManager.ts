@@ -541,6 +541,12 @@ export class ProductionAudioManager {
     this.isPlayingTTS = false;
     this.ttsStartTime = 0; // Reset grace period
     
+    // Reset VAD state when playback stops
+    this.vadSpeaking = false;
+    this.vadConsecutiveFrames = 0;
+    this.vadLastAboveThreshold = 0;
+    this.currentVadThreshold = this.baseVadThreshold;
+    
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
       this.pcmAccumulatorTimer = null;
@@ -568,6 +574,13 @@ export class ProductionAudioManager {
       console.log('✅ Marking TTS session as complete');
       this.isPlayingTTS = false;
       this.ttsStartTime = 0; // Reset grace period
+      
+      // Reset VAD state to ensure clean detection after TTS
+      this.vadSpeaking = false;
+      this.vadConsecutiveFrames = 0;
+      this.vadLastAboveThreshold = 0;
+      this.currentVadThreshold = this.baseVadThreshold; // Reset to normal threshold
+      console.log('🔄 VAD state reset after TTS completion');
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
