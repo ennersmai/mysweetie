@@ -1,65 +1,57 @@
 /**
  * Production-Ready Audio Manager for Voice Calls
  * 
- * Clean implementation focusing on reliability and simplicity
+ * AudioWorklet-based implementation with ring buffer for zero first-word loss.
+ * Outputs 16kHz WAV files optimized for Groq STT.
  */
 
 export class ProductionAudioManager {
-  private recordingContext: AudioContext | null = null; // For VAD analysis (native sample rate)
-  private playbackContext: AudioContext | null = null; // For TTS playback (24kHz)
+  private recordingContext: AudioContext | null = null;
+  private playbackContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
-  private mediaRecorder: MediaRecorder | null = null;
   private audioQueue: AudioBuffer[] = [];
   private isPlaying = false;
   private currentSource: AudioBufferSourceNode | null = null;
-  private onAudioData: ((data: ArrayBuffer) => void) | null = null;
   private onPlaybackComplete: (() => void) | null = null;
   private onSpeechStart: (() => void) | null = null;
   private onSpeechEnd: (() => void) | null = null;
-  private onInterrupt: (() => void) | null = null; // Callback for interruption
-  private micGainNode: GainNode | null = null;
-  private recordingStream: MediaStream | null = null;
-  private readonly micBoostFactor = 5.0; // High boost for VAD detection (AGC disabled)
-  private isPlayingTTS = false; // Track if TTS is currently playing
-  private rawAudioMode = false; // Debug flag to bypass VAD for AEC testing
-  private isSendingAudio = false; // Track if we're actively recording speech (VAD-triggered)
-  private manuallyStoppedPlayback = false; // Track if playback was manually stopped (to prevent onended from firing)
-  private currentAudioChunks: Blob[] = []; // Buffer for assembling complete audio file client-side
-  private recordedMimeType = 'audio/webm;codecs=opus'; // Store the actual mime type used by MediaRecorder
-  private isInterruptRestart = false; // Flag for MediaRecorder restart on interrupt
-  private secondaryRecorder: MediaRecorder | null = null; // Backup recorder for instant interrupt capture
-  private isUsingSecondary = false; // Track if we're currently using secondary recorder
+  private onInterrupt: (() => void) | null = null;
+  private isPlayingTTS = false;
+  private isSendingAudio = false;
+  private manuallyStoppedPlayback = false;
 
-  // Simple VAD
-  private analyserNode: AnalyserNode | null = null;
-  private vadIntervalId: number | null = null;
+  // AudioWorklet components
+  private workletNode: AudioWorkletNode | null = null;
+  private ringBuffer: Float32Array[] = [];
+  private readonly RING_BUFFER_SIZE = 20; // ~400ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
+  private utteranceBuffer: Float32Array[] = [];
+  private finalAudioBlob: Blob | null = null;
+
+  // VAD state
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private baseVadThreshold = 0.01; // Base threshold for normal operation
-  private currentVadThreshold = 0.01; // Dynamic threshold that increases during TTS
-  private readonly vadHangoverMs = 800; // Reduced for much faster response
-  private vadConsecutiveFrames = 0; // Count consecutive frames above threshold
-  private readonly vadMinFrames = 2; // 2 frames = 40ms (balanced speed vs stability)
-  private recentRmsValues: number[] = []; // Track recent RMS values for debugging
+  private baseVadThreshold = 0.01;
+  private currentVadThreshold = 0.01;
+  private readonly vadHangoverMs = 800;
+  private vadConsecutiveFrames = 0;
+  private readonly vadMinFrames = 2;
+  private readonly micBoostFactor = 5.0;
 
-  async initialize(rawAudioMode: boolean = false): Promise<boolean> {
+  // PCM accumulation for TTS playback
+  private pcmAccumulator: Int16Array[] = [];
+  private pcmAccumulatorTimer: number | null = null;
+  private readonly PCM_ACCUMULATION_TIME = 200;
+
+  async initialize(): Promise<boolean> {
     try {
-      // Initialize VAD state
-      this.isPlayingTTS = false;
-      this.rawAudioMode = rawAudioMode;
-      
-      if (rawAudioMode) {
-        console.log('🔧 RAW AUDIO MODE ENABLED - Bypassing VAD for AEC verification');
-      } else {
-        console.log('ProductionAudioManager: Initializing audio system with VAD');
-      }
+      console.log('ProductionAudioManager: Initializing AudioWorklet-based audio system');
       
       // Request microphone access with explicit echo cancellation
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: true, // Enable noise suppression for cleaner audio
-          autoGainControl: false, // DISABLED - prevents amplifying TTS echo that leaks through
+          noiseSuppression: true,
+          autoGainControl: false, // Disabled to prevent amplifying TTS echo
           sampleRate: 48000
         }
       });
@@ -67,15 +59,8 @@ export class ProductionAudioManager {
       // Verify and log what constraints were actually applied
       const track = this.mediaStream.getAudioTracks()[0];
       const settings = track.getSettings();
-      const capabilities = track.getCapabilities ? track.getCapabilities() : {};
       
-      console.log('🎤 Audio Track Capabilities:', {
-        echoCancellation: capabilities.echoCancellation || 'N/A',
-        noiseSuppression: capabilities.noiseSuppression || 'N/A',
-        autoGainControl: capabilities.autoGainControl || 'N/A'
-      });
-      
-      console.log('🎤 Audio Track Settings (Applied):', {
+      console.log('🎤 Audio Track Settings:', {
         echoCancellation: settings.echoCancellation,
         noiseSuppression: settings.noiseSuppression,
         autoGainControl: settings.autoGainControl,
@@ -84,257 +69,53 @@ export class ProductionAudioManager {
       });
       
       if (!settings.echoCancellation) {
-        console.warn('⚠️ WARNING: Echo cancellation is NOT enabled! This may cause feedback.');
+        console.warn('⚠️ WARNING: Echo cancellation is NOT enabled!');
       } else {
         console.log('✅ Echo cancellation is ENABLED');
       }
 
-      // Create separate playback context at 24kHz for TTS (always needed)
+      // Create separate playback context at 24kHz for TTS
       this.playbackContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       console.log('ProductionAudioManager: Playback context created at', this.playbackContext.sampleRate, 'Hz');
 
-      // RAW AUDIO MODE: Skip VAD setup entirely
-      if (rawAudioMode) {
-        console.log('🔧 RAW AUDIO MODE: Skipping VAD setup, using echo-cancelled stream directly');
-        this.recordingStream = this.mediaStream; // Use original echo-cancelled stream
-        return true;
-      }
-
-      // NORMAL MODE: Set up VAD with separate analysis pipeline
       // Create recording context at browser's native sample rate (usually 48kHz)
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Set up mic gain, analyser, and recording destination for VAD + boosted recording
-      try {
-        if (this.recordingContext) {
-          const rawSource = this.recordingContext.createMediaStreamSource(this.mediaStream);
-          this.micGainNode = this.recordingContext.createGain();
-          this.micGainNode.gain.value = this.micBoostFactor;
+      // Load AudioWorklet processor
+      await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
+      console.log('✅ AudioWorklet processor loaded');
 
-          this.analyserNode = this.recordingContext.createAnalyser();
-          this.analyserNode.fftSize = 1024;
-          this.analyserNode.smoothingTimeConstant = 0.6;
+      // Create worklet node
+      this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor');
 
-          const destination = this.recordingContext.createMediaStreamDestination();
+      // Connect microphone → worklet → destination (prevents GC)
+      const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
+      source.connect(this.workletNode);
+      this.workletNode.connect(this.recordingContext.destination);
 
-          rawSource.connect(this.micGainNode);
-          this.micGainNode.connect(this.analyserNode);
-          this.micGainNode.connect(destination);
+      console.log('✅ Audio pipeline connected: microphone → worklet → destination');
 
-          this.recordingStream = destination.stream;
-
-          const timeDomain = new Float32Array(this.analyserNode.fftSize);
-          const tick = () => {
-            if (!this.analyserNode) return;
-            this.analyserNode.getFloatTimeDomainData(timeDomain);
-            let sum = 0;
-            for (let i = 0; i < timeDomain.length; i++) {
-              const v = timeDomain[i];
-              sum += v * v;
-            }
-            const rms = Math.sqrt(sum / timeDomain.length);
-            const now = performance.now();
-            
-            // Update recent RMS values for debugging
-            this.recentRmsValues.push(rms);
-            if (this.recentRmsValues.length > 50) {
-              this.recentRmsValues.shift();
-            }
-            
-            // Simple, fixed threshold during TTS - balanced for natural interruption
-            if (this.isPlayingTTS) {
-              // During TTS: 2x normal threshold (sweet spot with AGC off + 5x mic boost)
-              // Threshold: 0.02 with 5x mic boost = natural speaking volume triggers
-              // AGC off prevents TTS echo amplification
-              this.currentVadThreshold = this.baseVadThreshold * 2;
-            } else {
-              // Normal operation - use base threshold
-              this.currentVadThreshold = this.baseVadThreshold;
-            }
-            
-            // Log VAD activity occasionally for debugging
-            if (Math.random() < 0.01) {
-              const debugInfo = this.isPlayingTTS 
-                ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (2x), playing=TRUE, speaking=${this.vadSpeaking}`
-                : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
-              console.log(debugInfo);
-            }
-            
-            if (rms >= this.currentVadThreshold) {
-              this.vadLastAboveThreshold = now;
-              this.vadConsecutiveFrames++;
-              
-              // Require more consecutive frames during TTS to prevent spurious triggers from audio glitches
-              const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
-              
-              // Only confirm speech after consecutive frames
-              if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
-                this.vadSpeaking = true;
-                const timestamp = performance.now();
-                console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
-                
-                // Check if this is an interrupt (speech during TTS session)
-                // Use isPlayingTTS alone, not isPlaying (queue might be empty between sentences)
-                const isInterrupt = this.isPlayingTTS;
-                
-                // Clear buffer for new utterance
-                this.currentAudioChunks = [];
-                
-                if (isInterrupt) {
-                  console.log('🎤 Interrupt detected - starting SECONDARY recorder to capture first word');
-                  
-                  if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    const stream = this.recordingStream || this.mediaStream;
-                    if (stream) {
-                      // Start secondary recorder BEFORE stopping primary
-                      this.secondaryRecorder = new MediaRecorder(stream, {
-                        mimeType: this.recordedMimeType,
-                        audioBitsPerSecond: 128000
-                      });
-                      
-                      this.secondaryRecorder.ondataavailable = (event: BlobEvent) => {
-                        if (event.data && event.data.size > 0 && this.isUsingSecondary) {
-                          this.currentAudioChunks.push(event.data);
-                          console.log(`📦 [SECONDARY] Captured: ${event.data.size} bytes`);
-                        }
-                      };
-                      
-                      this.secondaryRecorder.onstop = () => {
-                        console.log(`🛑 [SECONDARY] Stopped - promoting to primary`);
-                        
-                        // Trigger speech end callback
-                        if (this.currentAudioChunks.length > 0 && this.onSpeechEnd) {
-                          console.log(`🎤 [SECONDARY] Complete (${this.currentAudioChunks.length} chunks), calling onSpeechEnd`);
-                          this.onSpeechEnd();
-                        }
-                        
-                        // Create fresh primary for next utterance
-                        const stream = this.recordingStream || this.mediaStream;
-                        if (stream) {
-                          this.mediaRecorder = new MediaRecorder(stream, {
-                            mimeType: this.recordedMimeType,
-                            audioBitsPerSecond: 128000
-                          });
-                          
-                          // Setup primary handlers (copy from initial setup)
-                          this.mediaRecorder.ondataavailable = (ev: BlobEvent) => {
-                            if (ev.data && ev.data.size > 0) {
-                              if (this.isInterruptRestart) {
-                                console.log(`🗑️ Discarding: ${ev.data.size} bytes`);
-                                return;
-                              }
-                              if (!this.rawAudioMode) {
-                                this.currentAudioChunks.push(ev.data);
-                                console.log(`📦 Received: ${ev.data.size} bytes`);
-                              }
-                            }
-                          };
-                          
-                          this.mediaRecorder.onstop = () => {
-                            if (this.isInterruptRestart) {
-                              this.isInterruptRestart = false;
-                              return;
-                            }
-                            if (!this.isSendingAudio && this.currentAudioChunks.length > 0 && this.onSpeechEnd) {
-                              this.onSpeechEnd();
-                            }
-                            setTimeout(() => {
-                              if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-                                this.mediaRecorder.start();
-                              }
-                            }, 10);
-                          };
-                          
-                          this.mediaRecorder.start();
-                          console.log('✅ [PRIMARY] Recreated after secondary - ready for next');
-                        }
-                        
-                        // Cleanup secondary
-                        this.secondaryRecorder = null;
-                        this.isUsingSecondary = false;
-                      };
-                      
-                      this.secondaryRecorder.start(); // Start NOW - captures first word!
-                      this.isUsingSecondary = true;
-                      console.log('⚡ SECONDARY started - capturing first word');
-                      
-                      // Now stop primary (discard TTS)
-                      this.isInterruptRestart = true;
-                      this.mediaRecorder.stop();
-                      console.log('🗑️ Stopping PRIMARY (discarding TTS)');
-                    }
-                  }
-                } else {
-                  console.log('🎤 Speech started - keeping MediaRecorder running to capture pre-roll');
-                }
-                
-                this.isSendingAudio = true;
-                
-                // If user starts speaking during TTS, interrupt it IMMEDIATELY
-                if (isInterrupt) {
-                  const interruptStart = performance.now();
-                  console.log(`🛑 VAD: User interrupted TTS at ${interruptStart.toFixed(0)}ms - stopping playback IMMEDIATELY`);
-                  
-                  // CRITICAL: Drop threshold IMMEDIATELY so we can continue tracking user's speech
-                  this.currentVadThreshold = this.baseVadThreshold;
-                  console.log(`🔧 VAD threshold dropped to normal (${this.currentVadThreshold.toFixed(4)}) to track user speech`);
-                  
-                  // Stop TTS playback
-                  this.stopPlayback();
-                  
-                  // Send explicit interrupt command to backend
-                  if (this.onInterrupt) {
-                    console.log('⚡ Sending interrupt command to backend');
-                    this.onInterrupt();
-                  }
-                  
-                  const interruptEnd = performance.now();
-                  console.log(`⏱️ Interrupt latency: ${(interruptEnd - interruptStart).toFixed(2)}ms`);
-                }
-                
-                // ALWAYS notify backend that user started speaking (whether interrupting or not)
-                // This ensures immediate transition to USER_SPEAKING state
-                if (this.onSpeechStart) {
-                  this.onSpeechStart();
-                }
-              }
-            } else {
-              // Reset consecutive frames counter
-              this.vadConsecutiveFrames = 0;
-              
-              if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
-                this.vadSpeaking = false;
-                console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
-                
-                // CLIENT-SIDE ASSEMBLY: Stop the active recorder
-                this.isSendingAudio = false;
-                
-                // Reset manual stop flag - user has finished speaking, ready for next AI response
-                this.manuallyStoppedPlayback = false;
-                console.log('🔓 Reset manuallyStoppedPlayback - ready for next AI response');
-                
-                // Stop the ACTIVE recorder to finalize
-                // Check secondary first (used during interrupts), then primary
-                if (this.isUsingSecondary && this.secondaryRecorder && this.secondaryRecorder.state === 'recording') {
-                  console.log(`📦 Stopping SECONDARY recorder (has full speech including first word)`);
-                  this.secondaryRecorder.stop();
-                  // The secondary's onstop was set up in the speech detection section above
-                } else if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                  console.log(`📦 Stopping PRIMARY MediaRecorder to finalize complete utterance`);
-                  this.mediaRecorder.stop();
-                  // The onstop handler will trigger onSpeechEnd and restart for next utterance
-                } else {
-                  console.log(`⚠️ No MediaRecorder recording, cannot finalize`);
-                }
-              }
-            }
-          };
-          this.vadIntervalId = window.setInterval(tick, 20); // Fast polling for responsive VAD
+      // Handle incoming PCM data from worklet
+      this.workletNode.port.onmessage = (event) => {
+        const pcmData: Float32Array = event.data;
+        
+        // Always maintain ring buffer (last ~400ms of audio)
+        this.ringBuffer.push(pcmData);
+        if (this.ringBuffer.length > this.RING_BUFFER_SIZE) {
+          this.ringBuffer.shift();
         }
-      } catch (e) {
-        console.warn('VAD setup failed, continuing without gating:', e);
-      }
+        
+        // Run VAD on this chunk
+        this.runVadOnPcm(pcmData);
+        
+        // If actively recording speech, accumulate in utterance buffer
+        if (this.isSendingAudio) {
+          this.utteranceBuffer.push(pcmData);
+        }
+      };
+
+      console.log('✅ AudioWorklet message handler configured');
 
       return true;
     } catch (error) {
@@ -343,135 +124,194 @@ export class ProductionAudioManager {
     }
   }
 
-  startRecording(onAudioData: (data: ArrayBuffer) => void): boolean {
-    // Use original echo-cancelled stream in raw mode, or processed stream in normal mode
-    const streamToUse = this.rawAudioMode ? this.mediaStream : this.recordingStream;
-    
-    if (!streamToUse) {
-      console.error('Media stream not initialized');
-      return false;
+  /**
+   * VAD analysis on raw PCM data
+   */
+  private runVadOnPcm(pcmData: Float32Array): void {
+    // Calculate RMS with mic boost
+    let sum = 0;
+    for (let i = 0; i < pcmData.length; i++) {
+      sum += pcmData[i] * pcmData[i];
     }
-
-    this.onAudioData = onAudioData;
-
-    // Explicitly request Groq-compatible audio format
-    // Groq Whisper API works best with audio/webm;codecs=opus
-    let mimeType = 'audio/webm;codecs=opus';
+    const rms = Math.sqrt(sum / pcmData.length) * this.micBoostFactor;
     
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      console.warn(`⚠️ ${mimeType} not supported, trying fallbacks...`);
+    const now = performance.now();
+    
+    // Adaptive threshold during TTS
+    if (this.isPlayingTTS) {
+      this.currentVadThreshold = this.baseVadThreshold * 2; // 2x during TTS
+    } else {
+      this.currentVadThreshold = this.baseVadThreshold;
+    }
+    
+    // Log VAD activity occasionally for debugging
+    if (Math.random() < 0.01) {
+      const debugInfo = this.isPlayingTTS 
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (2x), playing=TRUE, speaking=${this.vadSpeaking}`
+        : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), playing=false, speaking=${this.vadSpeaking}`;
+      console.log(debugInfo);
+    }
+    
+    if (rms >= this.currentVadThreshold) {
+      this.vadLastAboveThreshold = now;
+      this.vadConsecutiveFrames++;
       
-      // Try fallback formats
-      const fallbacks = [
-        'audio/webm',
-        'audio/ogg;codecs=opus',
-        'audio/ogg'
-      ];
+      // Require more consecutive frames during TTS
+      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
       
-      for (const format of fallbacks) {
-        if (MediaRecorder.isTypeSupported(format)) {
-          mimeType = format;
-          console.log(`✅ Using fallback format: ${mimeType}`);
-          break;
-        }
-      }
-    }
-    
-    const options: MediaRecorderOptions = {
-      mimeType: mimeType,
-      audioBitsPerSecond: 128000 // Balanced for quality and size
-    };
-    
-    // Store the mime type for use in getAssembledAudio()
-    this.recordedMimeType = mimeType;
-    
-    console.log(`🎙️ MediaRecorder configured with mimeType: ${options.mimeType}, bitrate: ${options.audioBitsPerSecond}`);
-
-    if (this.rawAudioMode) {
-      console.log('🔧 RAW AUDIO MODE: Using original echo-cancelled MediaStream for MediaRecorder');
-    }
-
-    this.mediaRecorder = new MediaRecorder(streamToUse, options);
-    
-    // CLIENT-SIDE ASSEMBLY: Buffer complete audio file (with pre-roll)
-    this.mediaRecorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) {
-        // Discard contaminated chunk from interrupt restart
-        if (this.isInterruptRestart) {
-          console.log(`🗑️ Discarding contaminated chunk: ${event.data.size} bytes (contains TTS before interrupt)`);
-          return; // Skip this chunk entirely
+      // Only confirm speech after consecutive frames
+      if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
+        this.vadSpeaking = true;
+        const timestamp = performance.now();
+        console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
+        
+        // Check if this is an interrupt
+        const isInterrupt = this.isPlayingTTS;
+        
+        // Initialize utterance buffer WITH ring buffer (captures first word!)
+        this.utteranceBuffer = [...this.ringBuffer];
+        this.isSendingAudio = true;
+        console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll)`);
+        
+        // Handle interrupt
+        if (isInterrupt) {
+          console.log('🎤 Interrupt detected - stopping TTS playback');
+          
+          // Drop threshold IMMEDIATELY for tracking user's speech
+          this.currentVadThreshold = this.baseVadThreshold;
+          console.log(`🔧 VAD threshold dropped to normal (${this.currentVadThreshold.toFixed(4)})`);
+          
+          // Stop TTS playback
+          this.stopPlayback();
+          
+          // Send explicit interrupt command to backend
+          if (this.onInterrupt) {
+            console.log('⚡ Sending interrupt command to backend');
+            this.onInterrupt();
+          }
         }
         
-        // RAW AUDIO MODE: Send chunks unconditionally for testing
-        if (this.rawAudioMode && this.onAudioData) {
-          if (Math.random() < 0.05) {
-            console.log(`🔧 RAW MODE: Sending ${event.data.size} bytes (bypassing VAD)`);
-          }
-          event.data.arrayBuffer().then((buf) => {
-            this.onAudioData!(buf);
-          });
-        }
-        // NORMAL MODE: Buffer complete audio file
-        else {
-          this.currentAudioChunks.push(event.data);
-          console.log(`📦 Received complete audio file: ${event.data.size} bytes`);
+        // ALWAYS notify backend that user started speaking
+        if (this.onSpeechStart) {
+          this.onSpeechStart();
         }
       }
-    };
-    
-    // Handle MediaRecorder stop event (speech ended or interrupt discard)
-    this.mediaRecorder.onstop = () => {
-      console.log(`🛑 [PRIMARY] MediaRecorder stopped (interrupt restart: ${this.isInterruptRestart}, was recording speech: ${!this.isSendingAudio})`);
+    } else {
+      // Reset consecutive frames counter
+      this.vadConsecutiveFrames = 0;
       
-      // INTERRUPT RESTART: Just discard, secondary is already running
-      if (this.isInterruptRestart) {
-        this.isInterruptRestart = false; // Reset flag
-        console.log('🗑️ [PRIMARY] Discarded - secondary recorder is now capturing speech');
-        return; // Don't restart or process - secondary is active
-      }
-      
-      // NORMAL: Speech ended - trigger callback with all buffered audio
-      if (!this.isSendingAudio && this.currentAudioChunks.length > 0) {
-        console.log(`🎤 [PRIMARY] Complete utterance captured (${this.currentAudioChunks.length} chunks), notifying callback`);
+      if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
+        this.vadSpeaking = false;
+        console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
+        
+        this.isSendingAudio = false;
+        
+        // Reset manual stop flag
+        this.manuallyStoppedPlayback = false;
+        console.log('🔓 Reset manuallyStoppedPlayback - ready for next AI response');
+        
+        // Concatenate all Float32Arrays into single array
+        const totalLength = this.utteranceBuffer.reduce((sum, arr) => sum + arr.length, 0);
+        const finalPcm = new Float32Array(totalLength);
+        let offset = 0;
+        for (const chunk of this.utteranceBuffer) {
+          finalPcm.set(chunk, offset);
+          offset += chunk.length;
+        }
+        
+        console.log(`📦 Assembling ${this.utteranceBuffer.length} chunks (${totalLength} samples) into WAV`);
+        
+        // Convert to 16kHz WAV
+        const sampleRate = this.recordingContext?.sampleRate || 48000;
+        const wavBlob = this.pcmToWav16k(finalPcm, sampleRate);
+        
+        // Store for sending
+        this.finalAudioBlob = wavBlob;
+        
+        // Clear buffer
+        this.utteranceBuffer = [];
+        
+        console.log(`✅ WAV file ready: ${wavBlob.size} bytes`);
+        
+        // Call callback
         if (this.onSpeechEnd) {
           this.onSpeechEnd();
         }
       }
-      
-      // Restart MediaRecorder for next utterance
-      setTimeout(() => {
-        if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-          this.mediaRecorder.start();
-          console.log('✅ [PRIMARY] MediaRecorder restarted - ready for next utterance');
-        }
-      }, 10);
-    };
+    }
+  }
 
-    // Start recording
-    // RAW MODE: Use timeslice for continuous streaming
-    // NORMAL MODE: No timeslice = complete file when stopped
-    try {
-      if (this.rawAudioMode) {
-        this.mediaRecorder.start(50); // Timeslice for streaming chunks
-        console.log('🔧 RAW MODE: MediaRecorder started with 50ms timeslice');
-      } else {
-        this.mediaRecorder.start(); // No timeslice = complete file when stopped
-        console.log('📦 MediaRecorder started - will generate complete file on stop');
-      }
-    } catch (err) {
-      console.error('Failed to start MediaRecorder:', err);
+  /**
+   * Convert Float32 PCM to 16kHz WAV with downsampling
+   */
+  private pcmToWav16k(pcm48k: Float32Array, sampleRate: number): Blob {
+    // Downsample 48kHz → 16kHz
+    const targetRate = 16000;
+    const ratio = sampleRate / targetRate;
+    const outputLength = Math.floor(pcm48k.length / ratio);
+    const pcm16k = new Float32Array(outputLength);
+    
+    for (let i = 0; i < outputLength; i++) {
+      pcm16k[i] = pcm48k[Math.floor(i * ratio)];
+    }
+    
+    console.log(`🔄 Downsampled ${pcm48k.length} samples @ ${sampleRate}Hz → ${pcm16k.length} samples @ ${targetRate}Hz`);
+    
+    // Convert float32 (-1 to 1) → int16 (-32768 to 32767)
+    const int16Data = new Int16Array(pcm16k.length);
+    for (let i = 0; i < pcm16k.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcm16k[i]));
+      int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    
+    // Create WAV header
+    const wavHeader = this.createWavHeader(int16Data.length * 2, targetRate, 1);
+    
+    // Combine header + data
+    return new Blob([wavHeader, int16Data], { type: 'audio/wav' });
+  }
+
+  /**
+   * Create standard WAV header
+   */
+  private createWavHeader(dataLength: number, sampleRate: number, channels: number): ArrayBuffer {
+    const buffer = new ArrayBuffer(44);
+    const view = new DataView(buffer);
+    
+    // "RIFF" chunk descriptor
+    view.setUint32(0, 0x46464952, false); // "RIFF" (big-endian string)
+    view.setUint32(4, 36 + dataLength, true); // File size - 8
+    view.setUint32(8, 0x45564157, false); // "WAVE"
+    
+    // "fmt " sub-chunk
+    view.setUint32(12, 0x20746d66, false); // "fmt "
+    view.setUint32(16, 16, true); // Subchunk size (16 for PCM)
+    view.setUint16(20, 1, true); // Audio format (1 = PCM)
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * channels * 2, true); // Byte rate
+    view.setUint16(32, channels * 2, true); // Block align
+    view.setUint16(34, 16, true); // Bits per sample
+    
+    // "data" sub-chunk
+    view.setUint32(36, 0x61746164, false); // "data"
+    view.setUint32(40, dataLength, true);
+    
+    return buffer;
+  }
+
+  startRecording(): boolean {
+    if (!this.workletNode) {
+      console.error('AudioWorklet not initialized');
       return false;
     }
 
-    console.log('Recording ready and active');
+    console.log('✅ Recording ready and active (AudioWorklet processing)');
     return true;
   }
 
   stopRecording(): void {
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      this.mediaRecorder.stop();
-      console.log('Recording stopped');
-    }
+    console.log('Recording stopped');
   }
 
   /**
@@ -483,19 +323,16 @@ export class ProductionAudioManager {
       return;
     }
     
-    // CRITICAL: If playback was manually stopped (user interrupted), reject ALL new audio
-    // Backend might still be streaming, but we must ignore it
+    // CRITICAL: If playback was manually stopped, reject ALL new audio
     if (this.manuallyStoppedPlayback) {
       console.log('🛑 Rejecting audio - playback was manually stopped by user interrupt');
       return;
     }
     
     // Set TTS playing state ONLY if not already playing
-    // This prevents resetting the flag when multiple sentences are streaming
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
-      // Do NOT reset manuallyStoppedPlayback here - it should only be reset when starting a NEW TTS session
     }
 
     try {
@@ -507,12 +344,10 @@ export class ProductionAudioManager {
         this.playPCMChunkImmediately(audioData);
       } else {
         console.log(`ProductionAudioManager: Decoding encoded audio ${audioData.byteLength} bytes`);
-        // Try to decode as encoded audio
         const audioBuffer = await this.playbackContext.decodeAudioData(audioData.slice(0));
         console.log(`ProductionAudioManager: Decoded audio buffer ${audioBuffer.duration.toFixed(2)}s`);
         this.audioQueue.push(audioBuffer);
         
-        // Start playback if not already playing
         if (!this.isPlaying) {
           this.playNextInQueue();
         }
@@ -522,14 +357,6 @@ export class ProductionAudioManager {
     }
   }
 
-  // PCM accumulation for smooth playback
-  private pcmAccumulator: Int16Array[] = [];
-  private pcmAccumulatorTimer: number | null = null;
-  private readonly PCM_ACCUMULATION_TIME = 200; // ms - reduced for faster TTS response
-
-  /**
-   * Accumulate PCM chunks for smoother playback
-   */
   private playPCMChunkImmediately(audioData: ArrayBuffer): void {
     if (!this.playbackContext) return;
     
@@ -553,7 +380,7 @@ export class ProductionAudioManager {
       const totalSamples = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
       const durationMs = (totalSamples / 24000) * 1000;
       
-      if (durationMs > 400) { // More than 400ms accumulated - flush for faster response
+      if (durationMs > 400) {
         if (this.pcmAccumulatorTimer) {
           clearTimeout(this.pcmAccumulatorTimer);
           this.pcmAccumulatorTimer = null;
@@ -566,9 +393,6 @@ export class ProductionAudioManager {
     }
   }
 
-  /**
-   * Flush accumulated PCM data into a single smooth audio buffer
-   */
   private flushPCMAccumulator(): void {
     if (this.pcmAccumulator.length === 0 || !this.playbackContext) return;
     
@@ -597,7 +421,7 @@ export class ProductionAudioManager {
       this.pcmAccumulator = [];
       this.pcmAccumulatorTimer = null;
       
-      // Add to playback queue (will play sequentially)
+      // Add to playback queue
       this.audioQueue.push(audioBuffer);
       
       // Start playback if not already playing
@@ -615,7 +439,6 @@ export class ProductionAudioManager {
     }
   }
 
-  // Flush any remaining PCM data when TTS stream ends (called per sentence)
   flushRemainingPCM(): void {
     console.log('🔚 TTS sentence complete - flushing remaining PCM accumulator');
     if (this.pcmAccumulatorTimer) {
@@ -625,14 +448,11 @@ export class ProductionAudioManager {
     this.flushPCMAccumulator();
   }
 
-
   private isPCMData(data: ArrayBuffer): boolean {
-    // Simple heuristic: PCM data won't have file format signatures
     const view = new DataView(data);
     if (data.byteLength < 4) return true;
     
     const signature = view.getUint32(0, false);
-    // Check for common audio file signatures
     const isWebM = signature === 0x1a45dfa3;
     const isOgg = signature === 0x4f676753;
     const isWav = signature === 0x52494646;
@@ -641,20 +461,15 @@ export class ProductionAudioManager {
   }
 
   private playNextInQueue(): void {
-    // Check if queue is empty
     if (this.audioQueue.length === 0) {
       console.log('✅ Audio queue empty - no more buffers to play');
-      // NOTE: Do NOT set isPlaying = false here!
-      // It will be set to false in the onended callback of the last buffer
       return;
     }
 
-    // CRITICAL: Set isPlaying = true SYNCHRONOUSLY before any async operations
+    // CRITICAL: Set isPlaying = true SYNCHRONOUSLY
     this.isPlaying = true;
-    // Reset manual stop flag (we're starting natural playback)
     this.manuallyStoppedPlayback = false;
     
-    // Get next buffer from queue
     const audioBuffer = this.audioQueue.shift()!;
     
     console.log(`▶️  Playing buffer ${audioBuffer.duration.toFixed(3)}s (isPlaying: ${this.isPlaying}, ${this.audioQueue.length} remaining in queue)`);
@@ -663,7 +478,6 @@ export class ProductionAudioManager {
       this.currentSource = this.playbackContext.createBufferSource();
       this.currentSource.buffer = audioBuffer;
       
-      // Add gain for better volume
       const gainNode = this.playbackContext.createGain();
       gainNode.gain.value = 1.5;
       
@@ -674,29 +488,22 @@ export class ProductionAudioManager {
         console.log(`✓ Buffer finished playing`);
         this.currentSource = null;
         
-        // Check if playback was manually stopped (e.g., user interrupted)
         if (this.manuallyStoppedPlayback) {
           console.log('🛑 Ignoring onended (playback was manually stopped)');
           return;
         }
         
-        // Check if there are more buffers in queue
         if (this.audioQueue.length > 0) {
           console.log(`⏭️  More buffers in queue (${this.audioQueue.length}), playing next`);
-          // Recursively play next buffer (isPlaying stays true)
           this.playNextInQueue();
         } else {
-          // Queue is empty - THIS is the only place isPlaying should be set to false
           console.log('🏁 Last buffer finished, queue empty - setting isPlaying = false');
           this.isPlaying = false;
           
-          // Check if the TTS session was already marked as complete
           if (!this.isPlayingTTS && this.onPlaybackComplete) {
-            // The backend already signaled that all TTS is done, and now the queue is empty
             console.log('✅ TTS session complete and queue empty - notifying backend');
             this.onPlaybackComplete();
           } else if (this.isPlayingTTS) {
-            // More sentences may be coming
             console.log('⏸️  Queue empty but keeping isPlayingTTS=true (more sentences may be coming)');
           }
         }
@@ -707,25 +514,21 @@ export class ProductionAudioManager {
   }
 
   stopPlayback(): void {
-    // Set flag to prevent onended callback from running
     this.manuallyStoppedPlayback = true;
     
     if (this.currentSource) {
       try {
         this.currentSource.stop();
       } catch (error) {
-        // Ignore errors when stopping already stopped sources
         console.log('Source already stopped or error stopping:', error);
       }
       this.currentSource = null;
     }
     
-    // Clear audio queue and PCM buffer
     this.audioQueue = [];
     this.isPlaying = false;
-    this.isPlayingTTS = false; // Reset TTS playing state
+    this.isPlayingTTS = false;
     
-    // Clear PCM accumulator to prevent any remaining audio from playing
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
       this.pcmAccumulatorTimer = null;
@@ -740,27 +543,19 @@ export class ProductionAudioManager {
     this.onPlaybackComplete = callback;
   }
 
-  /**
-   * Call this when the backend signals that ALL TTS for the AI response is complete
-   * (not just one sentence, but the entire response)
-   */
   public completeTTSSession(): void {
     console.log('🏁 TTS session complete signal received from backend');
     
-    // Check if playback was manually stopped (user interrupted)
     if (this.manuallyStoppedPlayback) {
       console.log('🛑 Ignoring completion (playback was manually stopped by user interrupt)');
-      // Reset the flag for next playback session
       this.manuallyStoppedPlayback = false;
       return;
     }
     
-    // If we were in a TTS session, mark it as complete
     if (this.isPlayingTTS) {
       console.log('✅ Marking TTS session as complete');
       this.isPlayingTTS = false;
       
-      // Only notify if the queue is actually empty (playback is done)
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
         this.onPlaybackComplete();
@@ -783,67 +578,49 @@ export class ProductionAudioManager {
   }
 
   getAssembledAudio(): Blob | null {
-    if (this.currentAudioChunks.length === 0) {
-      console.warn('⚠️ No audio chunks to assemble');
+    if (!this.finalAudioBlob) {
+      console.warn('⚠️ No audio to send');
       return null;
     }
     
-    // Assemble all chunks into a single valid audio file
-    // When MediaRecorder is stopped, it produces a complete, valid file
-    const finalBlob = new Blob(this.currentAudioChunks, { type: this.recordedMimeType });
+    const blob = this.finalAudioBlob;
+    this.finalAudioBlob = null; // Clear for next utterance
     
-    // Read first few bytes for debugging
-    const reader = new FileReader();
-    reader.onload = () => {
-      const buffer = reader.result as ArrayBuffer;
-      const view = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
-      const hex = Array.from(view).map(b => b.toString(16).padStart(2, '0')).join('');
-      console.log(`🎵 Assembled ${this.currentAudioChunks.length} chunks → ${finalBlob.size} bytes, type: ${this.recordedMimeType}, header: ${hex}`);
-    };
-    reader.readAsArrayBuffer(finalBlob.slice(0, 4));
-    
-    // Clear the buffer
-    this.currentAudioChunks = [];
-    
-    return finalBlob;
+    console.log(`🎵 Returning assembled WAV: ${blob.size} bytes`);
+    return blob;
   }
 
   cleanup(): void {
     this.stopRecording();
     this.stopPlayback();
     
-    if (this.vadIntervalId) {
-      clearInterval(this.vadIntervalId);
-      this.vadIntervalId = null;
-    }
-    this.analyserNode = null;
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
-    this.isInterruptRestart = false;
-    this.isUsingSecondary = false;
     
-    // Cleanup secondary recorder if it exists
-    if (this.secondaryRecorder) {
-      if (this.secondaryRecorder.state === 'recording') {
-        this.secondaryRecorder.stop();
-      }
-      this.secondaryRecorder = null;
-    }
+    // Clear buffers
+    this.ringBuffer = [];
+    this.utteranceBuffer = [];
+    this.finalAudioBlob = null;
 
-    // Clear PCM accumulator
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
       this.pcmAccumulatorTimer = null;
     }
     this.pcmAccumulator = [];
     
+    // Disconnect worklet
+    if (this.workletNode) {
+      this.workletNode.disconnect();
+      this.workletNode.port.onmessage = null;
+      this.workletNode = null;
+    }
+    
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach(track => track.stop());
       this.mediaStream = null;
     }
 
-    // Close both audio contexts
     if (this.recordingContext && this.recordingContext.state !== 'closed') {
       this.recordingContext.close();
       this.recordingContext = null;
@@ -854,8 +631,6 @@ export class ProductionAudioManager {
       this.playbackContext = null;
     }
 
-    this.mediaRecorder = null;
-    this.onAudioData = null;
     this.onPlaybackComplete = null;
     
     console.log('Audio manager cleaned up');

@@ -334,13 +334,7 @@ export default function VoiceCallButton({
       // Initialize audio manager
       audioManagerRef.current = new ProductionAudioManager();
       
-      // Check for raw audio mode (debug flag via localStorage)
-      const rawAudioMode = localStorage.getItem('voice_raw_audio_mode') === 'true';
-      if (rawAudioMode) {
-        console.log('🔧 RAW AUDIO MODE enabled via localStorage');
-      }
-      
-      const initialized = await audioManagerRef.current.initialize(rawAudioMode);
+      const initialized = await audioManagerRef.current.initialize();
       
       if (!initialized) {
         onError?.('Failed to initialize audio system. Please check your browser settings.');
@@ -428,11 +422,6 @@ export default function VoiceCallButton({
         }
       );
 
-      // RAW AUDIO MODE: Immediately signal backend to start accepting audio
-      if (rawAudioMode) {
-        console.log('🔧 RAW AUDIO MODE: Setting up manual speech state');
-      }
-
       // Establish WebSocket connection
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -479,29 +468,10 @@ export default function VoiceCallButton({
           shouldSendAudioRef.current = true;
           console.log('[FRONTEND] Starting audio recording, shouldSendAudio:', shouldSendAudioRef.current);
           
-          // Start audio recording with client-side assembly
-          // In normal mode: chunks are buffered locally, assembled on speech end
-          // In raw mode: chunks still stream for testing
+          // Start audio recording with AudioWorklet
+          // Audio is captured via worklet, buffered in ring buffer, and assembled on speech end
           if (audioManagerRef.current) {
-            audioManagerRef.current.startRecording((audioData) => {
-              // RAW AUDIO MODE: Stream chunks for testing (bypass client-side assembly)
-              if (rawAudioMode && ws.readyState === WebSocket.OPEN) {
-                console.log(`🔧 RAW MODE: Sending audio chunk: ${audioData.byteLength} bytes`);
-                ws.send(audioData);
-              }
-              // NORMAL MODE: Chunks are buffered in productionAudioManager, not sent here
-            });
-          }
-          
-          // RAW AUDIO MODE: Send user_speech_started after a brief delay
-          // This ensures the backend session is fully initialized and has sent its initial state
-          if (rawAudioMode) {
-            setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
-                console.log('🔧 RAW AUDIO MODE: Sending user_speech_started after session init');
-                ws.send(JSON.stringify({ type: 'user_speech_started' }));
-              }
-            }, 100); // 100ms delay to ensure backend session is ready
+            audioManagerRef.current.startRecording();
           }
           
           resolve(true);
