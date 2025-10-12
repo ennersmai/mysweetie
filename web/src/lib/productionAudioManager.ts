@@ -31,12 +31,12 @@ export class ProductionAudioManager {
   // VAD state
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private baseVadThreshold = 0.03; // Increased base threshold for noise resistance
-  private currentVadThreshold = 0.03;
+  private baseVadThreshold = 0.02; // Balanced threshold for noise resistance
+  private currentVadThreshold = 0.02;
   private readonly vadHangoverMs = 800;
   private vadConsecutiveFrames = 0;
-  private readonly vadMinFrames = 3; // Increased from 2 to 3 for more stability
-  private readonly micBoostFactor = 3.0; // Reduced from 5.0 to 3.0 to reduce noise amplification
+  private readonly vadMinFrames = 2; // Back to 2 for responsiveness
+  private readonly micBoostFactor = 4.0; // Balanced mic boost
   
   // Noise floor detection
   private noiseFloor = 0.005; // Minimum RMS to consider as potential speech
@@ -158,9 +158,9 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // Much more conservative threshold during TTS to prevent false triggers from background noise
+    // Conservative threshold during TTS to prevent false triggers from background noise
     if (this.isPlayingTTS) {
-      this.currentVadThreshold = this.baseVadThreshold * 8; // 8x during TTS for noise resistance
+      this.currentVadThreshold = this.baseVadThreshold * 3; // 3x during TTS for noise resistance
     } else {
       this.currentVadThreshold = this.baseVadThreshold;
     }
@@ -180,7 +180,7 @@ export class ProductionAudioManager {
     // Log VAD activity occasionally for debugging
     if (Math.random() < 0.01) {
       const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (8x), noiseFloor=${this.noiseFloor.toFixed(4)}, playing=TRUE, speaking=${this.vadSpeaking}`
+        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (3x), noiseFloor=${this.noiseFloor.toFixed(4)}, playing=TRUE, speaking=${this.vadSpeaking}`
         : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), noiseFloor=${this.noiseFloor.toFixed(4)}, playing=false, speaking=${this.vadSpeaking}`;
       console.log(debugInfo);
     }
@@ -194,7 +194,7 @@ export class ProductionAudioManager {
       this.vadConsecutiveFrames++;
       
       // Require more consecutive frames during TTS to prevent false triggers from background noise
-      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 4 : this.vadMinFrames;
+      const requiredFrames = this.isPlayingTTS ? this.vadMinFrames * 2 : this.vadMinFrames;
       
       // Only confirm speech after consecutive frames
       if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
