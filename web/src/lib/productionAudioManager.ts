@@ -24,14 +24,14 @@ export class ProductionAudioManager {
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
   private ringBuffer: Float32Array[] = [];
-  private readonly RING_BUFFER_SIZE = 450; // ~1200ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
+  private readonly RING_BUFFER_SIZE = 350; // ~933ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
   private finalAudioBlob: Blob | null = null;
 
   // VAD state
   private vadSpeaking = false;
   private vadLastAboveThreshold = 0;
-  private baseVadThreshold = 0.02; // Balanced threshold for noise resistance
+  private baseVadThreshold = 0.005; // More sensitive threshold for quiet microphones
   private currentVadThreshold = 0.02;
   private readonly vadHangoverMs = 800;
   private vadConsecutiveFrames = 0;
