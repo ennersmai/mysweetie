@@ -65,7 +65,7 @@ export const handleChat = async (req: Request, res: Response): Promise<void> => 
     // Check credits before processing chat
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
-      .select('welcome_credits, text_messages_today, last_text_reset_date')
+      .select('welcome_credits, text_messages_today, last_text_reset_date, is_premium, plan_tier')
       .eq('id', userId)
       .maybeSingle();
 
@@ -77,9 +77,10 @@ export const handleChat = async (req: Request, res: Response): Promise<void> => 
 
     const welcomeCredits = Number(profile.welcome_credits || 0);
     const hasWelcomeCredits = welcomeCredits > 0;
+    const isPremium = Boolean(profile.is_premium) || profile.plan_tier === 'premium';
 
-    // If no welcome credits, check daily text message limit
-    if (!hasWelcomeCredits) {
+    // Premium users bypass daily limit, and if no welcome credits, check daily text message limit
+    if (!isPremium && !hasWelcomeCredits) {
       // Reset daily counter if needed
       const { error: resetError } = await supabaseAdmin.rpc('check_and_reset_daily_text_messages', {
         user_id: userId

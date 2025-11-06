@@ -364,7 +364,7 @@ export async function* processChat(request: ChatRequest) {
                                     const moderationResult = await checkModeration(twoPhrases);
                                     
                                     if (moderationResult.flagged) {
-                                        // Hard-block: stop streaming, abort controller, yield error
+                                        // Hard-block: stop streaming, abort controller, yield moderation error
                                         logger.error({
                                             message: 'Content blocked by moderation - stopping response',
                                             categories: moderationResult.categories,
@@ -372,7 +372,7 @@ export async function* processChat(request: ChatRequest) {
                                         });
                                         shouldStopStreaming = true;
                                         try { controller.abort(); } catch {}
-                                        yield { type: 'error', error: 'Content blocked by moderation' };
+                                        yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
                                         // Clear moderation buffer - don't add blocked content to fullResponse
                                         moderationBuffer = '';
                                         break;
@@ -430,7 +430,7 @@ export async function* processChat(request: ChatRequest) {
                     categories: moderationResult.categories,
                     contentPreview: phrasesToCheck.substring(0, 200),
                 });
-                yield { type: 'error', error: 'Content blocked by moderation' };
+                yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
                 // Don't add blocked content to fullResponse - clear moderationBuffer
                 moderationBuffer = remaining;
             } else {
@@ -452,7 +452,7 @@ export async function* processChat(request: ChatRequest) {
                     categories: moderationResult.categories,
                     contentPreview: remaining.substring(0, 200),
                 });
-                yield { type: 'error', error: 'Content blocked by moderation' };
+                yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
                 // Don't add to fullResponse
             } else {
                 fullResponse += remaining;
@@ -506,7 +506,7 @@ export async function* processChat(request: ChatRequest) {
                   categories: moderationResult.categories,
                   contentPreview: twoPhrases.substring(0, 200),
                 });
-                yield { type: 'error', error: 'Content blocked by moderation' };
+                yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
                 return;
               }
             } else if (phrases.length > 0 || truncatedContent.trim().length > 0) {
@@ -520,7 +520,7 @@ export async function* processChat(request: ChatRequest) {
                   categories: moderationResult.categories,
                   contentPreview: contentToCheck.substring(0, 200),
                 });
-                yield { type: 'error', error: 'Content blocked by moderation' };
+                yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
                 return;
               }
             }

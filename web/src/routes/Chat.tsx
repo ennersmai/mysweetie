@@ -1282,6 +1282,47 @@ export default function Chat() {
                 // Clear buffers after final
                 uiTextBufferRef.current = '';
                 ttsSentenceBufRef.current = '';
+              } else if (data.type === 'moderation_blocked') {
+                // Content was blocked by moderation - stop TTS and show filtered message
+                console.warn('🚫 Content blocked by moderation');
+                
+                // Stop TTS immediately
+                stopTtsNow();
+                
+                // Clear any accumulated buffers
+                uiTextBufferRef.current = '';
+                ttsSentenceBufRef.current = '';
+                assistantMessageRef.current = '';
+                wordBufferRef.current = '';
+                
+                // Show filtered message for AI response (keep user input visible)
+                setMessages(prev => {
+                  const next = [...prev];
+                  // Find or create assistant message
+                  let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
+                  if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
+                    if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
+                      idx = next.length - 1;
+                      currentAssistantIndexRef.current = idx;
+                    } else {
+                      next.push({ role: 'assistant', content: '' } as any);
+                      idx = next.length - 1;
+                      currentAssistantIndexRef.current = idx;
+                    }
+                  }
+                  // Set filtered message
+                  const filteredMessage = "This content has been filtered. Please make sure your chats comply with our Terms and Community Guidelines.\n\nSend a new message to continue the conversation";
+                  next[idx] = { ...next[idx], content: filteredMessage } as any;
+                  return next;
+                });
+                
+                // Scroll to bottom
+                setTimeout(() => {
+                  if (stickToBottomRef.current) {
+                    const el = messagesListRef.current;
+                    if (el) el.scrollTop = el.scrollHeight;
+                  }
+                }, 0);
               }
             } catch (e) {
               console.error('Failed to parse stream chunk:', jsonStr);
@@ -1689,7 +1730,7 @@ export default function Chat() {
                 {cooldownMsg}
               </div>
             )}
-            {welcomeCredits <= 0 && textMessagesToday > 0 && (
+            {welcomeCredits <= 0 && textMessagesToday > 0 && !isPremium && (
               <div className="mt-2 text-xs text-white/60 px-3">
                 {textMessagesToday}/20 messages today (Free tier)
               </div>
