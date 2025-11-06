@@ -163,7 +163,7 @@ export default function Chat() {
   const uiTextBufferRef = useRef<string>(''); // Accumulator for UI streaming
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
-  const PCM_MIN_SAMPLES = 2400; // ~100ms at 24kHz - balanced for smooth playback without artifacts
+  const PCM_MIN_SAMPLES = 3200; // ~200ms at 16kHz - increased for better quality and smoother playback
   const ttsValidatedBinaryRef = useRef<boolean>(false);
   const ttsFlushTimerRef = useRef<number | null>(null);
   // Promises to resolve when current TTS playback fully ends
@@ -497,6 +497,11 @@ export default function Chat() {
     flushAccumulatedPcm(true);
     
     await ensureAudioContext();
+    // Ensure playhead is at least at current time to avoid gaps between sentences
+    const audioCtx = audioCtxRef.current;
+    if (audioCtx && ttsPlayheadRef.current < audioCtx.currentTime) {
+      ttsPlayheadRef.current = audioCtx.currentTime + 0.01;
+    }
     // Do not reset playhead here to ensure strict sequential playback across sentences
     const controller = new AbortController();
     ttsAbortRef.current = controller;
