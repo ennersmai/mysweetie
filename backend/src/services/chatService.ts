@@ -394,6 +394,7 @@ export async function* processChat(request: ChatRequest) {
             logger.error({
                 message: 'Content blocked by moderation - complete response check',
                 categories: moderationResult.categories,
+                contentLength: fullResponse.length,
                 contentPreview: fullResponse.substring(0, 200),
             });
             yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
@@ -403,6 +404,10 @@ export async function* processChat(request: ChatRequest) {
         }
         
         // Moderation passed - send flag to allow TTS
+        logger.info({
+            message: 'Moderation check passed - allowing TTS',
+            contentLength: fullResponse.length,
+        });
         yield { type: 'moderation_passed' };
     }
     

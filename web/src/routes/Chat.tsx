@@ -1309,16 +1309,16 @@ export default function Chat() {
                 ttsSentenceBufRef.current = '';
               } else if (data.type === 'moderation_blocked') {
                 // Content was blocked by moderation - stop TTS and show filtered message
-                console.warn('🚫 Content blocked by moderation');
+                console.warn('🚫 Content blocked by moderation - showing filtered message');
                 
                 // Stop TTS immediately
                 stopTtsNow();
                 
-                // Clear any accumulated buffers
+                // Clear any accumulated buffers (but keep user message visible)
                 uiTextBufferRef.current = '';
                 ttsSentenceBufRef.current = '';
-                assistantMessageRef.current = '';
                 wordBufferRef.current = '';
+                // Don't clear assistantMessageRef - we'll replace it with filtered message
                 
                 // Show filtered message for AI response (keep user input visible)
                 setMessages(prev => {
@@ -1326,18 +1326,26 @@ export default function Chat() {
                   // Find or create assistant message
                   let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
                   if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
-                    if (next.length > 0 && (next[next.length - 1] as any)?.role === 'assistant') {
-                      idx = next.length - 1;
-                      currentAssistantIndexRef.current = idx;
-                    } else {
+                    // Look for last assistant message
+                    for (let i = next.length - 1; i >= 0; i--) {
+                      if ((next[i] as any)?.role === 'assistant') {
+                        idx = i;
+                        currentAssistantIndexRef.current = idx;
+                        break;
+                      }
+                    }
+                    // If not found, create new one
+                    if (idx < 0) {
                       next.push({ role: 'assistant', content: '' } as any);
                       idx = next.length - 1;
                       currentAssistantIndexRef.current = idx;
                     }
                   }
-                  // Set filtered message
+                  // Set filtered message (replace any partial content)
                   const filteredMessage = "This content has been filtered. Please make sure your chats comply with our Terms and Community Guidelines.\n\nSend a new message to continue the conversation";
                   next[idx] = { ...next[idx], content: filteredMessage } as any;
+                  // Update assistantMessageRef to match
+                  assistantMessageRef.current = filteredMessage;
                   return next;
                 });
                 

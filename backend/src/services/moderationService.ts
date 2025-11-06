@@ -62,14 +62,18 @@ export async function checkModeration(content: string): Promise<ModerationResult
     }
 
     // Check for hard-block categories: sexual/minors, hate, hate/threatening
+    // Use score thresholds to reduce false positives (only block if score > 0.5)
     const categories = results.categories || {};
     const categoryScores = results.category_scores || {};
     
     const flaggedCategories: ModerationResult['categories'] = {};
     let shouldBlock = false;
+    
+    // Score threshold to reduce false positives (0.0-1.0, higher = more confident)
+    const SCORE_THRESHOLD = 0.5;
 
-    // Check sexual/minors (CSAM-related)
-    if (categories['sexual/minors']) {
+    // Check sexual/minors (CSAM-related) - only block if score is high
+    if (categories['sexual/minors'] && (categoryScores['sexual/minors'] || 0) > SCORE_THRESHOLD) {
       flaggedCategories['sexual/minors'] = true;
       shouldBlock = true;
       logger.warn({
@@ -77,10 +81,17 @@ export async function checkModeration(content: string): Promise<ModerationResult
         score: categoryScores['sexual/minors'],
         contentPreview: content.substring(0, 100),
       });
+    } else if (categories['sexual/minors']) {
+      logger.debug({
+        message: 'Content flagged for sexual/minors but score below threshold (false positive)',
+        score: categoryScores['sexual/minors'],
+        threshold: SCORE_THRESHOLD,
+        contentPreview: content.substring(0, 100),
+      });
     }
 
-    // Check hate
-    if (categories.hate) {
+    // Check hate - only block if score is high
+    if (categories.hate && (categoryScores.hate || 0) > SCORE_THRESHOLD) {
       flaggedCategories.hate = true;
       shouldBlock = true;
       logger.warn({
@@ -88,15 +99,29 @@ export async function checkModeration(content: string): Promise<ModerationResult
         score: categoryScores.hate,
         contentPreview: content.substring(0, 100),
       });
+    } else if (categories.hate) {
+      logger.debug({
+        message: 'Content flagged for hate but score below threshold (false positive)',
+        score: categoryScores.hate,
+        threshold: SCORE_THRESHOLD,
+        contentPreview: content.substring(0, 100),
+      });
     }
 
-    // Check hate/threatening
-    if (categories['hate/threatening']) {
+    // Check hate/threatening - only block if score is high
+    if (categories['hate/threatening'] && (categoryScores['hate/threatening'] || 0) > SCORE_THRESHOLD) {
       flaggedCategories['hate/threatening'] = true;
       shouldBlock = true;
       logger.warn({
         message: 'Content flagged for hate/threatening',
         score: categoryScores['hate/threatening'],
+        contentPreview: content.substring(0, 100),
+      });
+    } else if (categories['hate/threatening']) {
+      logger.debug({
+        message: 'Content flagged for hate/threatening but score below threshold (false positive)',
+        score: categoryScores['hate/threatening'],
+        threshold: SCORE_THRESHOLD,
         contentPreview: content.substring(0, 100),
       });
     }
