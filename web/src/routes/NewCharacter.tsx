@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
-import { ALLOWED_VOICES } from '../lib/voices';
 import { useAuth } from '../contexts/AuthContext';
 
 // Default voices for each style
