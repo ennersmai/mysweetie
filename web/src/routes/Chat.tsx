@@ -1578,7 +1578,7 @@ export default function Chat() {
           </div>
           
           <div className="flex h-[700px] md:h-[700px] flex-col overflow-hidden">
-            <div ref={messagesListRef} className="flex-1 space-y-2 overflow-y-auto pr-1 pb-36 md:pb-0 will-change-scroll overscroll-contain" style={{ overflowAnchor: 'none' }} onWheel={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()}>
+            <div ref={messagesListRef} className="flex-1 space-y-2 overflow-y-auto pr-1 pb-36 md:pb-0 overscroll-contain" style={{ overflowAnchor: 'none' }} onWheel={(e) => e.stopPropagation()} onTouchMove={(e) => e.stopPropagation()}>
             {messages.map((m, i) => (
             <div key={m.id || i} className={`group my-3 ${m.role === 'user' ? 'md:text-right text-left' : 'md:text-left text-left'}`}>
               <div 
