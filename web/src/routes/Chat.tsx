@@ -594,13 +594,9 @@ export default function Chat() {
             ttsNetworkEndResolversRef.current.push(resolve);
           });
         }
+        // Start TTS - speakPcm will return when network stream ends
         await speakPcm(speaker, text);
-        // Wait only for network stream to end, not playback to finish
-        // This allows next TTS to start fetching immediately while current one is still playing
-        await new Promise<void>((resolve) => {
-          if (ttsNetworkDoneRef.current) return resolve();
-          ttsNetworkEndResolversRef.current.push(resolve);
-        });
+        // speakPcm already waits for network stream to end, so we can immediately continue to next
         if (stickToBottomRef.current) {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
