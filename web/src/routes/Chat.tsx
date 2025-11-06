@@ -1200,6 +1200,7 @@ export default function Chat() {
             }
             try {
               const data = JSON.parse(jsonStr);
+              console.log('📨 Stream event received:', data.type, data.type === 'moderation_blocked' ? '🚫 BLOCKED' : '', data.type === 'moderation_passed' ? '✅ PASSED' : '');
               if (data.type === 'chunk' && data.content) {
                 const chunk = data.content;
                 
@@ -1309,7 +1310,8 @@ export default function Chat() {
                 ttsSentenceBufRef.current = '';
               } else if (data.type === 'moderation_blocked') {
                 // Content was blocked by moderation - stop TTS and show filtered message
-                console.warn('🚫 Content blocked by moderation - showing filtered message');
+                console.error('🚫🚫🚫 MODERATION BLOCKED - Content filtered');
+                console.log('Current messages before update:', messagesRef.current?.length || 0);
                 
                 // Stop TTS immediately
                 stopTtsNow();
@@ -1322,20 +1324,24 @@ export default function Chat() {
                 
                 // Show filtered message for AI response (keep user input visible)
                 setMessages(prev => {
+                  console.log('Updating messages - prev length:', prev.length);
                   const next = [...prev];
                   // Find or create assistant message
                   let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
+                  console.log('Looking for assistant message at idx:', idx);
                   if (!(idx >= 0 && idx < next.length && (next[idx] as any)?.role === 'assistant')) {
                     // Look for last assistant message
                     for (let i = next.length - 1; i >= 0; i--) {
                       if ((next[i] as any)?.role === 'assistant') {
                         idx = i;
                         currentAssistantIndexRef.current = idx;
+                        console.log('Found assistant message at index:', idx);
                         break;
                       }
                     }
                     // If not found, create new one
                     if (idx < 0) {
+                      console.log('No assistant message found, creating new one');
                       next.push({ role: 'assistant', content: '' } as any);
                       idx = next.length - 1;
                       currentAssistantIndexRef.current = idx;
@@ -1343,9 +1349,11 @@ export default function Chat() {
                   }
                   // Set filtered message (replace any partial content)
                   const filteredMessage = "This content has been filtered. Please make sure your chats comply with our Terms and Community Guidelines.\n\nSend a new message to continue the conversation";
+                  console.log('Setting filtered message at index:', idx, 'Total messages:', next.length);
                   next[idx] = { ...next[idx], content: filteredMessage } as any;
                   // Update assistantMessageRef to match
                   assistantMessageRef.current = filteredMessage;
+                  console.log('Messages after update:', next.length, 'User messages:', next.filter(m => (m as any)?.role === 'user').length);
                   return next;
                 });
                 
@@ -1364,6 +1372,7 @@ export default function Chat() {
         }
       }
     } catch (err) {
+      console.error('❌ Error in stream processing:', err);
       // handle error UI as needed
     } finally {
       setStreaming(false);
