@@ -10,7 +10,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
 import Modal from '../components/Modal';
 import VoiceCallButton from '../components/VoiceCallButton';
 import MobileBottomNav from '../components/MobileBottomNav';
-import { createWAVParser, processWAVChunk } from '../utils/wavParser';
+import { createWAVParser, processWAVChunk, isWAVParserComplete } from '../utils/wavParser';
 
 type Message = { id?: string; role: 'user' | 'assistant'; content: string };
 type Memory = { id: string; memory_text: string };
@@ -171,11 +171,9 @@ export default function Chat() {
   const ttsEndResolversRef = useRef<Array<() => void>>([]);
   // Preserve 1 leftover byte between chunks to maintain 16-bit alignment
   const ttsCarryByteRef = useRef<number | null>(null);
-  // WAV parser state for client-side parsing
+  // Accumulator for WAV chunks - we'll decode complete WAV files as they arrive
+  const ttsWavBufferRef = useRef<Uint8Array[]>([]);
   const ttsWavParserRef = useRef<ReturnType<typeof createWAVParser> | null>(null);
-  // Accumulator for PCM chunks from WAV parser before passing to schedulePcmChunk
-  const ttsWavPcmAccumRef = useRef<Int16Array[]>([]);
-  const ttsWavFlushTimerRef = useRef<number | null>(null);
   // Track when the network stream has fully completed for the current sentence
   const ttsNetworkDoneRef = useRef<boolean>(false);
   // Monotonic counter to tag each TTS PCM request for debugging/correlation
@@ -519,15 +517,9 @@ export default function Chat() {
     ttsValidatedBinaryRef.current = false;
     // Reset carry byte
     ttsCarryByteRef.current = null;
-    // Reset WAV parser for new stream
+    // Reset WAV buffer accumulator and parser for new stream
+    ttsWavBufferRef.current = [];
     ttsWavParserRef.current = createWAVParser();
-    // Reset WAV PCM accumulator
-    ttsWavPcmAccumRef.current = [];
-    // Clear WAV flush timer
-    if (ttsWavFlushTimerRef.current) {
-      clearTimeout(ttsWavFlushTimerRef.current);
-      ttsWavFlushTimerRef.current = null;
-    }
     // Network not done until we finish reading
     ttsNetworkDoneRef.current = false;
     
@@ -555,13 +547,8 @@ export default function Chat() {
       }
       console.log(`TTS[#${reqId}] got response, starting to read WAV data`);
       const reader = res.body.getReader();
-      // Read streaming WAV chunks and parse to PCM
+      
       let chunkCount = 0;
-      const parser = ttsWavParserRef.current;
-      if (!parser) {
-        console.error(`TTS[#${reqId}] WAV parser not initialized`);
-        return;
-      }
       
       while (true) {
         let readResult;
@@ -573,36 +560,12 @@ export default function Chat() {
         if (done) {
           console.log(`TTS[#${reqId}] stream ended, received ${chunkCount} chunks`);
           // Process any remaining buffered data
-          if (parser.buffer.length > 0) {
-            const finalPcmChunks = processWAVChunk(parser, new Uint8Array(0));
-            for (const pcmChunk of finalPcmChunks) {
-              ttsWavPcmAccumRef.current.push(pcmChunk);
-            }
+          const parser = ttsWavParserRef.current;
+          if (parser && parser.buffer.length > 0) {
+            processWAVChunk(parser, new Uint8Array(0));
           }
-          
-          // Clear any pending flush timer
-          if (ttsWavFlushTimerRef.current) {
-            clearTimeout(ttsWavFlushTimerRef.current);
-            ttsWavFlushTimerRef.current = null;
-          }
-          
-          // Flush any remaining accumulated PCM chunks
-          if (ttsWavPcmAccumRef.current.length > 0) {
-            const totalSamples = ttsWavPcmAccumRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-            if (totalSamples > 0) {
-              const combinedBuffer = new ArrayBuffer(totalSamples * 2);
-              const dv = new DataView(combinedBuffer);
-              let offset = 0;
-              for (const chunk of ttsWavPcmAccumRef.current) {
-                for (let i = 0; i < chunk.length; i++) {
-                  dv.setInt16(offset, chunk[i], true); // little-endian
-                  offset += 2;
-                }
-              }
-              ttsWavPcmAccumRef.current = [];
-              schedulePcmChunk(combinedBuffer);
-            }
-          }
+          // Decode any complete WAV files we've accumulated
+          await decodeAccumulatedWAV();
           break;
         }
         if (value) {
@@ -610,57 +573,69 @@ export default function Chat() {
           const wavChunk = new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
           console.log(`🎵 Received WAV chunk ${chunkCount}: ${wavChunk.length} bytes`);
           
-          // Parse WAV chunk and extract PCM data
-          const pcmChunks = processWAVChunk(parser, wavChunk);
-          for (const pcmChunk of pcmChunks) {
-            // Accumulate PCM chunks to avoid creating too many small audio buffers
-            ttsWavPcmAccumRef.current.push(pcmChunk);
+          // Accumulate WAV chunks
+          ttsWavBufferRef.current.push(wavChunk);
+          
+          // Parse to detect when we have a complete WAV file
+          const parser = ttsWavParserRef.current;
+          if (parser) {
+            processWAVChunk(parser, wavChunk);
             
-            // Calculate total samples accumulated
-            const totalSamples = ttsWavPcmAccumRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-            
-            // Flush when we have enough samples (~100ms = 2400 samples at 24kHz)
-            if (totalSamples >= PCM_MIN_SAMPLES) {
-              // Clear any pending flush timer
-              if (ttsWavFlushTimerRef.current) {
-                clearTimeout(ttsWavFlushTimerRef.current);
-                ttsWavFlushTimerRef.current = null;
-              }
-              
-              // Combine all accumulated chunks into one ArrayBuffer
-              const combinedBuffer = new ArrayBuffer(totalSamples * 2);
-              const dv = new DataView(combinedBuffer);
-              let offset = 0;
-              for (const chunk of ttsWavPcmAccumRef.current) {
-                for (let i = 0; i < chunk.length; i++) {
-                  dv.setInt16(offset, chunk[i], true); // little-endian
-                  offset += 2;
-                }
-              }
-              ttsWavPcmAccumRef.current = []; // Clear accumulator
-              schedulePcmChunk(combinedBuffer);
-            } else if (totalSamples > 0 && !ttsWavFlushTimerRef.current) {
-              // If we have samples but not enough, set a timeout to flush soon
-              // This prevents long delays when receiving many small chunks
-              ttsWavFlushTimerRef.current = window.setTimeout(() => {
-                ttsWavFlushTimerRef.current = null;
-                const samples = ttsWavPcmAccumRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-                if (samples > 0) {
-                  const combinedBuffer = new ArrayBuffer(samples * 2);
-                  const dv = new DataView(combinedBuffer);
-                  let offset = 0;
-                  for (const chunk of ttsWavPcmAccumRef.current) {
-                    for (let i = 0; i < chunk.length; i++) {
-                      dv.setInt16(offset, chunk[i], true); // little-endian
-                      offset += 2;
-                    }
-                  }
-                  ttsWavPcmAccumRef.current = [];
-                  schedulePcmChunk(combinedBuffer);
-                }
-              }, 50); // Flush after 50ms if we haven't reached threshold
+            // If we've received a complete WAV file, decode and stream it
+            if (isWAVParserComplete(parser)) {
+              await decodeAccumulatedWAV();
+              // Reset parser for next WAV file (if there are multiple)
+              ttsWavParserRef.current = createWAVParser();
+              ttsWavBufferRef.current = [];
             }
           }
+        }
+      }
+      
+      // Helper function to decode accumulated WAV using browser's native decoder
+      async function decodeAccumulatedWAV() {
+        if (ttsWavBufferRef.current.length === 0) return;
+        
+        const totalLength = ttsWavBufferRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
+        const completeWav = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of ttsWavBufferRef.current) {
+          completeWav.set(chunk, offset);
+          offset += chunk.length;
+        }
+        
+        console.log(`🎵 Decoding complete WAV file: ${completeWav.length} bytes`);
+        const audioCtx = audioCtxRef.current;
+        if (!audioCtx) {
+          console.error('No AudioContext available for WAV decoding');
+          return;
+        }
+        
+        try {
+          // Use browser's native WAV decoder - handles all WAV formats correctly
+          const audioBuffer = await audioCtx.decodeAudioData(completeWav.buffer.slice(completeWav.byteOffset, completeWav.byteOffset + completeWav.byteLength));
+          console.log(`🎵 Decoded WAV: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.sampleRate}Hz, ${audioBuffer.numberOfChannels} channels`);
+          
+          // Extract PCM data from decoded AudioBuffer
+          const pcmData = audioBuffer.getChannelData(0); // Get first channel
+          
+          // Convert Float32Array to Int16 PCM
+          const pcmInt16 = new Int16Array(pcmData.length);
+          for (let i = 0; i < pcmData.length; i++) {
+            // Clamp and convert float [-1, 1] to int16 [-32768, 32767]
+            pcmInt16[i] = Math.max(-32768, Math.min(32767, Math.round(pcmData[i] * 32767)));
+          }
+          
+          // Convert to ArrayBuffer and stream
+          const arrayBuffer = new ArrayBuffer(pcmInt16.length * 2);
+          const dv = new DataView(arrayBuffer);
+          for (let i = 0; i < pcmInt16.length; i++) {
+            dv.setInt16(i * 2, pcmInt16[i], true); // little-endian
+          }
+          
+          schedulePcmChunk(arrayBuffer);
+        } catch (error: any) {
+          console.error(`🎵 Error decoding WAV:`, error);
         }
       }
       // Ensure any remaining accumulated samples are played
