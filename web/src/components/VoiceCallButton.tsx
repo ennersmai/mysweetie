@@ -319,6 +319,10 @@ export default function VoiceCallButton({
         if (parsed?.error === 'INSUFFICIENT_CREDITS') {
             setCreditsModalOpen(true);
             setConnectionStatus('disconnected');
+            // Store the error message if provided
+            if (parsed?.message) {
+              // The message will be displayed in the modal
+            }
             return false;
         }
         console.error('initializeCall: Backend error:', parsed || response.statusText);
@@ -761,11 +765,13 @@ export default function VoiceCallButton({
       )}
 
       {/* Insufficient credits modal */}
-      <Modal isOpen={creditsModalOpen} onClose={() => setCreditsModalOpen(false)} title="Not enough voice credits" size="lg">
-        <p className="text-sm text-white/80 mb-4">You don't have enough voice credits to start a call.</p>
+      <Modal isOpen={creditsModalOpen} onClose={() => setCreditsModalOpen(false)} title="Voice Credits Required" size="lg">
+        <p className="text-sm text-white/80 mb-4">
+          You're out of voice credits! To continue speaking with your companion, please choose a plan.
+        </p>
         <div className="flex justify-end gap-2">
           <button onClick={() => setCreditsModalOpen(false)} className="px-3 py-1 rounded bg-white/10 text-white">Close</button>
-          <a href="/account" className="px-3 py-1 rounded bg-indigo-600 text-white">Buy credits</a>
+          <a href="/subscribe" className="px-3 py-1 rounded bg-indigo-600 text-white">Choose a Plan</a>
         </div>
       </Modal>
     </div>

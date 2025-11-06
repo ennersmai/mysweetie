@@ -11,6 +11,9 @@ type Profile = {
   plan_tier?: string | null;
   nsfw_enabled?: boolean;
   voice_credits?: number;
+  welcome_credits?: number;
+  text_messages_today?: number;
+  last_text_reset_date?: string | null;
 };
 
 export default function Account() {
@@ -32,19 +35,19 @@ export default function Account() {
       }
       let { data, error } = await supabase
         .from('profiles')
-        .select('display_name, is_premium, subscription_id, plan_tier, nsfw_enabled, voice_credits')
+        .select('display_name, is_premium, subscription_id, plan_tier, nsfw_enabled, voice_credits, welcome_credits, text_messages_today, last_text_reset_date')
         .eq('id', user.id)
         .maybeSingle();
       if (!data && !error) {
-        // Create a profile row if missing
+        // Create a profile row if missing with welcome credits
         const { error: insErr } = await supabase
           .from('profiles')
-          .insert({ id: user.id })
+          .insert({ id: user.id, welcome_credits: 20 })
           .single();
         if (!insErr) {
           const refetch = await supabase
             .from('profiles')
-            .select('display_name, is_premium, subscription_id, plan_tier, nsfw_enabled, voice_credits')
+            .select('display_name, is_premium, subscription_id, plan_tier, nsfw_enabled, voice_credits, welcome_credits, text_messages_today, last_text_reset_date')
             .eq('id', user.id)
             .maybeSingle();
           data = refetch.data as any;
@@ -232,9 +235,19 @@ export default function Account() {
                 </span>
               </div>
               <div className="flex items-center justify-between">
+                <span className="text-sm text-white/70">Welcome Credits</span>
+                <span className="text-sm font-medium text-white">{profile.welcome_credits ?? 0}</span>
+              </div>
+              <div className="flex items-center justify-between">
                 <span className="text-sm text-white/70">Voice Credits</span>
                 <span className="text-sm font-medium text-white">{profile.voice_credits ?? 0}</span>
               </div>
+              {profile.welcome_credits !== undefined && profile.welcome_credits <= 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-white/70">Text Messages Today</span>
+                  <span className="text-sm font-medium text-white">{profile.text_messages_today ?? 0}/20</span>
+                </div>
+              )}
               {profile.subscription_id && (
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-white/70">Subscription ID</span>
@@ -277,6 +290,27 @@ export default function Account() {
             </div>
           </div>
 
+          {/* Welcome Credits Section */}
+          {(profile.welcome_credits ?? 0) > 0 && (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-6">
+              <h3 className="mb-4 text-lg font-semibold text-white">Welcome Credits</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-white/90">Remaining</p>
+                    <p className="text-xs text-white/50 mt-1">One-time starter pack for new users</p>
+                  </div>
+                  <span className="text-2xl font-bold bg-gradient-to-r from-pink-500 to-purple-600 bg-clip-text text-transparent">
+                    {profile.welcome_credits ?? 0}
+                  </span>
+                </div>
+                <p className="text-xs text-white/50">
+                  Welcome credits are shared between voice and text messages. Once used up, voice access stops and text moves to a free tier with daily limits.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Voice Credits Section */}
           <div className="rounded-xl border border-white/10 bg-white/5 p-6">
             <h3 className="mb-4 text-lg font-semibold text-white">Voice Credits</h3>
@@ -304,6 +338,35 @@ export default function Account() {
               </div>
             </div>
           </div>
+
+          {/* Text Message Status */}
+          {(profile.welcome_credits ?? 0) <= 0 && (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-6">
+              <h3 className="mb-4 text-lg font-semibold text-white">Text Messages</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-white/90">Daily Usage</p>
+                    <p className="text-xs text-white/50 mt-1">Free tier limit: 20 messages per day</p>
+                  </div>
+                  <span className="text-2xl font-bold bg-gradient-to-r from-blue-500 to-cyan-600 bg-clip-text text-transparent">
+                    {profile.text_messages_today ?? 0}/20
+                  </span>
+                </div>
+                <p className="text-xs text-white/50">
+                  After welcome credits are used, text messages are limited to 20 per day. Upgrade for unlimited messaging!
+                </p>
+                <div className="border-t border-white/10 pt-4">
+                  <a 
+                    href="/subscribe" 
+                    className="block text-center rounded-lg bg-gradient-to-r from-pink-500 to-purple-600 px-4 py-3 text-white shadow-lg hover:brightness-110 transition font-medium"
+                  >
+                    Upgrade for Unlimited
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
       <div className="mt-6">
