@@ -163,8 +163,9 @@ export default function Chat() {
   const uiTextBufferRef = useRef<string>(''); // Accumulator for UI streaming
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
-  const PCM_MIN_SAMPLES = 4800; // ~200ms at 24kHz to reduce boundary rate
+  const PCM_MIN_SAMPLES = 1200; // ~50ms at 24kHz - reduced for smoother playback with Resemble.ai
   const ttsValidatedBinaryRef = useRef<boolean>(false);
+  const ttsFlushTimerRef = useRef<number | null>(null);
   // Promises to resolve when current TTS playback fully ends
   const ttsEndResolversRef = useRef<Array<() => void>>([]);
   // Preserve 1 leftover byte between chunks to maintain 16-bit alignment
@@ -286,8 +287,21 @@ export default function Chat() {
     const audioCtx = audioCtxRef.current;
     if (!audioCtx) return;
     const acc = ttsPcmAccumRef.current;
-    if (!acc || acc.length === 0) return;
+    if (!acc || acc.length === 0) {
+      // Clear flush timer if accumulator is empty
+      if (ttsFlushTimerRef.current) {
+        clearTimeout(ttsFlushTimerRef.current);
+        ttsFlushTimerRef.current = null;
+      }
+      return;
+    }
     if (!force && acc.length < PCM_MIN_SAMPLES) return;
+    
+    // Clear flush timer since we're flushing now
+    if (ttsFlushTimerRef.current) {
+      clearTimeout(ttsFlushTimerRef.current);
+      ttsFlushTimerRef.current = null;
+    }
 
     // Take at least PCM_MIN_SAMPLES, leave the rest for next flush
     const take = force ? acc.length : Math.max(PCM_MIN_SAMPLES, Math.floor(acc.length / PCM_MIN_SAMPLES) * PCM_MIN_SAMPLES);
@@ -407,13 +421,29 @@ export default function Chat() {
       ttsPcmAccumRef.current.push(Math.max(-1, Math.min(1, s / 32768)));
     }
 
-    // Flush in ~100ms blocks to reduce boundary clicks
+    // Flush accumulated PCM - try immediate flush first
     flushAccumulatedPcm(false);
+    
+    // If we have samples but didn't flush (below threshold), set a timeout to flush soon
+    // This prevents long pauses when receiving small chunks
+    if (ttsPcmAccumRef.current.length > 0 && ttsPcmAccumRef.current.length < PCM_MIN_SAMPLES && !ttsFlushTimerRef.current) {
+      // Flush after 30ms if we haven't reached the minimum threshold
+      // This ensures smooth playback even with small chunks
+      ttsFlushTimerRef.current = window.setTimeout(() => {
+        ttsFlushTimerRef.current = null;
+        flushAccumulatedPcm(true); // Force flush even if below threshold
+      }, 30);
+    }
   };
 
   const stopTtsNow = useCallback(() => {
     try { ttsAbortRef.current?.abort(); } catch {}
     ttsAbortRef.current = null;
+    // Clear flush timer
+    if (ttsFlushTimerRef.current) {
+      clearTimeout(ttsFlushTimerRef.current);
+      ttsFlushTimerRef.current = null;
+    }
     // Stop all scheduled sources
     const audioCtx = audioCtxRef.current;
     ttsSourcesRef.current.forEach((s) => {
@@ -474,6 +504,11 @@ export default function Chat() {
     ttsStreamingRef.current = true;
     // Reset PCM accumulator for a fresh stream
     ttsPcmAccumRef.current = [];
+    // Clear any pending flush timer
+    if (ttsFlushTimerRef.current) {
+      clearTimeout(ttsFlushTimerRef.current);
+      ttsFlushTimerRef.current = null;
+    }
     // Re-validate binary for new stream
     ttsValidatedBinaryRef.current = false;
     // Reset carry byte
