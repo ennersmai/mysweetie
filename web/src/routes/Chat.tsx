@@ -1138,7 +1138,13 @@ export default function Chat() {
       ttsCreditDeductedRef.current = false;
       ttsCompleteResponseRef.current = '';
       ttsModerationPassedRef.current = false;
+      ttsStartedRef.current = false;
       moderationBlockedRef.current = false;
+      // Clear any pending moderation timeout
+      if (moderationTimeoutRef.current) {
+        clearTimeout(moderationTimeoutRef.current);
+        moderationTimeoutRef.current = null;
+      }
     }
     try {
       // New API call to the Node.js backend
