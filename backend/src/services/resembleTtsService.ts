@@ -145,8 +145,8 @@ export async function synthesizeResembleTTS(
             voice_uuid: voiceUuid,
             data: chunk,
             precision: 'PCM_16',
-            sample_rate: 24000,
-            use_hd: true
+            sample_rate: 16000,
+            use_hd: false
           }),
           responseType: 'stream',
           validateStatus: () => true

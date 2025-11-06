@@ -144,7 +144,7 @@ export async function streamWAVToPCM(
   return new Promise((resolve, reject) => {
     let buffer = Buffer.alloc(0);
     let fmtParsed = false;
-    let sampleRate = 24000; // Default, will be updated from fmt chunk
+    let sampleRate = 16000; // Default, will be updated from fmt chunk
     let channels = 1;
     let bitsPerSample = 16;
     let dataOffset = -1;

@@ -153,7 +153,7 @@ export default function Chat() {
   // HTTP PCM TTS via Arcana
   const audioCtxRef = useRef<AudioContext | null>(null);
   const ttsPlayheadRef = useRef<number>(0); // seconds scheduled ahead in AudioContext time
-  const ttsSampleRateRef = useRef<number>(24000); // Use 24000 Hz to match TTS output
+  const ttsSampleRateRef = useRef<number>(16000); // Use 16000 Hz to match TTS output
   const ttsSentenceBufRef = useRef<string>('');
   const ttsQueueRef = useRef<{ speaker: string; text: string }[]>([]);
   const ttsProcessingRef = useRef<boolean>(false);
@@ -264,11 +264,11 @@ export default function Chat() {
   const ensureAudioContext = async () => {
     if (!audioCtxRef.current) {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      // Create AudioContext at 24000 Hz to match TTS output
-      audioCtxRef.current = new Ctx({ sampleRate: 24000 });
+      // Create AudioContext at 16000 Hz to match TTS output
+      audioCtxRef.current = new Ctx({ sampleRate: 16000 });
       console.log('Created new AudioContext with sample rate:', audioCtxRef.current?.sampleRate);
       // Update TTS sample rate to match AudioContext
-      ttsSampleRateRef.current = audioCtxRef.current?.sampleRate || 24000;
+      ttsSampleRateRef.current = audioCtxRef.current?.sampleRate || 16000;
     }
     if (audioCtxRef.current?.state === 'suspended') {
       try { 
@@ -313,7 +313,7 @@ export default function Chat() {
     // No per-chunk fade to avoid periodic clicks; schedule contiguous buffers instead
 
     const float = new Float32Array(chunk);
-    const audioBuffer = audioCtx.createBuffer(1, float.length, 24000);
+    const audioBuffer = audioCtx.createBuffer(1, float.length, 16000);
     audioBuffer.getChannelData(0).set(float);
 
     const source = audioCtx.createBufferSource();
@@ -528,7 +528,7 @@ export default function Chat() {
         text,
         speaker,
         modelId: 'arcana',
-        samplingRate: 24000, // Use Rime.ai's native sample rate
+        samplingRate: 16000, // Use Resemble.ai sample rate
         lang: 'eng',
         }, controller.signal as any);
       } catch (e) {
