@@ -10,7 +10,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
 import Modal from '../components/Modal';
 import VoiceCallButton from '../components/VoiceCallButton';
 import MobileBottomNav from '../components/MobileBottomNav';
-import { createWAVParser, processWAVChunk, isWAVParserComplete } from '../utils/wavParser';
+import { createWAVParser, processWAVChunk } from '../utils/wavParser';
 
 type Message = { id?: string; role: 'user' | 'assistant'; content: string };
 type Memory = { id: string; memory_text: string };
@@ -581,27 +581,67 @@ export default function Chat() {
           if (parser) {
             processWAVChunk(parser, wavChunk);
             
-            // If we've received a complete WAV file, decode and stream it
-            if (isWAVParserComplete(parser)) {
-              await decodeAccumulatedWAV();
-              // Reset parser for next WAV file (if there are multiple)
-              ttsWavParserRef.current = createWAVParser();
-              ttsWavBufferRef.current = [];
+            // Check if we've received a complete WAV file - decode immediately!
+            if (!parser.searchingForDataChunk && parser.dataOffset !== -1 && parser.dataReceived >= parser.expectedDataSize) {
+              // Calculate the size of the complete WAV file (header + data)
+              const wavFileSize = parser.dataOffset + parser.expectedDataSize;
+              
+              // Extract and decode this complete WAV file
+              await decodeWAVFile(wavFileSize);
+              
+              // Remove the decoded WAV file from buffer and reset parser for next WAV file
+              const totalBuffered = ttsWavBufferRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
+              if (totalBuffered > wavFileSize) {
+                // Remove the decoded WAV file bytes from buffer
+                let bytesToRemove = wavFileSize;
+                while (bytesToRemove > 0 && ttsWavBufferRef.current.length > 0) {
+                  const firstChunk = ttsWavBufferRef.current[0];
+                  if (bytesToRemove >= firstChunk.length) {
+                    bytesToRemove -= firstChunk.length;
+                    ttsWavBufferRef.current.shift();
+                  } else {
+                    // Partial chunk - keep the remainder
+                    ttsWavBufferRef.current[0] = firstChunk.subarray(bytesToRemove);
+                    bytesToRemove = 0;
+                  }
+                }
+                // Reset parser and continue with remaining data
+                ttsWavParserRef.current = createWAVParser();
+                // Process remaining buffered data with new parser
+                const remainingParser = ttsWavParserRef.current;
+                for (const remainingChunk of ttsWavBufferRef.current) {
+                  processWAVChunk(remainingParser, remainingChunk);
+                }
+              } else {
+                // All data was in this WAV file, clear buffer and reset parser
+                ttsWavBufferRef.current = [];
+                ttsWavParserRef.current = createWAVParser();
+              }
             }
           }
         }
       }
       
-      // Helper function to decode accumulated WAV using browser's native decoder
-      async function decodeAccumulatedWAV() {
+      // Helper function to decode a WAV file of specified size from accumulated buffer
+      async function decodeWAVFile(wavFileSize: number) {
         if (ttsWavBufferRef.current.length === 0) return;
         
-        const totalLength = ttsWavBufferRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-        const completeWav = new Uint8Array(totalLength);
+        // Extract exactly wavFileSize bytes from the buffer
+        const completeWav = new Uint8Array(wavFileSize);
         let offset = 0;
-        for (const chunk of ttsWavBufferRef.current) {
-          completeWav.set(chunk, offset);
-          offset += chunk.length;
+        let bytesRemaining = wavFileSize;
+        
+        for (let i = 0; i < ttsWavBufferRef.current.length && bytesRemaining > 0; i++) {
+          const chunk = ttsWavBufferRef.current[i];
+          const bytesToTake = Math.min(chunk.length, bytesRemaining);
+          completeWav.set(chunk.subarray(0, bytesToTake), offset);
+          offset += bytesToTake;
+          bytesRemaining -= bytesToTake;
+        }
+        
+        if (offset < wavFileSize) {
+          console.warn(`🎵 Warning: Only extracted ${offset} bytes, expected ${wavFileSize}`);
+          return;
         }
         
         console.log(`🎵 Decoding complete WAV file: ${completeWav.length} bytes`);
@@ -626,7 +666,7 @@ export default function Chat() {
             pcmInt16[i] = Math.max(-32768, Math.min(32767, Math.round(pcmData[i] * 32767)));
           }
           
-          // Convert to ArrayBuffer and stream
+          // Convert to ArrayBuffer and stream immediately
           const arrayBuffer = new ArrayBuffer(pcmInt16.length * 2);
           const dv = new DataView(arrayBuffer);
           for (let i = 0; i < pcmInt16.length; i++) {
@@ -636,6 +676,15 @@ export default function Chat() {
           schedulePcmChunk(arrayBuffer);
         } catch (error: any) {
           console.error(`🎵 Error decoding WAV:`, error);
+        }
+      }
+      
+      // Decode any remaining WAV file at the end
+      async function decodeAccumulatedWAV() {
+        const parser = ttsWavParserRef.current;
+        if (parser && !parser.searchingForDataChunk && parser.dataOffset !== -1) {
+          const wavFileSize = parser.dataOffset + parser.expectedDataSize;
+          await decodeWAVFile(wavFileSize);
         }
       }
       // Ensure any remaining accumulated samples are played
