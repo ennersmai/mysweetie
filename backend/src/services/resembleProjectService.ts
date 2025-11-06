@@ -44,11 +44,19 @@ class ResembleProjectService {
       }
 
       // Cache the result
-      this.cachedProjectUuid = data.project_uuid;
+      const projectUuid = data.project_uuid;
+      if (!projectUuid) {
+        throw new Error(
+          'Resemble project UUID not found in database. ' +
+          'Please create a project in Resemble dashboard and insert the UUID into the resemble_projects table.'
+        );
+      }
+
+      this.cachedProjectUuid = projectUuid;
       this.cacheTimestamp = now;
 
       logger.info('Resemble project UUID loaded from database');
-      return this.cachedProjectUuid;
+      return projectUuid;
     } catch (error: any) {
       logger.error('Error in getProjectUuid:', error);
       throw error;

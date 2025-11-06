@@ -127,10 +127,13 @@ export async function synthesizeResembleTTS(
         }
 
         const chunk = textChunks[i];
+        if (!chunk) {
+          continue;
+        }
         logger.debug(`Processing Resemble TTS chunk ${i + 1}/${textChunks.length}: "${chunk.substring(0, 50)}..."`);
 
         // Make request to Resemble.ai
-        const response: AxiosResponse<Readable> = await axios({
+        const axiosConfig: any = {
           method: 'POST',
           url: RESEMBLE_STREAMING_ENDPOINT,
           headers: {
@@ -146,9 +149,15 @@ export async function synthesizeResembleTTS(
             use_hd: true
           }),
           responseType: 'stream',
-          validateStatus: () => true,
-          signal
-        });
+          validateStatus: () => true
+        };
+
+        // Only add signal if it's provided
+        if (signal) {
+          axiosConfig.signal = signal;
+        }
+
+        const response: AxiosResponse<Readable> = await axios(axiosConfig);
 
         if (response.status !== 200) {
           let errorText = '';
@@ -201,14 +210,20 @@ export async function synthesizeResembleTTSBuffer(
 ): Promise<Buffer> {
   const chunks: Buffer[] = [];
 
-  await synthesizeResembleTTS({
+  const options: ResembleTTSOptions = {
     text,
     voiceName,
     onPCMChunk: (chunk) => {
       chunks.push(chunk);
-    },
-    signal
-  });
+    }
+  };
+
+  // Only add signal if provided
+  if (signal) {
+    options.signal = signal;
+  }
+
+  await synthesizeResembleTTS(options);
 
   return Buffer.concat(chunks);
 }
