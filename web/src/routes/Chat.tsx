@@ -182,6 +182,10 @@ export default function Chat() {
   const ttsCompleteResponseRef = useRef<string>('');
   // Whether moderation has passed for current response
   const ttsModerationPassedRef = useRef<boolean>(false);
+  // Track if TTS has already been started for this response (prevent duplicates)
+  const ttsStartedRef = useRef<boolean>(false);
+  // Track timeout for moderation check fallback
+  const moderationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Track if moderation blocked the current response
   const moderationBlockedRef = useRef<boolean>(false);
   // Safe max characters per TTS request to avoid provider truncation
