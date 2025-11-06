@@ -386,6 +386,13 @@ export async function* processChat(request: ChatRequest) {
     }
     
     // After streaming ends, check moderation on complete response
+    logger.info({
+        message: 'Streaming ended, checking moderation',
+        shouldStopStreaming,
+        fullResponseLength: fullResponse.trim().length,
+        willCheckModeration: !shouldStopStreaming && fullResponse.trim().length > 0,
+    });
+    
     if (!shouldStopStreaming && fullResponse.trim().length > 0) {
         // Check complete response for moderation
         const moderationResult = await checkModeration(fullResponse);
@@ -409,6 +416,12 @@ export async function* processChat(request: ChatRequest) {
             contentLength: fullResponse.length,
         });
         yield { type: 'moderation_passed' };
+    } else {
+        logger.warn({
+            message: 'Skipping moderation check',
+            reason: shouldStopStreaming ? 'streaming was stopped' : 'fullResponse is empty',
+            fullResponseLength: fullResponse.trim().length,
+        });
     }
     
     // If content was blocked, don't proceed with saving to history
