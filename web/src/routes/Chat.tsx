@@ -1262,9 +1262,16 @@ export default function Chat() {
                 ttsModerationPassedRef.current = true;
                 console.log('✅ Moderation passed');
                 
-                // If we already have final text, start TTS now
-                if (voiceEnabled && ttsCompleteResponseRef.current.trim().length > 0) {
+                // Clear any pending timeout since moderation passed
+                if (moderationTimeoutRef.current) {
+                  clearTimeout(moderationTimeoutRef.current);
+                  moderationTimeoutRef.current = null;
+                }
+                
+                // If we already have final text and TTS hasn't started, start TTS now
+                if (voiceEnabled && ttsCompleteResponseRef.current.trim().length > 0 && !ttsStartedRef.current) {
                   console.log('✅ Starting TTS (moderation passed, final text already available)');
+                  ttsStartedRef.current = true;
                   ttsAppendSentence(ttsCompleteResponseRef.current.trim());
                 } else {
                   console.log('⏳ Moderation passed, waiting for final response to start TTS');
@@ -1283,22 +1290,29 @@ export default function Chat() {
                   setTextMessagesToday(prev => prev + 1);
                 }
                 
-                // Start TTS if moderation already passed, otherwise wait for moderation_passed
+                // Start TTS if moderation already passed and TTS hasn't started yet
                 // If moderation_passed doesn't arrive within 2 seconds, start TTS anyway (moderation might have been skipped)
-                if (voiceEnabled && ttsModerationPassedRef.current) {
+                if (voiceEnabled && ttsModerationPassedRef.current && !ttsStartedRef.current) {
                   console.log('✅ Starting TTS for final response (moderation already passed)');
+                  ttsStartedRef.current = true;
                   // Process complete response for TTS (only once)
                   ttsAppendSentence(finalText);
-                } else if (voiceEnabled) {
+                } else if (voiceEnabled && !ttsStartedRef.current) {
                   // Moderation not passed yet, but we have final - wait for moderation_passed with timeout
                   console.log('⏳ Final received, waiting for moderation check before starting TTS');
+                  // Clear any existing timeout first
+                  if (moderationTimeoutRef.current) {
+                    clearTimeout(moderationTimeoutRef.current);
+                  }
                   // Set timeout to start TTS if moderation_passed doesn't arrive (moderation might be skipped or delayed)
-                  setTimeout(() => {
-                    if (!ttsModerationPassedRef.current && ttsCompleteResponseRef.current.trim().length > 0) {
+                  moderationTimeoutRef.current = setTimeout(() => {
+                    if (!ttsStartedRef.current && ttsCompleteResponseRef.current.trim().length > 0) {
                       console.log('⏰ Moderation check timeout - starting TTS anyway (moderation may have been skipped)');
                       ttsModerationPassedRef.current = true; // Mark as passed to prevent duplicate
+                      ttsStartedRef.current = true;
                       ttsAppendSentence(ttsCompleteResponseRef.current.trim());
                     }
+                    moderationTimeoutRef.current = null;
                   }, 2000); // 2 second timeout
                 }
                 
