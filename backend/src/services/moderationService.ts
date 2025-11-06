@@ -70,7 +70,8 @@ export async function checkModeration(content: string): Promise<ModerationResult
     let shouldBlock = false;
     
     // Score threshold to reduce false positives (0.0-1.0, higher = more confident)
-    const SCORE_THRESHOLD = 0.5;
+    // Increased to 0.9 to significantly reduce false positives
+    const SCORE_THRESHOLD = 0.9;
 
     // Check sexual/minors (CSAM-related) - only block if score is high
     if (categories['sexual/minors'] && (categoryScores['sexual/minors'] || 0) > SCORE_THRESHOLD) {

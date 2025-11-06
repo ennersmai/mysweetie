@@ -1324,8 +1324,15 @@ export default function Chat() {
                 
                 // Show filtered message for AI response (keep user input visible)
                 setMessages(prev => {
-                  console.log('Updating messages - prev length:', prev.length);
+                  console.log('Updating messages - prev length:', prev.length, 'User messages:', prev.filter(m => (m as any)?.role === 'user').length);
                   const next = [...prev];
+                  
+                  // Ensure we have at least the user message - if not, something went wrong
+                  const userMessages = next.filter(m => (m as any)?.role === 'user');
+                  if (userMessages.length === 0) {
+                    console.error('⚠️ No user messages found! This should not happen.');
+                  }
+                  
                   // Find or create assistant message
                   let idx = (currentAssistantIndexRef.current != null ? currentAssistantIndexRef.current : -1) as number;
                   console.log('Looking for assistant message at idx:', idx);
@@ -1339,12 +1346,15 @@ export default function Chat() {
                         break;
                       }
                     }
-                    // If not found, create new one
-                    if (idx < 0) {
+                    // If not found, create new one (but only if we have a user message)
+                    if (idx < 0 && userMessages.length > 0) {
                       console.log('No assistant message found, creating new one');
                       next.push({ role: 'assistant', content: '' } as any);
                       idx = next.length - 1;
                       currentAssistantIndexRef.current = idx;
+                    } else if (idx < 0) {
+                      console.error('⚠️ Cannot create assistant message - no user message exists!');
+                      return prev; // Don't modify if we have no user message
                     }
                   }
                   // Set filtered message (replace any partial content)
@@ -1353,7 +1363,7 @@ export default function Chat() {
                   next[idx] = { ...next[idx], content: filteredMessage } as any;
                   // Update assistantMessageRef to match
                   assistantMessageRef.current = filteredMessage;
-                  console.log('Messages after update:', next.length, 'User messages:', next.filter(m => (m as any)?.role === 'user').length);
+                  console.log('Messages after update:', next.length, 'User messages:', next.filter(m => (m as any)?.role === 'user').length, 'Assistant messages:', next.filter(m => (m as any)?.role === 'assistant').length);
                   return next;
                 });
                 
