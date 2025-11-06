@@ -1429,7 +1429,7 @@ export default function Chat() {
           // Add current messages without IDs (newly sent but not yet saved)
           currentWithoutIds.forEach(currentMsg => {
             // Only add if not already in mapped (by content match)
-            const exists = mapped.some(m => 
+            const exists = mapped.some((m: Message) => 
               m.role === currentMsg.role && 
               m.content === currentMsg.content
             );
