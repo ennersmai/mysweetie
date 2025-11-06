@@ -182,6 +182,8 @@ export default function Chat() {
   const ttsCompleteResponseRef = useRef<string>('');
   // Whether moderation has passed for current response
   const ttsModerationPassedRef = useRef<boolean>(false);
+  // Track if moderation blocked the current response
+  const moderationBlockedRef = useRef<boolean>(false);
   // Safe max characters per TTS request to avoid provider truncation
   const TTS_MAX_CHARS = 3000; // Match Resemble.ai backend limit to avoid unnecessary splits
 
@@ -1125,6 +1127,7 @@ export default function Chat() {
       ttsCreditDeductedRef.current = false;
       ttsCompleteResponseRef.current = '';
       ttsModerationPassedRef.current = false;
+      moderationBlockedRef.current = false;
     }
     try {
       // New API call to the Node.js backend
@@ -1313,6 +1316,9 @@ export default function Chat() {
                 console.error('🚫🚫🚫 MODERATION BLOCKED - Content filtered');
                 console.log('Current messages before update:', messagesRef.current?.length || 0);
                 
+                // Mark that moderation blocked this response
+                moderationBlockedRef.current = true;
+                
                 // Stop TTS immediately
                 stopTtsNow();
                 
@@ -1396,14 +1402,17 @@ export default function Chat() {
         }
       }, 0);
     // Refresh history so latest messages receive their persisted IDs
+    // BUT: Don't refresh if moderation blocked - preserve current messages
     try {
-      if (currentConversationId) {
+      if (currentConversationId && !moderationBlockedRef.current) {
         const res = await apiClient.get(`/chat/history/${currentConversationId}`);
         if (res.ok) {
           const data = await res.json();
           const mapped = (data || []).map((m: any) => ({ id: m.id as string, role: m.role as 'user' | 'assistant', content: m.content as string }));
           setMessages(mapped);
         }
+      } else if (moderationBlockedRef.current) {
+        console.log('⏸️ Skipping history refresh - moderation blocked, preserving current messages');
       }
     } catch {}
       // Restore scroll
