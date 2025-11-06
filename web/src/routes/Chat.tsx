@@ -703,13 +703,38 @@ export default function Chat() {
       if (!characterId) return;
       const { data } = await supabase
         .from('characters')
-        .select('id, name, avatar_url, description, system_prompt')
+        .select('id, name, avatar_url, description, system_prompt, voice_id')
         .eq('id', characterId)
         .maybeSingle();
       setCharacter((data as any) ?? null);
     };
     loadCharacter();
   }, [characterId]);
+
+  // Set voice based on character when character loads
+  useEffect(() => {
+    if (!character) return;
+    
+    // Determine voice: use character's voice_id if valid, otherwise use character name if it matches a voice, otherwise keep current voiceKey
+    const characterVoiceId = (character as any).voice_id;
+    const characterNameLower = character.name.toLowerCase();
+    
+    let newVoice: string;
+    if (characterVoiceId && ALLOWED_VOICES.includes(characterVoiceId.toLowerCase())) {
+      newVoice = characterVoiceId.toLowerCase();
+    } else if (ALLOWED_VOICES.includes(characterNameLower)) {
+      newVoice = characterNameLower;
+    } else {
+      // Character name doesn't match a voice, keep current voiceKey (don't change it)
+      return;
+    }
+    
+    // Only update if different from current voiceKey
+    if (newVoice !== voiceKey) {
+      setVoiceKey(newVoice);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character]);
 
   // Keep live reference to messages to avoid stale closures
   useEffect(() => {
