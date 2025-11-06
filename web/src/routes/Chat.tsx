@@ -515,6 +515,8 @@ export default function Chat() {
     ttsCarryByteRef.current = null;
     // Network not done until we finish reading
     ttsNetworkDoneRef.current = false;
+    // Clear any pending network end resolvers
+    ttsNetworkEndResolversRef.current = [];
     
     try {
       let res: Response;
@@ -565,37 +567,43 @@ export default function Chat() {
       // Mark network as done so onended can finalize state when buffers drain
       ttsNetworkDoneRef.current = true;
       console.log(`🎤 TTS[#${reqId}] network done`);
+      // Notify queue processor that network stream ended (can start next TTS)
+      const networkResolvers = ttsNetworkEndResolversRef.current.splice(0);
+      networkResolvers.forEach((r) => { try { r(); } catch {} });
     } finally {
       // Don't set ttsStreamingRef.current = false here
       // It will be set to false when audio actually finishes playing
     }
   }, []);
 
+  // Track when network stream ends (not playback) for faster queue processing
+  const ttsNetworkEndResolversRef = useRef<Array<() => void>>([]);
+  
   const processTtsQueue = useCallback(async () => {
     if (ttsProcessingRef.current) return;
     ttsProcessingRef.current = true;
     try {
       while (ttsQueueRef.current.length > 0) {
         const { speaker, text } = ttsQueueRef.current.shift()!;
-        // Ensure previous playback is done before starting next
+        // Ensure previous network stream is done before starting next (not waiting for playback)
         if (ttsStreamingRef.current) {
           await new Promise<void>((resolve) => {
-            // If ended already, resolve immediately
-            if (!ttsStreamingRef.current) return resolve();
-            ttsEndResolversRef.current.push(resolve);
+            // If network already done, resolve immediately
+            if (!ttsStreamingRef.current || ttsNetworkDoneRef.current) return resolve();
+            ttsNetworkEndResolversRef.current.push(resolve);
           });
         }
         await speakPcm(speaker, text);
-        // Wait until playback fully ends
+        // Wait only for network stream to end, not playback to finish
+        // This allows next TTS to start fetching immediately while current one is still playing
         await new Promise<void>((resolve) => {
-          if (!ttsStreamingRef.current) return resolve();
-          ttsEndResolversRef.current.push(resolve);
+          if (ttsNetworkDoneRef.current) return resolve();
+          ttsNetworkEndResolversRef.current.push(resolve);
         });
         if (stickToBottomRef.current) {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
         }
-        // No artificial pauses - TTS handles natural pacing
       }
     } finally {
       ttsProcessingRef.current = false;
