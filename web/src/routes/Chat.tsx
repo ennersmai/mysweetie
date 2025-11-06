@@ -565,6 +565,7 @@ export default function Chat() {
             processWAVChunk(parser, new Uint8Array(0));
           }
           // Decode any complete WAV files we've accumulated
+          // This handles files with 0xFFFFFFFF data size (unknown size - decode when stream ends)
           await decodeAccumulatedWAV();
           break;
         }
@@ -582,9 +583,18 @@ export default function Chat() {
             processWAVChunk(parser, wavChunk);
             
             // Check if we've received a complete WAV file - decode immediately!
-            if (!parser.searchingForDataChunk && parser.dataOffset !== -1 && parser.dataReceived >= parser.expectedDataSize) {
+            // Note: For files with expectedDataSize === 0xFFFFFFFF, we'll decode when stream ends
+            const isComplete = !parser.searchingForDataChunk && parser.dataOffset !== -1 && 
+              parser.expectedDataSize !== 0xFFFFFFFF && 
+              parser.dataReceived >= parser.expectedDataSize;
+            
+            if (isComplete) {
               // Calculate the size of the complete WAV file (header + data)
-              const wavFileSize = parser.dataOffset + parser.expectedDataSize;
+              // If expectedDataSize is 0xFFFFFFFF, use actual received data size
+              const actualDataSize = parser.expectedDataSize === 0xFFFFFFFF 
+                ? parser.dataReceived 
+                : parser.expectedDataSize;
+              const wavFileSize = parser.dataOffset + actualDataSize;
               
               // Extract and decode this complete WAV file
               await decodeWAVFile(wavFileSize);
@@ -682,8 +692,12 @@ export default function Chat() {
       // Decode any remaining WAV file at the end
       async function decodeAccumulatedWAV() {
         const parser = ttsWavParserRef.current;
-        if (parser && !parser.searchingForDataChunk && parser.dataOffset !== -1) {
-          const wavFileSize = parser.dataOffset + parser.expectedDataSize;
+        if (parser && !parser.searchingForDataChunk && parser.dataOffset !== -1 && parser.dataReceived > 0) {
+          // Handle case where expectedDataSize is 0xFFFFFFFF (Resemble.ai uses this for some files)
+          const actualDataSize = parser.expectedDataSize === 0xFFFFFFFF 
+            ? parser.dataReceived 
+            : parser.expectedDataSize;
+          const wavFileSize = parser.dataOffset + actualDataSize;
           await decodeWAVFile(wavFileSize);
         }
       }
