@@ -481,9 +481,10 @@ export default function Chat() {
   const speakPcm = useCallback(async (speaker: string, text: string) => {
     if (!text.trim()) return;
     
-    // Prevent concurrent TTS requests
-    if (ttsStreamingRef.current) {
-      console.warn('🚫 TTS already streaming, skipping request');
+    // Prevent concurrent TTS network requests (but allow if network is done, even if audio is playing)
+    // We can start fetching next TTS while current audio is still playing
+    if (ttsStreamingRef.current && !ttsNetworkDoneRef.current) {
+      console.warn('🚫 TTS network stream already active, skipping request');
       return;
     }
     
