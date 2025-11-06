@@ -1410,18 +1410,43 @@ export default function Chat() {
       }, 0);
     // Refresh history so latest messages receive their persisted IDs
     // BUT: Don't refresh if moderation blocked - preserve current messages
+    // Also: Merge with current messages instead of replacing to prevent loss
     try {
       if (currentConversationId && !moderationBlockedRef.current) {
+        // Get current messages before refreshing
+        const currentMessages = messagesRef.current || [];
+        console.log('🔄 Refreshing history, current messages:', currentMessages.length);
+        
         const res = await apiClient.get(`/chat/history/${currentConversationId}`);
         if (res.ok) {
           const data = await res.json();
           const mapped = (data || []).map((m: any) => ({ id: m.id as string, role: m.role as 'user' | 'assistant', content: m.content as string }));
-          setMessages(mapped);
+          
+          // Merge: Keep current messages that don't have IDs yet, add/update from database
+          const currentWithoutIds = currentMessages.filter(m => !m.id);
+          const merged = [...mapped];
+          
+          // Add current messages without IDs (newly sent but not yet saved)
+          currentWithoutIds.forEach(currentMsg => {
+            // Only add if not already in mapped (by content match)
+            const exists = mapped.some(m => 
+              m.role === currentMsg.role && 
+              m.content === currentMsg.content
+            );
+            if (!exists) {
+              merged.push(currentMsg);
+            }
+          });
+          
+          console.log('📝 Merged messages - DB:', mapped.length, 'Current without IDs:', currentWithoutIds.length, 'Total:', merged.length);
+          setMessages(merged);
         }
       } else if (moderationBlockedRef.current) {
         console.log('⏸️ Skipping history refresh - moderation blocked, preserving current messages');
       }
-    } catch {}
+    } catch (err) {
+      console.error('❌ Error refreshing history:', err);
+    }
       // Restore scroll
       setTimeout(() => window.scrollTo({ top: prevScrollY, left: window.scrollX, behavior: 'auto' }), 0);
       // Reset first-turn flag once streaming completes
