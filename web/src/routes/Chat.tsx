@@ -163,7 +163,7 @@ export default function Chat() {
   const uiTextBufferRef = useRef<string>(''); // Accumulator for UI streaming
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
-  const PCM_MIN_SAMPLES = 2400; // ~100ms at 24kHz - balanced for smooth playback without artifacts
+  const PCM_MIN_SAMPLES = 1200; // ~50ms at 24kHz - reduced for better responsiveness and quality
   const ttsValidatedBinaryRef = useRef<boolean>(false);
   const ttsFlushTimerRef = useRef<number | null>(null);
   // Promises to resolve when current TTS playback fully ends
@@ -303,8 +303,10 @@ export default function Chat() {
       ttsFlushTimerRef.current = null;
     }
 
-    // Take at least PCM_MIN_SAMPLES, leave the rest for next flush
-    const take = force ? acc.length : Math.max(PCM_MIN_SAMPLES, Math.floor(acc.length / PCM_MIN_SAMPLES) * PCM_MIN_SAMPLES);
+    // Take samples: if force, take all; otherwise take at least PCM_MIN_SAMPLES, but don't wait for multiples
+    // This reduces buffering and improves responsiveness
+    const take = force ? acc.length : (acc.length >= PCM_MIN_SAMPLES ? acc.length : 0);
+    if (take === 0) return; // Not enough samples and not forcing
     const chunk = acc.splice(0, take);
 
     if (chunk.length === 0) return;
@@ -427,12 +429,12 @@ export default function Chat() {
     // If we have samples but didn't flush (below threshold), set a timeout to flush soon
     // This prevents long pauses when receiving small chunks
     if (ttsPcmAccumRef.current.length > 0 && ttsPcmAccumRef.current.length < PCM_MIN_SAMPLES && !ttsFlushTimerRef.current) {
-      // Flush after 50ms if we haven't reached the minimum threshold
-      // This ensures smooth playback even with small chunks without causing artifacts
+      // Flush after 25ms if we haven't reached the minimum threshold
+      // Reduced timeout for faster response and better quality
       ttsFlushTimerRef.current = window.setTimeout(() => {
         ttsFlushTimerRef.current = null;
         flushAccumulatedPcm(true); // Force flush even if below threshold
-      }, 50);
+      }, 25);
     }
   };
 
