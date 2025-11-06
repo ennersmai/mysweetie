@@ -566,9 +566,13 @@ export default function Chat() {
           if (parser.buffer.length > 0) {
             const finalPcmChunks = processWAVChunk(parser, new Uint8Array(0));
             for (const pcmChunk of finalPcmChunks) {
-              // Convert Int16Array to ArrayBuffer (create a copy to ensure it's ArrayBuffer, not SharedArrayBuffer)
-              const arrayBuffer = new ArrayBuffer(pcmChunk.byteLength);
-              new Uint8Array(arrayBuffer).set(new Uint8Array(pcmChunk.buffer, pcmChunk.byteOffset, pcmChunk.byteLength));
+              // Convert Int16Array to ArrayBuffer with correct byte order
+              // Create a new ArrayBuffer and write Int16 values as little-endian bytes
+              const arrayBuffer = new ArrayBuffer(pcmChunk.length * 2);
+              const dv = new DataView(arrayBuffer);
+              for (let i = 0; i < pcmChunk.length; i++) {
+                dv.setInt16(i * 2, pcmChunk[i], true); // little-endian
+              }
               schedulePcmChunk(arrayBuffer);
             }
           }
@@ -582,9 +586,13 @@ export default function Chat() {
           // Parse WAV chunk and extract PCM data
           const pcmChunks = processWAVChunk(parser, wavChunk);
           for (const pcmChunk of pcmChunks) {
-            // Convert Int16Array to ArrayBuffer (create a copy to ensure it's ArrayBuffer, not SharedArrayBuffer)
-            const arrayBuffer = new ArrayBuffer(pcmChunk.byteLength);
-            new Uint8Array(arrayBuffer).set(new Uint8Array(pcmChunk.buffer, pcmChunk.byteOffset, pcmChunk.byteLength));
+            // Convert Int16Array to ArrayBuffer with correct byte order
+            // Create a new ArrayBuffer and write Int16 values as little-endian bytes
+            const arrayBuffer = new ArrayBuffer(pcmChunk.length * 2);
+            const dv = new DataView(arrayBuffer);
+            for (let i = 0; i < pcmChunk.length; i++) {
+              dv.setInt16(i * 2, pcmChunk[i], true); // little-endian
+            }
             schedulePcmChunk(arrayBuffer);
           }
         }
