@@ -173,6 +173,9 @@ export default function Chat() {
   const ttsCarryByteRef = useRef<number | null>(null);
   // WAV parser state for client-side parsing
   const ttsWavParserRef = useRef<ReturnType<typeof createWAVParser> | null>(null);
+  // Accumulator for PCM chunks from WAV parser before passing to schedulePcmChunk
+  const ttsWavPcmAccumRef = useRef<Int16Array[]>([]);
+  const ttsWavFlushTimerRef = useRef<number | null>(null);
   // Track when the network stream has fully completed for the current sentence
   const ttsNetworkDoneRef = useRef<boolean>(false);
   // Monotonic counter to tag each TTS PCM request for debugging/correlation
@@ -518,6 +521,13 @@ export default function Chat() {
     ttsCarryByteRef.current = null;
     // Reset WAV parser for new stream
     ttsWavParserRef.current = createWAVParser();
+    // Reset WAV PCM accumulator
+    ttsWavPcmAccumRef.current = [];
+    // Clear WAV flush timer
+    if (ttsWavFlushTimerRef.current) {
+      clearTimeout(ttsWavFlushTimerRef.current);
+      ttsWavFlushTimerRef.current = null;
+    }
     // Network not done until we finish reading
     ttsNetworkDoneRef.current = false;
     
@@ -566,14 +576,31 @@ export default function Chat() {
           if (parser.buffer.length > 0) {
             const finalPcmChunks = processWAVChunk(parser, new Uint8Array(0));
             for (const pcmChunk of finalPcmChunks) {
-              // Convert Int16Array to ArrayBuffer with correct byte order
-              // Create a new ArrayBuffer and write Int16 values as little-endian bytes
-              const arrayBuffer = new ArrayBuffer(pcmChunk.length * 2);
-              const dv = new DataView(arrayBuffer);
-              for (let i = 0; i < pcmChunk.length; i++) {
-                dv.setInt16(i * 2, pcmChunk[i], true); // little-endian
+              ttsWavPcmAccumRef.current.push(pcmChunk);
+            }
+          }
+          
+          // Clear any pending flush timer
+          if (ttsWavFlushTimerRef.current) {
+            clearTimeout(ttsWavFlushTimerRef.current);
+            ttsWavFlushTimerRef.current = null;
+          }
+          
+          // Flush any remaining accumulated PCM chunks
+          if (ttsWavPcmAccumRef.current.length > 0) {
+            const totalSamples = ttsWavPcmAccumRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
+            if (totalSamples > 0) {
+              const combinedBuffer = new ArrayBuffer(totalSamples * 2);
+              const dv = new DataView(combinedBuffer);
+              let offset = 0;
+              for (const chunk of ttsWavPcmAccumRef.current) {
+                for (let i = 0; i < chunk.length; i++) {
+                  dv.setInt16(offset, chunk[i], true); // little-endian
+                  offset += 2;
+                }
               }
-              schedulePcmChunk(arrayBuffer);
+              ttsWavPcmAccumRef.current = [];
+              schedulePcmChunk(combinedBuffer);
             }
           }
           break;
@@ -586,14 +613,53 @@ export default function Chat() {
           // Parse WAV chunk and extract PCM data
           const pcmChunks = processWAVChunk(parser, wavChunk);
           for (const pcmChunk of pcmChunks) {
-            // Convert Int16Array to ArrayBuffer with correct byte order
-            // Create a new ArrayBuffer and write Int16 values as little-endian bytes
-            const arrayBuffer = new ArrayBuffer(pcmChunk.length * 2);
-            const dv = new DataView(arrayBuffer);
-            for (let i = 0; i < pcmChunk.length; i++) {
-              dv.setInt16(i * 2, pcmChunk[i], true); // little-endian
+            // Accumulate PCM chunks to avoid creating too many small audio buffers
+            ttsWavPcmAccumRef.current.push(pcmChunk);
+            
+            // Calculate total samples accumulated
+            const totalSamples = ttsWavPcmAccumRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
+            
+            // Flush when we have enough samples (~100ms = 2400 samples at 24kHz)
+            if (totalSamples >= PCM_MIN_SAMPLES) {
+              // Clear any pending flush timer
+              if (ttsWavFlushTimerRef.current) {
+                clearTimeout(ttsWavFlushTimerRef.current);
+                ttsWavFlushTimerRef.current = null;
+              }
+              
+              // Combine all accumulated chunks into one ArrayBuffer
+              const combinedBuffer = new ArrayBuffer(totalSamples * 2);
+              const dv = new DataView(combinedBuffer);
+              let offset = 0;
+              for (const chunk of ttsWavPcmAccumRef.current) {
+                for (let i = 0; i < chunk.length; i++) {
+                  dv.setInt16(offset, chunk[i], true); // little-endian
+                  offset += 2;
+                }
+              }
+              ttsWavPcmAccumRef.current = []; // Clear accumulator
+              schedulePcmChunk(combinedBuffer);
+            } else if (totalSamples > 0 && !ttsWavFlushTimerRef.current) {
+              // If we have samples but not enough, set a timeout to flush soon
+              // This prevents long delays when receiving many small chunks
+              ttsWavFlushTimerRef.current = window.setTimeout(() => {
+                ttsWavFlushTimerRef.current = null;
+                const samples = ttsWavPcmAccumRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
+                if (samples > 0) {
+                  const combinedBuffer = new ArrayBuffer(samples * 2);
+                  const dv = new DataView(combinedBuffer);
+                  let offset = 0;
+                  for (const chunk of ttsWavPcmAccumRef.current) {
+                    for (let i = 0; i < chunk.length; i++) {
+                      dv.setInt16(offset, chunk[i], true); // little-endian
+                      offset += 2;
+                    }
+                  }
+                  ttsWavPcmAccumRef.current = [];
+                  schedulePcmChunk(combinedBuffer);
+                }
+              }, 50); // Flush after 50ms if we haven't reached threshold
             }
-            schedulePcmChunk(arrayBuffer);
           }
         }
       }
