@@ -183,7 +183,7 @@ export default function Chat() {
   // Whether moderation has passed for current response
   const ttsModerationPassedRef = useRef<boolean>(false);
   // Safe max characters per TTS request to avoid provider truncation
-  const TTS_MAX_CHARS = 500;
+  const TTS_MAX_CHARS = 3000; // Match Resemble.ai backend limit to avoid unnecessary splits
 
   // Extract complete sentences from accumulated text buffer
   const extractCompleteSentencesFromBuffer = (): string => {
