@@ -62,18 +62,105 @@ export const handleChat = async (req: Request, res: Response): Promise<void> => 
     // @ts-ignore
     const userId = req.user.id;
 
+    // Check credits before processing chat
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('welcome_credits, text_messages_today, last_text_reset_date')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      logger.error({ message: 'Error fetching profile for credit check', error: profileError, userId });
+      res.status(500).json({ error: 'Failed to verify credits' });
+      return;
+    }
+
+    const welcomeCredits = Number(profile.welcome_credits || 0);
+    const hasWelcomeCredits = welcomeCredits > 0;
+
+    // If no welcome credits, check daily text message limit
+    if (!hasWelcomeCredits) {
+      // Reset daily counter if needed
+      const { error: resetError } = await supabaseAdmin.rpc('check_and_reset_daily_text_messages', {
+        user_id: userId
+      });
+
+      if (resetError) {
+        logger.warn({ message: 'Error resetting daily text messages', error: resetError, userId });
+      }
+
+      // Get updated count after potential reset
+      const { data: updatedProfile, error: fetchError } = await supabaseAdmin
+        .from('profiles')
+        .select('text_messages_today')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (fetchError || !updatedProfile) {
+        logger.error({ message: 'Error fetching updated profile', error: fetchError, userId });
+        res.status(500).json({ error: 'Failed to verify credits' });
+        return;
+      }
+
+      const textMessagesToday = Number(updatedProfile.text_messages_today || 0);
+      const DAILY_TEXT_LIMIT = 20; // Configurable limit
+
+      if (textMessagesToday >= DAILY_TEXT_LIMIT) {
+        res.status(429).json({
+          error: 'DAILY_LIMIT_EXCEEDED',
+          message: `You've reached your daily limit of ${DAILY_TEXT_LIMIT} messages. Upgrade to continue chatting unlimited!`,
+          limit: DAILY_TEXT_LIMIT,
+          used: textMessagesToday
+        });
+        return;
+      }
+    }
+
     // Stream the response back to the client
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders(); // Immediately send headers
 
-    for await (const chunk of processChat({ ...req.body, userId, nsfwMode })) {
-      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-      // Force the data to be sent immediately
-      if ((res as any).flush) {
-        (res as any).flush();
+    // Process chat and deduct credits after successful processing
+    let chatProcessed = false;
+    try {
+      for await (const chunk of processChat({ ...req.body, userId, nsfwMode })) {
+        // Mark as processed when we get first chunk
+        if (!chatProcessed && chunk.type === 'chunk') {
+          chatProcessed = true;
+        }
+        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        // Force the data to be sent immediately
+        if ((res as any).flush) {
+          (res as any).flush();
+        }
       }
+
+      // Deduct credits after successful chat processing
+      if (chatProcessed) {
+        if (hasWelcomeCredits) {
+          // Deduct from welcome credits
+          const { error: deductError } = await supabaseAdmin.rpc('decrement_welcome_credits', {
+            user_id: userId,
+            amount: 1
+          });
+          if (deductError) {
+            logger.error({ message: 'Error deducting welcome credit', error: deductError, userId });
+          }
+        } else {
+          // Increment daily text message counter
+          const { error: incrementError } = await supabaseAdmin.rpc('increment_daily_text_messages', {
+            user_id: userId
+          });
+          if (incrementError) {
+            logger.error({ message: 'Error incrementing daily text messages', error: incrementError, userId });
+          }
+        }
+      }
+    } catch (chatError: any) {
+      logger.error({ message: 'Error processing chat', error: chatError, userId });
+      throw chatError;
     }
 
     res.end();

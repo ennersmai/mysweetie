@@ -10,6 +10,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
 import Modal from '../components/Modal';
 import VoiceCallButton from '../components/VoiceCallButton';
 import MobileBottomNav from '../components/MobileBottomNav';
+import { createWAVParser, processWAVChunk } from '../utils/wavParser';
 
 type Message = { id?: string; role: 'user' | 'assistant'; content: string };
 type Memory = { id: string; memory_text: string };
@@ -170,6 +171,8 @@ export default function Chat() {
   const ttsEndResolversRef = useRef<Array<() => void>>([]);
   // Preserve 1 leftover byte between chunks to maintain 16-bit alignment
   const ttsCarryByteRef = useRef<number | null>(null);
+  // WAV parser state for client-side parsing
+  const ttsWavParserRef = useRef<ReturnType<typeof createWAVParser> | null>(null);
   // Track when the network stream has fully completed for the current sentence
   const ttsNetworkDoneRef = useRef<boolean>(false);
   // Monotonic counter to tag each TTS PCM request for debugging/correlation
@@ -513,6 +516,8 @@ export default function Chat() {
     ttsValidatedBinaryRef.current = false;
     // Reset carry byte
     ttsCarryByteRef.current = null;
+    // Reset WAV parser for new stream
+    ttsWavParserRef.current = createWAVParser();
     // Network not done until we finish reading
     ttsNetworkDoneRef.current = false;
     
@@ -538,10 +543,16 @@ export default function Chat() {
         console.error(`TTS[#${reqId}] no response body`);
         return;
       }
-      console.log(`TTS[#${reqId}] got response, starting to read PCM data`);
+      console.log(`TTS[#${reqId}] got response, starting to read WAV data`);
       const reader = res.body.getReader();
-      // Read streaming PCM chunks
+      // Read streaming WAV chunks and parse to PCM
       let chunkCount = 0;
+      const parser = ttsWavParserRef.current;
+      if (!parser) {
+        console.error(`TTS[#${reqId}] WAV parser not initialized`);
+        return;
+      }
+      
       while (true) {
         let readResult;
         try { readResult = await reader.read(); } catch (e) { 
@@ -551,13 +562,31 @@ export default function Chat() {
         const { value, done } = readResult;
         if (done) {
           console.log(`TTS[#${reqId}] stream ended, received ${chunkCount} chunks`);
+          // Process any remaining buffered data
+          if (parser.buffer.length > 0) {
+            const finalPcmChunks = processWAVChunk(parser, new Uint8Array(0));
+            for (const pcmChunk of finalPcmChunks) {
+              // Convert Int16Array to ArrayBuffer (create a copy to ensure it's ArrayBuffer, not SharedArrayBuffer)
+              const arrayBuffer = new ArrayBuffer(pcmChunk.byteLength);
+              new Uint8Array(arrayBuffer).set(new Uint8Array(pcmChunk.buffer, pcmChunk.byteOffset, pcmChunk.byteLength));
+              schedulePcmChunk(arrayBuffer);
+            }
+          }
           break;
         }
         if (value) {
           chunkCount++;
-          const ab = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-          console.log(`🎵 Received PCM chunk ${chunkCount}: ${ab.byteLength} bytes`);
-          schedulePcmChunk(ab);
+          const wavChunk = new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+          console.log(`🎵 Received WAV chunk ${chunkCount}: ${wavChunk.length} bytes`);
+          
+          // Parse WAV chunk and extract PCM data
+          const pcmChunks = processWAVChunk(parser, wavChunk);
+          for (const pcmChunk of pcmChunks) {
+            // Convert Int16Array to ArrayBuffer (create a copy to ensure it's ArrayBuffer, not SharedArrayBuffer)
+            const arrayBuffer = new ArrayBuffer(pcmChunk.byteLength);
+            new Uint8Array(arrayBuffer).set(new Uint8Array(pcmChunk.buffer, pcmChunk.byteOffset, pcmChunk.byteLength));
+            schedulePcmChunk(arrayBuffer);
+          }
         }
       }
       // Ensure any remaining accumulated samples are played

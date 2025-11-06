@@ -44,18 +44,25 @@ export const initiateCall = async (req: AuthRequest, res: Response): Promise<voi
       return;
     }
 
-    // Check voice credits before allowing call
+    // Check welcome credits first, then voice credits
     const { data: profile, error: profileErr } = await supabaseAdmin
       .from('profiles')
-      .select('voice_credits')
+      .select('welcome_credits, voice_credits')
       .eq('id', userId)
       .maybeSingle();
     if (profileErr || !profile) {
       res.status(500).json({ error: 'Failed to verify credits' });
       return;
     }
-    if ((profile.voice_credits ?? 0) <= 0) {
-      res.status(402).json({ error: 'INSUFFICIENT_CREDITS', message: 'Not enough voice credits to start a call.' });
+    const welcomeCredits = Number(profile.welcome_credits || 0);
+    const voiceCredits = Number(profile.voice_credits || 0);
+    
+    // Check welcome credits first, then regular voice credits
+    if (welcomeCredits <= 0 && voiceCredits <= 0) {
+      res.status(402).json({ 
+        error: 'INSUFFICIENT_CREDITS', 
+        message: "You're out of voice credits! To continue speaking with your companion, please choose a plan." 
+      });
       return;
     }
 
@@ -217,12 +224,16 @@ export const handleWebSocketUpgrade = (server: any): void => {
     const url = new URL(request.url!, `http://${request.headers.host}`);
     const path = url.pathname;
     
+    logger.info(`🔌 WebSocket upgrade request: ${path}`);
+    
     // Only handle calls to /ws/call/
     if (path.startsWith('/ws/call/')) {
+      logger.info(`✅ Handling WebSocket upgrade for call: ${path}`);
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
     } else {
+      logger.warn(`❌ Rejecting WebSocket upgrade for path: ${path}`);
       socket.destroy();
     }
   });
@@ -233,6 +244,8 @@ export const handleWebSocketUpgrade = (server: any): void => {
     const queryCharacterId = url.searchParams.get('characterId') || undefined;
     const queryConversationId = url.searchParams.get('conversationId') || undefined;
     const queryVoice = url.searchParams.get('voice') || undefined;
+
+    logger.info(`🔗 WebSocket connection established for session: ${sessionId}`);
 
     if (!sessionId) {
       logger.warn('WebSocket connection without session ID');
@@ -313,106 +326,8 @@ export const handleWebSocketUpgrade = (server: any): void => {
         false
       );
 
-      // Handle messages from client (audio and JSON control)
-      ws.on('message', async (data: WebSocket.Data, isBinary: boolean) => {
-        try {
-          logger.info(`[WEBSOCKET] ===== MESSAGE RECEIVED =====`);
-          logger.info(`[WEBSOCKET] Session: ${sessionId}`);
-          logger.info(`[WEBSOCKET] isBinary: ${isBinary}`);
-          const dataLen = ((): number => {
-            if (typeof data === 'string') return data.length;
-            if (Buffer.isBuffer(data)) return data.length;
-            if (Array.isArray(data)) return Buffer.concat(data as Buffer[]).length;
-            if (data instanceof ArrayBuffer) return data.byteLength;
-            // Node types: Buffer, ArrayBuffer, string, Array<Buffer>
-            return 0;
-          })();
-          logger.info(`[WEBSOCKET] Data length: ${dataLen}`);
-
-          if (isBinary) {
-            // Binary audio data
-            const audioBuffer: Buffer = Array.isArray(data)
-              ? Buffer.concat(data as Buffer[])
-              : Buffer.isBuffer(data)
-                ? data
-                : Buffer.from(data as ArrayBuffer);
-            logger.debug(`Received binary audio data: ${audioBuffer.length} bytes`);
-            await callService.processAudioData(sessionId, audioBuffer);
-            return;
-          }
-
-          // Text message (may still come as Buffer in some cases)
-          const rawMessage = (typeof data === 'string') ? data : (data as Buffer).toString('utf8');
-          logger.info(`[WEBSOCKET] ===== INCOMING JSON MESSAGE =====`);
-          logger.info(`[WEBSOCKET] Session: ${sessionId}`);
-          logger.info(`[WEBSOCKET] Raw: ${rawMessage}`);
-
-          let message: any;
-          try {
-            message = JSON.parse(rawMessage);
-          } catch (e) {
-            logger.warn(`[WEBSOCKET] Non-JSON text message from ${sessionId}, ignoring.`);
-            return;
-          }
-
-          logger.info(`[WEBSOCKET] Parsed:`, JSON.stringify(message, null, 2));
-          logger.info(`[WEBSOCKET] Type: "${message.type}"`);
-          logger.info(`[WEBSOCKET] ===================================`);
-
-          if (message.type === 'ping') {
-            ws.send(JSON.stringify({ type: 'pong' }));
-            return;
-          }
-
-          if (message.type === 'force_end_speech') {
-            const session = callService.getSession(sessionId);
-            if (session && session.state === CallState.USER_SPEAKING) {
-              logger.info(`Manual speech end triggered for session ${sessionId}`);
-              await callService.forceTransitionToAIProcessing(sessionId);
-            }
-            return;
-          }
-
-          if (message.type === 'interrupt') {
-            const session = callService.getSession(sessionId);
-            if (session) {
-              logger.info(`Manual interruption triggered for session ${sessionId}`);
-              await callService.forceInterruption(sessionId);
-            }
-            return;
-          }
-
-          if (message.type === 'tts_playback_finished') {
-            logger.info(`[BACKEND] Received tts_playback_finished message for session ${sessionId}`);
-            const session = callService.getSession(sessionId);
-            if (session) {
-              logger.info(`[BACKEND] TTS playback finished for session ${sessionId}, current state: ${session.state}, isTTSStreamingComplete: ${session.isTTSStreamingComplete}`);
-              await callService.handleTTSPlaybackFinished(sessionId);
-              const updatedSession = callService.getSession(sessionId);
-              if (updatedSession) {
-                logger.info(`[BACKEND] After handling TTS playback finished - new state: ${updatedSession.state}`);
-              }
-            } else {
-              logger.warn(`Session ${sessionId} not found when processing tts_playback_finished`);
-            }
-            return;
-          }
-
-          logger.warn(`[WEBSOCKET] Unknown message type from ${sessionId}: ${message.type}`);
-        } catch (error) {
-          logger.error(`[WEBSOCKET] Error handling message for ${sessionId}:`, error);
-        }
-      });
-
-      ws.on('close', (code, reason) => {
-        logger.info(`WebSocket disconnected: session ${sessionId}, code ${code}, reason: ${reason}`);
-        callService.endSession(sessionId);
-      });
-
-      ws.on('error', (error) => {
-        logger.error(`WebSocket error for session ${sessionId}:`, error);
-        callService.endSession(sessionId);
-      });
+      // WebSocket close/error handlers are already set up in callService.setupClientWebSocket
+      // No need to duplicate them here
 
     } catch (error: any) {
       logger.error('Error setting up WebSocket connection:', error);

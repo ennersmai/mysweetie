@@ -15,6 +15,7 @@ import { memoryOrchestrator } from './memoryOrchestrator';
 import { supabaseAdmin } from '../config/database';
 import { synthesizeResembleTTS } from './resembleTtsService';
 import { getCharacterDefaultVoiceName } from '../config/characterVoices';
+import { streamWAVToPCM } from '../utils/wavParser';
 
 export enum CallState {
   IDLE = 'IDLE',
@@ -801,8 +802,8 @@ export class CallService {
           session.ttsAbortController = new AbortController();
         }
 
-        // Synthesize speech using Resemble.ai
-        const pcmStream = await synthesizeResembleTTS({
+        // Synthesize speech using Resemble.ai (returns WAV stream)
+        const wavStream = await synthesizeResembleTTS({
           text,
           voiceName: characterVoice,
           signal: session.ttsAbortController.signal
@@ -813,29 +814,22 @@ export class CallService {
         // Add timeout to prevent hanging
         const timeoutId = setTimeout(() => {
           logger.error(`Resemble TTS timeout for session ${session.id} - forcing completion`);
-          pcmStream.destroy();
+          wavStream.destroy(); // Destroy the stream to stop any ongoing process
           resolve(); // Force resolve to prevent hanging
         }, 30000); // 30 second timeout (longer for Resemble)
 
-        // Stream PCM audio data to client
-        pcmStream.on('data', (chunk: Buffer) => {
+        // Parse WAV to PCM and stream to client
+        streamWAVToPCM(wavStream, (pcmChunk: Buffer) => {
           if (session.clientWebSocket.readyState === WebSocket.OPEN) {
-            session.clientWebSocket.send(chunk);
+            session.clientWebSocket.send(pcmChunk);
           }
-        });
-
-        pcmStream.on('end', () => {
+        }).then(() => {
           clearTimeout(timeoutId);
           logger.info(`Resemble TTS stream completed for session ${session.id}`);
-          
-          // DO NOT clear AbortController here - it's managed by generateAIResponse lifecycle
           resolve(); // Resolve when stream is done
-        });
-
-        pcmStream.on('error', (error: any) => {
+        }).catch((error: any) => {
           clearTimeout(timeoutId);
           logger.error(`Resemble TTS stream error for session ${session.id}:`, error);
-          // DO NOT clear AbortController here - it's managed by generateAIResponse lifecycle
           reject(error);
         });
         
@@ -843,8 +837,7 @@ export class CallService {
         session.ttsAbortController.signal.addEventListener('abort', () => {
           clearTimeout(timeoutId);
           logger.info(`Resemble TTS request aborted for session ${session.id}`);
-          pcmStream.destroy();
-          // DO NOT clear AbortController here - it's managed by generateAIResponse lifecycle
+          wavStream.destroy(); // Destroy the stream to stop any ongoing process
           resolve(); // Resolve when aborted
         });
 

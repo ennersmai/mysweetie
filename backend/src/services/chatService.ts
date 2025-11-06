@@ -3,6 +3,7 @@ import { supabase, supabaseAdmin } from '../config/database';
 import { MemoryOrchestrator } from './memoryOrchestrator';
 import { logger } from '../utils/logger';
 import { encode, decode } from 'gpt-tokenizer';
+import { checkModeration } from './moderationService';
 
 export async function fetchChatHistory(userId: string, conversationId: string) {
   logger.info({
@@ -95,6 +96,40 @@ function parseResponseForStorage(text: string): string {
   // If no complete sentences, return the original text
   // (fallback to avoid losing all content)
   return text.trim();
+}
+
+/**
+ * Extract complete phrases (sentences) from text buffer
+ * Returns an object with extracted phrases and remaining buffer
+ */
+function extractCompletePhrases(text: string): { phrases: string[]; remaining: string } {
+  if (!text || text.trim().length === 0) {
+    return { phrases: [], remaining: text };
+  }
+
+  // Split by sentence boundaries (ending with . ! ? or ...)
+  // Use lookbehind to include the punctuation in the split
+  const boundaryRegex = /((?:\.\.\.|…|[.!?])[\)\]"']?(?:\s+|$))/;
+  const phrases: string[] = [];
+  let remaining = text;
+  
+  while (true) {
+    const match = remaining.match(boundaryRegex);
+    if (!match) break;
+    
+    const idx = match.index! + match[0].length;
+    const phrase = remaining.slice(0, idx);
+    
+    // Check if phrase ends with proper punctuation (allow quotes/parens after)
+    if (/[.!?][\)\]"']?$/.test(phrase.trim())) {
+      phrases.push(phrase);
+      remaining = remaining.slice(idx);
+    } else {
+      break;
+    }
+  }
+  
+  return { phrases, remaining };
 }
 
 // TODO: Move to a dedicated types file
@@ -209,7 +244,7 @@ export async function* processChat(request: ChatRequest) {
       : '';
     
     const nsfwPrompt = nsfwAllowed ? JAILBREAK_PROMPT : '';
-    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- You are ${character.name}. You are NOT ${userProfile?.display_name || 'the user'}.\n- Speak ONLY in first person as ${character.name}.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as ${character.name}.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
+    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- You are ${character.name}. You are NOT ${userProfile?.display_name || 'the user'}.\n- Speak ONLY in first person as ${character.name}.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as ${character.name}.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Keep actions concise but descriptive - aim for 2-3 sentences maximum per action block.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
     
     // Replace template placeholders in character system prompt
     const personaName = userProfile?.display_name || 'the user';
@@ -273,53 +308,162 @@ export async function* processChat(request: ChatRequest) {
     const decoder = new TextDecoder();
     let fullResponse = '';
     let shouldStopStreaming = false;
+    let buffer = ''; // SSE message buffer
+    let moderationBuffer = ''; // Buffer for moderation checks (accumulates assistant content)
 
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
+        // Append incoming data to buffer
+        buffer += decoder.decode(value, { stream: true });
         
-        // Split by the "data: " prefix, which demarcates messages in the stream
-        const lines = chunk.split('data: ').filter(line => line.trim() !== '');
-
-        for (const line of lines) {
-            if (line.trim() === '[DONE]') {
-                break;
-            }
-            try {
-                const parsed = JSON.parse(line);
-                const content = parsed.choices?.[0]?.delta?.content ?? parsed.choices?.[0]?.message?.content ?? '';
-                if (typeof content === 'string' && content.length > 0) {
-                    // Enforce token limit during streaming
-                    const combinedTokens = encode(fullResponse + content);
-                    if (combinedTokens.length <= MAX_RESPONSE_TOKENS) {
-                        fullResponse += content;
-                        yield { type: 'chunk', content };
-                    } else {
-                        const truncatedText = decode(combinedTokens.slice(0, MAX_RESPONSE_TOKENS));
-                        // Parse the truncated response immediately to remove incomplete sentences
-                        const parsedResponse = parseResponseForStorage(truncatedText);
-                        const delta = parsedResponse.slice(fullResponse.length);
-                        if (delta && delta.length > 0) {
-                          fullResponse = parsedResponse;
-                          yield { type: 'chunk', content: delta };
-                        } else {
-                          fullResponse = parsedResponse;
-                        }
-                        // Stop reading further from the stream
-                        shouldStopStreaming = true;
-                        try { controller.abort(); } catch {}
+        // Process complete SSE messages (terminated by \n\n)
+        while (buffer.includes('\n\n')) {
+            const messageEnd = buffer.indexOf('\n\n');
+            const message = buffer.substring(0, messageEnd);
+            buffer = buffer.substring(messageEnd + 2); // Remove processed message
+            
+            // Process each line in the message
+            const lines = message.split('\n');
+            for (const line of lines) {
+                // Ignore empty lines
+                if (line.trim() === '') continue;
+                
+                // Ignore comment lines (SSE keep-alive pings)
+                if (line.startsWith(':')) {
+                    logger.debug('SSE: Ignoring keep-alive ping');
+                    continue;
+                }
+                
+                // Parse data lines
+                if (line.startsWith('data: ')) {
+                    const data = line.substring(6); // Remove "data: " prefix
+                    
+                    if (data.trim() === '[DONE]') {
+                        logger.debug('SSE: Received [DONE] marker');
                         break;
                     }
+                    
+                    try {
+                        const parsed = JSON.parse(data);
+                        const content = parsed.choices?.[0]?.delta?.content ?? parsed.choices?.[0]?.message?.content ?? '';
+                        if (typeof content === 'string' && content.length > 0) {
+                            // Enforce token limit during streaming
+                            const combinedTokens = encode(fullResponse + content);
+                            if (combinedTokens.length <= MAX_RESPONSE_TOKENS) {
+                                // Add to moderation buffer for assistant replies (don't add to fullResponse yet)
+                                moderationBuffer += content;
+                                
+                                // Extract complete phrases from moderation buffer
+                                const { phrases, remaining } = extractCompletePhrases(moderationBuffer);
+                                
+                                // If we have 2+ complete phrases, check moderation
+                                if (phrases.length >= 2) {
+                                    const twoPhrases = phrases.slice(0, 2).join(' ');
+                                    const moderationResult = await checkModeration(twoPhrases);
+                                    
+                                    if (moderationResult.flagged) {
+                                        // Hard-block: stop streaming, abort controller, yield error
+                                        logger.error({
+                                            message: 'Content blocked by moderation - stopping response',
+                                            categories: moderationResult.categories,
+                                            contentPreview: twoPhrases.substring(0, 200),
+                                        });
+                                        shouldStopStreaming = true;
+                                        try { controller.abort(); } catch {}
+                                        yield { type: 'error', error: 'Content blocked by moderation' };
+                                        // Clear moderation buffer - don't add blocked content to fullResponse
+                                        moderationBuffer = '';
+                                        break;
+                                    }
+                                    
+                                    // Content is safe - add to fullResponse, yield the first 2 phrases, and remove from buffer
+                                    const phrasesToYield = phrases.slice(0, 2).join('');
+                                    fullResponse += phrasesToYield;
+                                    moderationBuffer = phrases.slice(2).join('') + remaining;
+                                    yield { type: 'chunk', content: phrasesToYield };
+                                }
+                                // If less than 2 phrases, continue buffering without yielding or adding to fullResponse
+                            } else {
+                                const truncatedText = decode(combinedTokens.slice(0, MAX_RESPONSE_TOKENS));
+                                // Parse the truncated response immediately to remove incomplete sentences
+                                const parsedResponse = parseResponseForStorage(truncatedText);
+                                const delta = parsedResponse.slice(fullResponse.length);
+                                if (delta && delta.length > 0) {
+                                  fullResponse = parsedResponse;
+                                  yield { type: 'chunk', content: delta };
+                                } else {
+                                  fullResponse = parsedResponse;
+                                }
+                                // Stop reading further from the stream
+                                shouldStopStreaming = true;
+                                try { controller.abort(); } catch {}
+                                break;
+                            }
+                        }
+                    } catch (e) {
+                        // Only log actual parse errors on complete messages
+                        logger.warn({ message: 'Error parsing SSE data line', data, error: e });
+                    }
                 }
-            } catch (e) {
-                // It's possible to get an incomplete JSON object at the end of a chunk.
-                // We'll log it for debugging but won't treat it as a fatal error.
-                logger.debug({ message: 'Error parsing potential partial OpenRouter stream chunk', chunk: line, error: e });
             }
+            
+            if (shouldStopStreaming) break;
         }
         if (shouldStopStreaming) break;
+    }
+    
+    // After streaming ends, check remaining content in moderation buffer
+    if (moderationBuffer.trim().length > 0 && !shouldStopStreaming) {
+        const { phrases, remaining } = extractCompletePhrases(moderationBuffer);
+        
+        // Check remaining complete phrases
+        if (phrases.length > 0) {
+            // Check all remaining phrases together
+            const phrasesToCheck = phrases.join(' ');
+            const moderationResult = await checkModeration(phrasesToCheck);
+            
+            if (moderationResult.flagged) {
+                logger.error({
+                    message: 'Content blocked by moderation - final check',
+                    categories: moderationResult.categories,
+                    contentPreview: phrasesToCheck.substring(0, 200),
+                });
+                yield { type: 'error', error: 'Content blocked by moderation' };
+                // Don't add blocked content to fullResponse - clear moderationBuffer
+                moderationBuffer = remaining;
+            } else {
+                // Safe to yield remaining phrases
+                const phrasesToYield = phrases.join('');
+                fullResponse += phrasesToYield;
+                yield { type: 'chunk', content: phrasesToYield };
+                moderationBuffer = remaining;
+            }
+        }
+        
+        // Handle any remaining partial phrase
+        if (remaining.trim().length > 0) {
+            // Check partial phrase as well
+            const moderationResult = await checkModeration(remaining);
+            if (moderationResult.flagged) {
+                logger.error({
+                    message: 'Content blocked by moderation - partial phrase',
+                    categories: moderationResult.categories,
+                    contentPreview: remaining.substring(0, 200),
+                });
+                yield { type: 'error', error: 'Content blocked by moderation' };
+                // Don't add to fullResponse
+            } else {
+                fullResponse += remaining;
+                yield { type: 'chunk', content: remaining };
+            }
+        }
+    }
+    
+    // If content was blocked, don't proceed with saving to history
+    if (shouldStopStreaming) {
+        return;
     }
 
     // If streaming yielded nothing, fallback to non-stream completion (some models stream poorly)
@@ -348,7 +492,40 @@ export async function* processChat(request: ChatRequest) {
           const body: any = await nonStreamResp.json();
           const content = (body && body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content) ? body.choices[0].message.content : '';
           if (typeof content === 'string') {
-            fullResponse = truncateByTokens(content, MAX_RESPONSE_TOKENS);
+            const truncatedContent = truncateByTokens(content, MAX_RESPONSE_TOKENS);
+            
+            // Check moderation on non-stream response
+            const { phrases } = extractCompletePhrases(truncatedContent);
+            if (phrases.length >= 2) {
+              const twoPhrases = phrases.slice(0, 2).join(' ');
+              const moderationResult = await checkModeration(twoPhrases);
+              
+              if (moderationResult.flagged) {
+                logger.error({
+                  message: 'Content blocked by moderation - non-stream fallback',
+                  categories: moderationResult.categories,
+                  contentPreview: twoPhrases.substring(0, 200),
+                });
+                yield { type: 'error', error: 'Content blocked by moderation' };
+                return;
+              }
+            } else if (phrases.length > 0 || truncatedContent.trim().length > 0) {
+              // Check remaining content even if less than 2 phrases
+              const contentToCheck = phrases.length > 0 ? phrases.join(' ') : truncatedContent;
+              const moderationResult = await checkModeration(contentToCheck);
+              
+              if (moderationResult.flagged) {
+                logger.error({
+                  message: 'Content blocked by moderation - non-stream fallback',
+                  categories: moderationResult.categories,
+                  contentPreview: contentToCheck.substring(0, 200),
+                });
+                yield { type: 'error', error: 'Content blocked by moderation' };
+                return;
+              }
+            }
+            
+            fullResponse = truncatedContent;
           }
         } else {
           const errText = await nonStreamResp.text().catch(() => '');

@@ -12,9 +12,21 @@ import {
   endCall 
 } from '../controllers/callController';
 
+// Test endpoint to verify backend is running
+const testBackend = async (req: any, res: any) => {
+  res.json({ 
+    status: 'ok', 
+    message: 'Backend is running with latest code',
+    timestamp: new Date().toISOString()
+  });
+};
+
 const router = Router();
 
-// All call routes require authentication
+// Test endpoint (no auth required)
+router.get('/test', testBackend);
+
+// All other call routes require authentication
 router.use(authenticate);
 
 /**

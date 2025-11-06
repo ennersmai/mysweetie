@@ -79,26 +79,18 @@ STRIPE_VOICE_CREDITS_PRICE_ID=price_1GHI789... # Voice credits one-time
 
 ### Webhook URL
 
-**Old (Supabase Edge Function):**
+**Production (Final Setup):**
 ```
-https://your-project.supabase.co/functions/v1/stripe-webhook
-```
-
-**New (Node.js Backend):**
-```
-https://api.mysweetie.ai/api/stripe/webhook
+https://mysweetie-backend.fly.dev/api/stripe/webhook
 ```
 
-### Development Webhook URL
+**Development/Testing:**
 ```bash
 # For local development
 http://localhost:3001/api/stripe/webhook
 
-# For Vercel deployment (temporary)
-https://your-backend-project.vercel.app/api/stripe/webhook
-
-# For custom domain (production)
-https://api.mysweetie.ai/api/stripe/webhook
+# For testing with ngrok (if needed)
+https://your-ngrok-url.ngrok.io/api/stripe/webhook
 ```
 
 ### Required Webhook Events
@@ -132,7 +124,7 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 ### Step 2: Configure Webhook
 1. Go to **Developers → Webhooks**
 2. Click **"+ Add endpoint"**
-3. Enter your webhook URL: `https://your-backend.com/api/stripe/webhook`
+3. Enter your webhook URL: `https://mysweetie-backend.fly.dev/api/stripe/webhook`
 4. Select the required events (listed above)
 5. Click **"Add endpoint"**
 6. Copy the **Signing secret** (starts with `whsec_`)
@@ -145,16 +137,22 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 2. Or use webhook testing tools like ngrok for public testing
 
 ### Step 4: Environment Variables
-Add all keys to your backend `.env` file:
+Add all keys to your Fly.io backend environment:
 ```bash
-# Stripe Configuration
-STRIPE_SECRET_KEY=sk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-STRIPE_BASIC_PRICE_ID=price_1ABC123...
-STRIPE_PREMIUM_PRICE_ID=price_1DEF456...
-STRIPE_VOICE_CREDITS_PRICE_ID=price_1GHI789...
-FRONTEND_URL=https://your-frontend.com
+# Set environment variables on Fly.io
+fly secrets set STRIPE_SECRET_KEY=sk_test_...
+fly secrets set STRIPE_WEBHOOK_SECRET=whsec_...
+fly secrets set STRIPE_BASIC_PRICE_ID=price_1ABC123...
+fly secrets set STRIPE_PREMIUM_PRICE_ID=price_1DEF456...
+fly secrets set STRIPE_VOICE_CREDITS_PRICE_ID=price_1GHI789...
+fly secrets set FRONTEND_URL=https://mysweetie.ai
 ```
+
+**Or via Fly.io Dashboard:**
+1. Go to [Fly.io Dashboard](https://fly.io/dashboard)
+2. Select your `mysweetie-backend` app
+3. Go to **Settings → Secrets**
+4. Add each environment variable
 
 ## 🧪 5. Testing Configuration
 
@@ -170,73 +168,102 @@ FRONTEND_URL=https://your-frontend.com
 4000 0000 0000 3220
 ```
 
-### Test Webhook Locally
+### Test Webhook
+**Option 1: Test with Production Backend**
+1. Install Stripe CLI: `npm install -g stripe`
+2. Login: `stripe login`
+3. Forward webhooks: `stripe listen --forward-to https://mysweetie-backend.fly.dev/api/stripe/webhook`
+4. Test a purchase and check webhook delivery
+
+**Option 2: Test Locally**
 1. Install Stripe CLI: `npm install -g stripe`
 2. Login: `stripe login`
 3. Forward webhooks: `stripe listen --forward-to localhost:3001/api/stripe/webhook`
 4. Test a purchase and check webhook delivery
 
 ### Verify Webhook Reception
-Check your backend logs for:
-```
+Check your Fly.io backend logs for:
+```bash
+# View live logs
+fly logs -a mysweetie-backend
+
+# Look for these success messages:
 ✅ Webhook signature verification passed
 ✅ User [user_id] upgraded to basic plan
 ✅ User [user_id] purchased 200 voice credits
 ```
 
-## 🌐 6. Vercel Deployment & Custom Domain Setup
+## 🌐 6. Production Setup (Final Configuration)
 
-### Vercel Deployment Process
+### Current Production URLs
 
-1. **Deploy Backend to Vercel**
-   ```bash
-   cd backend
-   vercel --prod
-   ```
-   
-   This will give you a temporary URL like:
-   ```
-   https://mysweetie-backend-abc123.vercel.app
-   ```
+**Frontend:** https://mysweetie.ai (Vercel)
+**Backend:** https://mysweetie-backend.fly.dev (Fly.io)
 
-2. **Set Up Custom Domain**
-   - In Vercel Dashboard → Project Settings → Domains
-   - Add custom domain: `api.mysweetie.ai`
-   - Configure DNS records as instructed by Vercel
-   - Wait for SSL certificate provisioning
+### Environment Variables Setup
 
-3. **Update Environment Variables**
-   - In Vercel Dashboard → Project Settings → Environment Variables
-   - Add all your Stripe keys and other environment variables
-   - Make sure `FRONTEND_URL=https://mysweetie.ai`
-
-### Webhook URL Timeline
-
-**Phase 1: Initial Deployment (Temporary)**
-```
-https://mysweetie-backend-abc123.vercel.app/api/stripe/webhook
+**Fly.io Backend Environment:**
+```bash
+# Set all required environment variables on Fly.io
+fly secrets set OPENROUTER_API_KEY=your_openrouter_key
+fly secrets set GROQ_API_KEY=your_groq_key
+fly secrets set RIME_API_KEY=your_rime_key
+fly secrets set REDIS_URL=your_redis_url
+fly secrets set STRIPE_SECRET_KEY=sk_live_...
+fly secrets set STRIPE_WEBHOOK_SECRET=whsec_...
+fly secrets set STRIPE_BASIC_PRICE_ID=price_1ABC123...
+fly secrets set STRIPE_PREMIUM_PRICE_ID=price_1DEF456...
+fly secrets set STRIPE_VOICE_CREDITS_PRICE_ID=price_1GHI789...
+fly secrets set FRONTEND_URL=https://mysweetie.ai
+fly secrets set SUPABASE_URL=your_supabase_url
+fly secrets set SUPABASE_ANON_KEY=your_supabase_anon_key
+fly secrets set SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```
 
-**Phase 2: Custom Domain (Production)**
+### Webhook Configuration
+
+**Production Webhook URL:**
 ```
-https://api.mysweetie.ai/api/stripe/webhook
+https://mysweetie-backend.fly.dev/api/stripe/webhook
 ```
 
-### Important Notes
+**Required Steps:**
+1. Go to [Stripe Dashboard → Webhooks](https://dashboard.stripe.com/webhooks)
+2. Click **"+ Add endpoint"**
+3. Enter URL: `https://mysweetie-backend.fly.dev/api/stripe/webhook`
+4. Select events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`
+5. Copy the **Signing secret** and add it to Fly.io secrets
 
-- ⚠️ **Update webhook URL twice**: First with Vercel URL, then with custom domain
-- ⚠️ **Test both phases** to ensure continuity
-- ⚠️ **DNS propagation** can take up to 48 hours for custom domain
+## 🚀 7. Production Deployment Checklist
 
-## 🚀 7. Production Deployment
+### Pre-Launch Checklist
+- [ ] **Stripe Setup:**
+  - [ ] Switch to **Live Mode** in Stripe Dashboard
+  - [ ] Create products in **Live Mode** (Basic Plan, Premium Plan, Voice Credits)
+  - [ ] Copy live API keys and price IDs
+  - [ ] Configure webhook: `https://mysweetie-backend.fly.dev/api/stripe/webhook`
+  - [ ] Test webhook delivery with Stripe CLI
 
-### Checklist
-- [ ] Switch to **Live Mode** in Stripe Dashboard
-- [ ] Create products in **Live Mode**
-- [ ] Update environment variables with **live** API keys
-- [ ] Configure webhook with **production** URL
-- [ ] Test end-to-end purchase flow
-- [ ] Verify webhook delivery in production
+- [ ] **Backend Setup:**
+  - [ ] Set all environment variables on Fly.io using `fly secrets set`
+  - [ ] Deploy backend: `fly deploy -a mysweetie-backend`
+  - [ ] Verify backend health: https://mysweetie-backend.fly.dev/
+  - [ ] Check logs: `fly logs -a mysweetie-backend`
+
+- [ ] **Frontend Setup:**
+  - [ ] Verify frontend is live: https://mysweetie.ai
+  - [ ] Test user registration and login
+  - [ ] Test chat functionality
+  - [ ] Test character selection
+
+### Testing Checklist
+- [ ] **End-to-End Testing:**
+  - [ ] Test subscription purchase flow
+  - [ ] Test voice credits purchase
+  - [ ] Verify webhook processing in logs
+  - [ ] Test user plan updates in database
+  - [ ] Test voice call functionality (if available)
+  - [ ] Test TTS functionality (if available)
 
 ### Security Notes
 - ✅ Webhook signature verification is implemented
@@ -268,21 +295,44 @@ https://api.mysweetie.ai/api/stripe/webhook
 # Check webhook deliveries
 stripe events list --limit 10
 
+# Test webhook with production backend
+stripe listen --forward-to https://mysweetie-backend.fly.dev/api/stripe/webhook
+
 # Test webhook locally
 stripe listen --forward-to localhost:3001/api/stripe/webhook
 
 # Trigger test webhook
 stripe trigger checkout.session.completed
+
+# Check Fly.io backend logs
+fly logs -a mysweetie-backend
+
+# Check backend health
+curl https://mysweetie-backend.fly.dev/
 ```
 
 ## 📞 Support
 
 If you encounter issues:
 1. Check Stripe Dashboard → Events for webhook delivery status
-2. Review backend logs for webhook processing errors
-3. Use Stripe test mode for debugging
-4. Consult Stripe documentation: https://stripe.com/docs/webhooks
+2. Review Fly.io backend logs: `fly logs -a mysweetie-backend`
+3. Test webhook with Stripe CLI: `stripe listen --forward-to https://mysweetie-backend.fly.dev/api/stripe/webhook`
+4. Verify backend health: https://mysweetie-backend.fly.dev/
+5. Use Stripe test mode for debugging
+6. Consult Stripe documentation: https://stripe.com/docs/webhooks
 
 ---
 
-**Important:** Always test in Stripe's test mode before going live. The webhook URL change from Supabase Edge Functions to Node.js backend requires updating the endpoint in your Stripe webhook configuration.
+## 🎯 Quick Start Guide
+
+### For Production Setup:
+1. **Create Stripe Products** in Live Mode
+2. **Set Environment Variables** on Fly.io: `fly secrets set KEY=value`
+3. **Configure Webhook**: `https://mysweetie-backend.fly.dev/api/stripe/webhook`
+4. **Test Purchase Flow** end-to-end
+5. **Monitor Logs**: `fly logs -a mysweetie-backend`
+
+**Production URLs:**
+- Frontend: https://mysweetie.ai
+- Backend: https://mysweetie-backend.fly.dev
+- Webhook: https://mysweetie-backend.fly.dev/api/stripe/webhook

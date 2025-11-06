@@ -2,7 +2,7 @@
  * Resemble.ai TTS Service
  * 
  * Handles HTTP streaming TTS requests to Resemble.ai API.
- * Converts WAV responses to PCM streams for client consumption.
+ * Streams WAV files directly to client for parsing (no backend parsing needed).
  */
 
 import axios, { AxiosResponse } from 'axios';
@@ -10,7 +10,6 @@ import { Readable } from 'stream';
 import { logger } from '../utils/logger';
 import { resembleProjectService } from './resembleProjectService';
 import { getVoiceUuid } from '../config/voices';
-import { streamWAVToPCM } from '../utils/wavParser';
 
 const RESEMBLE_API_KEY = process.env.RESEMBLE_API_KEY;
 const RESEMBLE_STREAMING_ENDPOINT = process.env.RESEMBLE_STREAMING_ENDPOINT || 'https://f.cluster.resemble.ai/stream';
@@ -19,7 +18,6 @@ const MAX_TEXT_LENGTH = 3000; // Resemble.ai limit
 export interface ResembleTTSOptions {
   text: string;
   voiceName: string;
-  onPCMChunk?: (chunk: Buffer) => void;
   signal?: AbortSignal;
 }
 
@@ -83,7 +81,7 @@ function splitTextForResemble(text: string): string[] {
 
 /**
  * Synthesize speech using Resemble.ai streaming API
- * Returns a stream of PCM audio data
+ * Returns a stream of WAV audio data (client will parse to PCM)
  */
 export async function synthesizeResembleTTS(
   options: ResembleTTSOptions
@@ -92,7 +90,7 @@ export async function synthesizeResembleTTS(
     throw new Error('RESEMBLE_API_KEY environment variable is not set');
   }
 
-  const { text, voiceName, onPCMChunk, signal } = options;
+  const { text, voiceName, signal } = options;
 
   // Get voice UUID
   const voiceUuid = getVoiceUuid(voiceName);
@@ -108,8 +106,8 @@ export async function synthesizeResembleTTS(
 
   logger.info(`Resemble TTS request: voice=${voiceName}, chunks=${textChunks.length}, totalLength=${text.length}`);
 
-  // Create a readable stream that will output PCM data
-  const pcmStream = new Readable({
+  // Create a readable stream that will output WAV data
+  const wavStream = new Readable({
     read() {
       // Data will be pushed asynchronously
     }
@@ -122,7 +120,7 @@ export async function synthesizeResembleTTS(
         // Check if aborted
         if (signal?.aborted) {
           logger.info('Resemble TTS request aborted');
-          pcmStream.destroy(new Error('Request aborted'));
+          wavStream.destroy(new Error('Request aborted'));
           return;
         }
 
@@ -173,34 +171,35 @@ export async function synthesizeResembleTTS(
           throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
         }
 
-        // Stream WAV to PCM conversion
-        await streamWAVToPCM(response.data, (pcmChunk: Buffer) => {
-          // Push PCM chunk to output stream
-          pcmStream.push(pcmChunk);
-          
-          // Also call optional callback
-          if (onPCMChunk) {
-            onPCMChunk(pcmChunk);
-          }
+        // Stream WAV directly to client (no parsing needed)
+        response.data.on('data', (wavChunk: Buffer) => {
+          wavStream.push(wavChunk);
         });
 
-        logger.debug(`Completed Resemble TTS chunk ${i + 1}/${textChunks.length}`);
+        // Wait for this chunk to complete before moving to next
+        await new Promise<void>((resolve, reject) => {
+          response.data.on('end', () => {
+            logger.debug(`Completed Resemble TTS chunk ${i + 1}/${textChunks.length}`);
+            resolve();
+          });
+          response.data.on('error', reject);
+        });
       }
 
       // End the stream
-      pcmStream.push(null);
+      wavStream.push(null);
       logger.info('Resemble TTS synthesis complete');
     } catch (error: any) {
       logger.error('Error in Resemble TTS synthesis:', error);
-      pcmStream.destroy(error);
+      wavStream.destroy(error);
     }
   })();
 
-  return pcmStream;
+  return wavStream;
 }
 
 /**
- * Synthesize speech and return as a single buffer
+ * Synthesize speech and return as a single WAV buffer
  * Useful for non-streaming use cases
  */
 export async function synthesizeResembleTTSBuffer(
@@ -209,22 +208,20 @@ export async function synthesizeResembleTTSBuffer(
   signal?: AbortSignal
 ): Promise<Buffer> {
   const chunks: Buffer[] = [];
-
-  const options: ResembleTTSOptions = {
-    text,
-    voiceName,
-    onPCMChunk: (chunk) => {
-      chunks.push(chunk);
-    }
-  };
-
-  // Only add signal if provided
+  const options: ResembleTTSOptions = { text, voiceName };
   if (signal) {
     options.signal = signal;
   }
+  const wavStream = await synthesizeResembleTTS(options);
 
-  await synthesizeResembleTTS(options);
-
-  return Buffer.concat(chunks);
+  return new Promise((resolve, reject) => {
+    wavStream.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    wavStream.on('end', () => {
+      resolve(Buffer.concat(chunks));
+    });
+    wavStream.on('error', reject);
+  });
 }
 
