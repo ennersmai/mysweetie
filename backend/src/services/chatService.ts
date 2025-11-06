@@ -425,10 +425,9 @@ export async function* processChat(request: ChatRequest) {
         });
     }
     
-    // If content was blocked, don't proceed with saving to history
-    if (shouldStopStreaming) {
-        return;
-    }
+    // Note: shouldStopStreaming only means we stopped reading early (token limit),
+    // but we still need to send final event and save history for the content we received
+    // If content was blocked by moderation, we already returned above
 
     // If streaming yielded nothing, fallback to non-stream completion (some models stream poorly)
     if (!fullResponse || fullResponse.trim().length === 0) {
