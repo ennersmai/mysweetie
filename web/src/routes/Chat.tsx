@@ -492,19 +492,16 @@ export default function Chat() {
     const reqId = ++ttsRequestSeqRef.current;
     console.log(`🎤 Starting TTS[#${reqId}] with voice "${speaker}": "${text.substring(0, 50)}..."`);
     
-    // Stop any existing audio sources before starting new TTS
-    ttsSourcesRef.current.forEach((s) => {
-      try { s.stop(0); } catch {}
-      try { s.disconnect(); } catch {}
-    });
-    ttsSourcesRef.current = [];
+    // Ensure all previous samples are flushed before starting new TTS
+    // Don't stop existing sources - let them play out naturally with crossfade
+    flushAccumulatedPcm(true);
     
     await ensureAudioContext();
     // Do not reset playhead here to ensure strict sequential playback across sentences
     const controller = new AbortController();
     ttsAbortRef.current = controller;
     ttsStreamingRef.current = true;
-    // Reset PCM accumulator for a fresh stream
+    // Reset PCM accumulator for a fresh stream (after flushing previous)
     ttsPcmAccumRef.current = [];
     // Clear any pending flush timer
     if (ttsFlushTimerRef.current) {
