@@ -1,44 +1,27 @@
-// Centralized list of allowed TTS voices used across the app
+// Centralized list of Resemble.ai voices used across the app
+// These map to Resemble.ai voice UUIDs on the backend
 export const ALLOWED_VOICES: string[] = [
-  // Flagship voices
+  // Character voices (Realistic)
+  'layla',
+  'ava',
+  'mia',
+  'emma',
+  'aria',
+  'natalia',
+  
+  // Character voices (Anime)
+  'star',
+  'natsuki',
+  'mary',
+  'lana',
+  'clover',
+  'chloe',
+  
+  // General selection voices
+  'seraphina',
+  'celeste',
+  'aurora',
   'luna',
-  'astra',
-  'andromeda',
-
-  // New Arcana v2 flagship voices
-  'thalassa',
-  'vespera',
-  'lyra',
-
-  // Conversational voices
-  'amber martinez',
-  'ana silva',
-  'angelica santos',
-  'anjali singh',
-  'asha johnson',
-  'carla rodriguez',
-  'daniela gomez',
-  'elijah johnson',
-  'elise montgomery',
-  'emily anderson',
-  'emily bennett',
-  'emily levine',
-  'emily novak',
-  'emily watson',
-  'emma dubois',
-  'emma wilson',
-  'hannah murphy',
-  'heather smith',
-  'isabel gomez',
-  'isabela rodriguez',
-  'katie bruno',
-  'kelsey miller',
-
-  // IVR voices
-  'akari miyamoto',
-  'emily collins',
-  'giulia ricci',
-  'jennifer kelly',
 ];
 
 

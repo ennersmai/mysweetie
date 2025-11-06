@@ -59,7 +59,10 @@ export default function Chat() {
   const [isPremium, setIsPremium] = useState(false);
   const [planTier, setPlanTier] = useState<'free' | 'basic' | 'premium'>('free');
   const [voiceRemaining, setVoiceRemaining] = useState<number>(0);
+  const [welcomeCredits, setWelcomeCredits] = useState<number>(0);
+  const [textMessagesToday, setTextMessagesToday] = useState<number>(0);
   const [cooldownMsg, setCooldownMsg] = useState<string | null>(null);
+  const [dailyLimitMsg, setDailyLimitMsg] = useState<string | null>(null);
   const [recentConversations, setRecentConversations] = useState<any[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -123,46 +126,29 @@ export default function Chat() {
     { key: 'Midnight Nova', desc: 'Anubis 70B — powerful roleplay and character immersion.', premium: true },
     { key: 'Silver Whisper', desc: 'Euryale 70B — advanced storytelling with rich detail.', premium: true },
   ];
+  // Import voices from centralized config
   const ALLOWED_VOICES = [
-    // Popular existing voices
+    // Character voices (Realistic)
+    'layla',
+    'ava',
+    'mia',
+    'emma',
+    'aria',
+    'natalia',
+    
+    // Character voices (Anime)
+    'star',
+    'natsuki',
+    'mary',
+    'lana',
+    'clover',
+    'chloe',
+    
+    // General selection voices
+    'seraphina',
+    'celeste',
+    'aurora',
     'luna',
-    'astra',
-    'andromeda',
-    
-    // New Arcana v2 flagship voices
-    'thalassa',
-    'vespera',
-    'lyra',
-    
-    // Conversational voices
-    'amber martinez',
-    'ana silva',
-    'angelica santos',
-    'anjali singh',
-    'asha johnson',
-    'carla rodriguez',
-    'daniela gomez',
-    'elijah johnson',
-    'elise montgomery',
-    'emily anderson',
-    'emily bennett',
-    'emily levine',
-    'emily novak',
-    'emily watson',
-    'emma dubois',
-    'emma wilson',
-    'hannah murphy',
-    'heather smith',
-    'isabel gomez',
-    'isabela rodriguez',
-    'katie bruno',
-    'kelsey miller',
-    
-    // IVR voices
-    'akari miyamoto',
-    'emily collins',
-    'giulia ricci',
-    'jennifer kelly',
   ];
   // HTTP PCM TTS via Arcana
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -782,7 +768,7 @@ export default function Chat() {
       if (!u.user) return;
       const { data } = await supabase
         .from('profiles')
-        .select('is_premium, plan_tier, voice_trials_used, voice_quota_used, nsfw_enabled, voice_credits')
+        .select('is_premium, plan_tier, voice_trials_used, voice_quota_used, nsfw_enabled, voice_credits, welcome_credits, text_messages_today, last_text_reset_date')
         .eq('id', u.user.id)
         .maybeSingle();
       const premium = Boolean(data?.is_premium);
@@ -793,8 +779,15 @@ export default function Chat() {
       
       // Use new voice credits system
       const voiceCredits = Number(data?.voice_credits ?? 0);
+      const welcomeCreds = Number(data?.welcome_credits ?? 0);
       setVoiceRemaining(voiceCredits);
-      if (voiceCredits <= 0) setVoiceEnabled(false);
+      setWelcomeCredits(welcomeCreds);
+      setTextMessagesToday(Number(data?.text_messages_today ?? 0));
+      
+      // Check if user has any credits (welcome or voice)
+      if (welcomeCreds <= 0 && voiceCredits <= 0) {
+        setVoiceEnabled(false);
+      }
     };
     loadPremiumAndNsfw();
   }, []);
@@ -1058,6 +1051,22 @@ export default function Chat() {
 
       if (res.status === 429) {
         const data = await res.json().catch(() => ({} as any));
+        
+        // Check if it's a daily limit error
+        if (data?.error === 'DAILY_LIMIT_EXCEEDED') {
+          setDailyLimitMsg(data?.message || `You've reached your daily limit of ${data?.limit || 20} messages. Upgrade to continue chatting unlimited!`);
+          // Remove the just-added placeholder(s)
+          const toRemove = (function() { return (typeof (addedCountRef as any).current === 'number' && (addedCountRef as any).current > 0) ? (addedCountRef as any).current : (isAutoContinue ? 1 : 2); })();
+          setMessages((prev) => prev.slice(0, Math.max(0, prev.length - toRemove)));
+          // Update text messages count
+          if (data?.used !== undefined) {
+            setTextMessagesToday(data.used);
+          }
+          setTimeout(() => setDailyLimitMsg(null), 10000);
+          return;
+        }
+        
+        // Regular cooldown message
         setCooldownMsg(data?.message || "You're sending messages a bit too quickly. Please try again in a moment.");
         // Remove the just-added placeholder(s)
         const toRemove = (function() { return (typeof (addedCountRef as any).current === 'number' && (addedCountRef as any).current > 0) ? (addedCountRef as any).current : (isAutoContinue ? 1 : 2); })();
@@ -1148,6 +1157,13 @@ export default function Chat() {
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
+                
+                // Update credits after successful message
+                if (welcomeCredits > 0) {
+                  setWelcomeCredits(prev => Math.max(0, prev - 1));
+                } else {
+                  setTextMessagesToday(prev => prev + 1);
+                }
                 
                 // Speak any remaining buffer text to ensure we don't miss the end
                 if (voiceEnabled) {
@@ -1300,45 +1316,33 @@ export default function Chat() {
               value={voiceKey}
               onChange={(e) => setVoiceKey(e.target.value)}
             >
-              {/* Popular Voices */}
-              <option className="bg-gray-900 text-white" value="luna">Luna (female, flagship)</option>
-              <option className="bg-gray-900 text-white" value="astra">Astra (female, flagship)</option>
-              <option className="bg-gray-900 text-white" value="andromeda">Andromeda (female, flagship)</option>
+              {/* Character Voices - Realistic */}
+              <optgroup label="Character Voices (Realistic)">
+                <option className="bg-gray-900 text-white" value="layla">Layla</option>
+                <option className="bg-gray-900 text-white" value="ava">Ava</option>
+                <option className="bg-gray-900 text-white" value="mia">Mia</option>
+                <option className="bg-gray-900 text-white" value="emma">Emma</option>
+                <option className="bg-gray-900 text-white" value="aria">Aria</option>
+                <option className="bg-gray-900 text-white" value="natalia">Natalia</option>
+              </optgroup>
               
-              {/* New Flagship Voices */}
-              <option className="bg-gray-900 text-white" value="thalassa">Thalassa (female, flagship)</option>
-              <option className="bg-gray-900 text-white" value="vespera">Vespera (female, flagship)</option>
-              <option className="bg-gray-900 text-white" value="lyra">Lyra (female, flagship)</option>
+              {/* Character Voices - Anime */}
+              <optgroup label="Character Voices (Anime)">
+                <option className="bg-gray-900 text-white" value="star">Star</option>
+                <option className="bg-gray-900 text-white" value="natsuki">Natsuki</option>
+                <option className="bg-gray-900 text-white" value="mary">Mary</option>
+                <option className="bg-gray-900 text-white" value="lana">Lana</option>
+                <option className="bg-gray-900 text-white" value="clover">Clover</option>
+                <option className="bg-gray-900 text-white" value="chloe">Chloe</option>
+              </optgroup>
               
-              {/* Conversational Voices */}
-              <option className="bg-gray-900 text-white" value="emily anderson">Emily Anderson (female, versatile)</option>
-              <option className="bg-gray-900 text-white" value="emma wilson">Emma Wilson (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="elijah johnson">Elijah Johnson (male, conversational)</option>
-              <option className="bg-gray-900 text-white" value="amber martinez">Amber Martinez (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="ana silva">Ana Silva (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="angelica santos">Angelica Santos (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="anjali singh">Anjali Singh (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="asha johnson">Asha Johnson (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="carla rodriguez">Carla Rodriguez (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="daniela gomez">Daniela Gomez (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="elise montgomery">Elise Montgomery (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="emily bennett">Emily Bennett (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="emily levine">Emily Levine (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="emily novak">Emily Novak (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="emily watson">Emily Watson (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="emma dubois">Emma Dubois (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="hannah murphy">Hannah Murphy (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="heather smith">Heather Smith (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="isabel gomez">Isabel Gomez (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="isabela rodriguez">Isabela Rodriguez (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="katie bruno">Katie Bruno (female, conversational)</option>
-              <option className="bg-gray-900 text-white" value="kelsey miller">Kelsey Miller (female, conversational)</option>
-              
-              {/* IVR Voices */}
-              <option className="bg-gray-900 text-white" value="akari miyamoto">Akari Miyamoto (female, IVR)</option>
-              <option className="bg-gray-900 text-white" value="emily collins">Emily Collins (female, IVR)</option>
-              <option className="bg-gray-900 text-white" value="giulia ricci">Giulia Ricci (female, IVR)</option>
-              <option className="bg-gray-900 text-white" value="jennifer kelly">Jennifer Kelly (female, IVR)</option>
+              {/* General Selection Voices */}
+              <optgroup label="General Voices">
+                <option className="bg-gray-900 text-white" value="seraphina">Seraphina</option>
+                <option className="bg-gray-900 text-white" value="celeste">Celeste</option>
+                <option className="bg-gray-900 text-white" value="aurora">Aurora</option>
+                <option className="bg-gray-900 text-white" value="luna">Luna</option>
+              </optgroup>
             </select>
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -1596,9 +1600,22 @@ export default function Chat() {
             </div>
           ))}
             </div>
+            {dailyLimitMsg && (
+              <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                <div className="flex items-center justify-between">
+                  <span>{dailyLimitMsg}</span>
+                  <a href="/subscribe" className="ml-2 text-red-300 underline hover:text-red-200">Upgrade</a>
+                </div>
+              </div>
+            )}
             {cooldownMsg && (
               <div className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
                 {cooldownMsg}
+              </div>
+            )}
+            {welcomeCredits <= 0 && textMessagesToday > 0 && (
+              <div className="mt-2 text-xs text-white/60 px-3">
+                {textMessagesToday}/20 messages today (Free tier)
               </div>
             )}
             <div className="hidden md:block">
@@ -1624,7 +1641,7 @@ export default function Chat() {
                   }}
                   ref={isDesktop ? inputRef : null}
                   autoFocus={isDesktop}
-                  disabled={streaming || Boolean(cooldownMsg)}
+                  disabled={streaming || Boolean(cooldownMsg) || Boolean(dailyLimitMsg)}
                   rows={1}
                 />
                 {/* Voice Call Button */}
@@ -1688,7 +1705,7 @@ export default function Chat() {
                         console.error('Voice call error:', error);
                         window.alert(`Voice call error: ${error}`);
                       }}
-                      disabled={streaming || Boolean(cooldownMsg)}
+                      disabled={streaming || Boolean(cooldownMsg) || Boolean(dailyLimitMsg)}
                     />
                   )}
                 </div>
@@ -1830,7 +1847,7 @@ export default function Chat() {
                       }, 0);
                     }
                   }}
-                  disabled={streaming || Boolean(cooldownMsg)}
+                  disabled={streaming || Boolean(cooldownMsg) || Boolean(dailyLimitMsg)}
                   rows={1}
                 />
                 {/* Voice Call Button */}
@@ -1894,7 +1911,7 @@ export default function Chat() {
                         console.error('Voice call error:', error);
                         window.alert(`Voice call error: ${error}`);
                       }}
-                      disabled={streaming || Boolean(cooldownMsg)}
+                      disabled={streaming || Boolean(cooldownMsg) || Boolean(dailyLimitMsg)}
                     />
                   )}
                 </div>

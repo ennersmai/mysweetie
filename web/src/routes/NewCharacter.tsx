@@ -1,9 +1,14 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import { ALLOWED_VOICES } from '../lib/voices';
 import { useAuth } from '../contexts/AuthContext';
+
+// Default voices for each style
+const REALISTIC_VOICES = ['layla', 'ava', 'mia', 'emma', 'aria', 'natalia'];
+const ANIME_VOICES = ['star', 'natsuki', 'mary', 'lana', 'clover', 'chloe'];
+const GENERAL_VOICES = ['seraphina', 'celeste', 'aurora', 'luna'];
 
 export default function NewCharacter() {
   const navigate = useNavigate();
@@ -12,12 +17,21 @@ export default function NewCharacter() {
   const [name, setName] = useState('');
   const [shortDescription, setShortDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [voiceKey, setVoiceKey] = useState('luna');
+  const [voiceKey, setVoiceKey] = useState('layla'); // Default to first realistic voice
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [style, setStyle] = useState<'realistic' | 'anime'>('realistic');
   const [galleryFiles, setGalleryFiles] = useState<FileList | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Update default voice when style changes
+  useEffect(() => {
+    if (style === 'realistic') {
+      setVoiceKey(REALISTIC_VOICES[0]);
+    } else {
+      setVoiceKey(ANIME_VOICES[0]);
+    }
+  }, [style]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -125,11 +139,42 @@ export default function NewCharacter() {
               value={voiceKey}
               onChange={(e) => setVoiceKey(e.target.value)}
             >
-              {ALLOWED_VOICES.map((v) => (
-                <option key={v} className="bg-gray-900 text-white" value={v}>
-                  {v.charAt(0).toUpperCase() + v.slice(1)}
-                </option>
-              ))}
+              {style === 'realistic' && (
+                <>
+                  <optgroup label="Realistic Character Voices">
+                    {REALISTIC_VOICES.map((v) => (
+                      <option key={v} className="bg-gray-900 text-white" value={v}>
+                        {v.charAt(0).toUpperCase() + v.slice(1)}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="General Voices">
+                    {GENERAL_VOICES.map((v) => (
+                      <option key={v} className="bg-gray-900 text-white" value={v}>
+                        {v.charAt(0).toUpperCase() + v.slice(1)}
+                      </option>
+                    ))}
+                  </optgroup>
+                </>
+              )}
+              {style === 'anime' && (
+                <>
+                  <optgroup label="Anime Character Voices">
+                    {ANIME_VOICES.map((v) => (
+                      <option key={v} className="bg-gray-900 text-white" value={v}>
+                        {v.charAt(0).toUpperCase() + v.slice(1)}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="General Voices">
+                    {GENERAL_VOICES.map((v) => (
+                      <option key={v} className="bg-gray-900 text-white" value={v}>
+                        {v.charAt(0).toUpperCase() + v.slice(1)}
+                      </option>
+                    ))}
+                  </optgroup>
+                </>
+              )}
             </select>
             <svg
               xmlns="http://www.w3.org/2000/svg"
