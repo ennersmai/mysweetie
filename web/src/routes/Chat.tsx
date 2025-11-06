@@ -1247,17 +1247,9 @@ export default function Chat() {
                   el.scrollTop = el.scrollHeight;
                 }, 0);
               } else if (data.type === 'moderation_passed') {
-                // Moderation passed - now we can start TTS for the complete response
+                // Moderation passed - mark it but don't start TTS yet (wait for final)
                 ttsModerationPassedRef.current = true;
-                if (voiceEnabled) {
-                  // Use complete response if available, otherwise use accumulated
-                  const completeResponse = ttsCompleteResponseRef.current.trim() || assistantMessageRef.current.trim();
-                  if (completeResponse.length > 0) {
-                    console.log('✅ Moderation passed, starting TTS for complete response');
-                    // Process complete response phrase by phrase for TTS
-                    ttsAppendSentence(completeResponse);
-                  }
-                }
+                console.log('✅ Moderation passed, waiting for final response to start TTS');
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
@@ -1272,13 +1264,15 @@ export default function Chat() {
                   setTextMessagesToday(prev => prev + 1);
                 }
                 
-                // If moderation already passed, start TTS now
+                // Start TTS only once when we have final response AND moderation passed
                 if (voiceEnabled && ttsModerationPassedRef.current) {
-                  // Process complete response for TTS
+                  console.log('✅ Starting TTS for final response (moderation already passed)');
+                  // Process complete response for TTS (only once)
                   ttsAppendSentence(finalText);
                 } else if (voiceEnabled) {
                   // Moderation not passed yet, but we have final - wait for moderation_passed
                   // (moderation check happens after streaming, so this should be rare)
+                  console.log('⏳ Waiting for moderation check before starting TTS');
                 }
                 
                 // Display final complete text in UI
