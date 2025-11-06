@@ -163,7 +163,7 @@ export default function Chat() {
   const uiTextBufferRef = useRef<string>(''); // Accumulator for UI streaming
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
-  const PCM_MIN_SAMPLES = 1200; // ~50ms at 24kHz - reduced for smoother playback with Resemble.ai
+  const PCM_MIN_SAMPLES = 2400; // ~100ms at 24kHz - balanced for smooth playback without artifacts
   const ttsValidatedBinaryRef = useRef<boolean>(false);
   const ttsFlushTimerRef = useRef<number | null>(null);
   // Promises to resolve when current TTS playback fully ends
@@ -427,12 +427,12 @@ export default function Chat() {
     // If we have samples but didn't flush (below threshold), set a timeout to flush soon
     // This prevents long pauses when receiving small chunks
     if (ttsPcmAccumRef.current.length > 0 && ttsPcmAccumRef.current.length < PCM_MIN_SAMPLES && !ttsFlushTimerRef.current) {
-      // Flush after 30ms if we haven't reached the minimum threshold
-      // This ensures smooth playback even with small chunks
+      // Flush after 50ms if we haven't reached the minimum threshold
+      // This ensures smooth playback even with small chunks without causing artifacts
       ttsFlushTimerRef.current = window.setTimeout(() => {
         ttsFlushTimerRef.current = null;
         flushAccumulatedPcm(true); // Force flush even if below threshold
-      }, 30);
+      }, 50);
     }
   };
 

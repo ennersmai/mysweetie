@@ -135,6 +135,7 @@ export function extractPCMData(wavBuffer: Buffer): Buffer {
 /**
  * Stream WAV data and extract PCM chunks
  * Handles streaming WAV files from Resemble.ai
+ * Optimized to start streaming as soon as data chunk is found
  */
 export async function streamWAVToPCM(
   wavStream: Readable,
@@ -142,47 +143,130 @@ export async function streamWAVToPCM(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let buffer = Buffer.alloc(0);
-    let headerParsed = false;
-    let header: WAVHeader | null = null;
+    let fmtParsed = false;
+    let sampleRate = 24000; // Default, will be updated from fmt chunk
+    let channels = 1;
+    let bitsPerSample = 16;
     let dataOffset = -1;
     let expectedDataSize = 0;
     let dataReceived = 0;
+    let searchingForDataChunk = true;
 
     wavStream.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
 
-      // Parse header once we have enough data
-      if (!headerParsed && buffer.length >= 44) {
+      // Parse fmt chunk first (needed for validation, but we can start streaming before finding data chunk)
+      if (!fmtParsed && buffer.length >= 44) {
         try {
-          header = parseWAVHeader(buffer);
-          dataOffset = header.dataOffset;
-          
-          // Read data chunk size (4 bytes before dataOffset)
-          if (buffer.length >= dataOffset) {
-            expectedDataSize = buffer.readUInt32LE(dataOffset - 4);
-            headerParsed = true;
-            
-            // If we already have PCM data in the buffer, extract it
-            if (buffer.length > dataOffset) {
-              const initialPCM = buffer.subarray(dataOffset);
-              const pcmToSend = initialPCM.slice(0, Math.min(initialPCM.length, expectedDataSize));
-              onPCMChunk(pcmToSend);
-              dataReceived += pcmToSend.length;
-              
-              // Remove processed data from buffer
-              buffer = buffer.subarray(dataOffset + pcmToSend.length);
+          // Check RIFF header
+          const riffId = buffer.toString('ascii', 0, 4);
+          if (riffId !== 'RIFF') {
+            reject(new Error(`Invalid WAV file: expected RIFF, got ${riffId}`));
+            return;
+          }
+
+          // Check WAVE format
+          const waveId = buffer.toString('ascii', 8, 12);
+          if (waveId !== 'WAVE') {
+            reject(new Error(`Invalid WAV file: expected WAVE, got ${waveId}`));
+            return;
+          }
+
+          // Find and parse fmt chunk
+          let offset = 12;
+          while (offset < buffer.length - 8 && !fmtParsed) {
+            const chunkId = buffer.toString('ascii', offset, offset + 4);
+            const chunkSize = buffer.readUInt32LE(offset + 4);
+
+            if (chunkId === 'fmt ') {
+              const audioFormat = buffer.readUInt16LE(offset + 8);
+              if (audioFormat !== 1) {
+                reject(new Error(`Unsupported audio format: ${audioFormat} (expected PCM)`));
+                return;
+              }
+
+              channels = buffer.readUInt16LE(offset + 10);
+              sampleRate = buffer.readUInt32LE(offset + 12);
+              bitsPerSample = buffer.readUInt16LE(offset + 22);
+              fmtParsed = true;
+              break;
+            } else {
+              offset += 8 + chunkSize;
+              if (chunkSize % 2 === 1) {
+                offset += 1;
+              }
             }
           }
         } catch (error: any) {
-          reject(new Error(`Failed to parse WAV header: ${error.message}`));
+          reject(new Error(`Failed to parse WAV fmt chunk: ${error.message}`));
           return;
         }
       }
 
-      // Stream PCM data once header is parsed
-      if (headerParsed && dataOffset !== -1) {
-        // Check if we have PCM data to send
-        if (buffer.length > 0 && dataReceived < expectedDataSize) {
+      // Search for data chunk incrementally (don't wait for full header parse)
+      if (fmtParsed && searchingForDataChunk) {
+        let offset = 12;
+        
+        // Find fmt chunk end
+        while (offset < buffer.length - 8) {
+          const chunkId = buffer.toString('ascii', offset, offset + 4);
+          const chunkSize = buffer.readUInt32LE(offset + 4);
+          
+          if (chunkId === 'fmt ') {
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 === 1) {
+              offset += 1;
+            }
+            break;
+          } else {
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 === 1) {
+              offset += 1;
+            }
+          }
+        }
+
+        // Now search for data chunk starting after fmt
+        while (offset <= buffer.length - 8) {
+          if (offset + 4 > buffer.length) break;
+          
+          const chunkId = buffer.toString('ascii', offset, offset + 4);
+          
+          if (chunkId === 'data') {
+            // Found data chunk!
+            dataOffset = offset + 8;
+            if (offset + 8 <= buffer.length) {
+              expectedDataSize = buffer.readUInt32LE(offset + 4);
+              searchingForDataChunk = false;
+              
+              // Immediately start streaming any PCM data we already have
+              if (buffer.length > dataOffset) {
+                const initialPCM = buffer.subarray(dataOffset);
+                const pcmToSend = initialPCM.slice(0, Math.min(initialPCM.length, expectedDataSize));
+                if (pcmToSend.length > 0) {
+                  onPCMChunk(pcmToSend);
+                  dataReceived += pcmToSend.length;
+                  buffer = buffer.subarray(dataOffset + pcmToSend.length);
+                }
+              }
+            }
+            break;
+          } else {
+            // Skip this chunk
+            if (offset + 8 > buffer.length) break;
+            const chunkSize = buffer.readUInt32LE(offset + 4);
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 === 1) {
+              offset += 1;
+            }
+          }
+        }
+      }
+
+      // Stream PCM data once data chunk is found
+      if (!searchingForDataChunk && dataOffset !== -1) {
+        // Stream any available PCM data
+        while (buffer.length > 0 && dataReceived < expectedDataSize) {
           const remaining = expectedDataSize - dataReceived;
           const pcmChunk = buffer.slice(0, Math.min(buffer.length, remaining));
           
@@ -190,6 +274,8 @@ export async function streamWAVToPCM(
             onPCMChunk(pcmChunk);
             dataReceived += pcmChunk.length;
             buffer = buffer.subarray(pcmChunk.length);
+          } else {
+            break;
           }
         }
       }
@@ -197,7 +283,7 @@ export async function streamWAVToPCM(
 
     wavStream.on('end', () => {
       // Send any remaining PCM data
-      if (headerParsed && buffer.length > 0 && dataReceived < expectedDataSize) {
+      if (!searchingForDataChunk && buffer.length > 0 && dataReceived < expectedDataSize) {
         const remaining = expectedDataSize - dataReceived;
         const pcmChunk = buffer.slice(0, Math.min(buffer.length, remaining));
         if (pcmChunk.length > 0) {
@@ -205,8 +291,10 @@ export async function streamWAVToPCM(
         }
       }
       
-      if (!headerParsed) {
-        reject(new Error('WAV stream ended before header could be parsed'));
+      if (!fmtParsed) {
+        reject(new Error('WAV stream ended before fmt chunk could be parsed'));
+      } else if (searchingForDataChunk) {
+        reject(new Error('WAV stream ended before data chunk could be found'));
       } else {
         resolve();
       }
