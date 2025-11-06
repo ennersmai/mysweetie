@@ -520,6 +520,7 @@ export default function Chat() {
     ttsNetworkEndResolversRef.current = [];
     
     try {
+      const requestStartTime = Date.now();
       let res: Response;
       try {
         res = await apiClient.streamAudio('/tts/pcm', {
@@ -533,6 +534,8 @@ export default function Chat() {
         console.warn(`TTS[#${reqId}] request aborted/failed:`, e);
         return;
       }
+      const responseReceivedTime = Date.now();
+      console.log(`TTS[#${reqId}] HTTP response received (${responseReceivedTime - requestStartTime}ms after request)`);
       if (!res.ok) {
         console.error(`TTS[#${reqId}] request failed with status: ${res.status}`);
         return;
@@ -559,7 +562,12 @@ export default function Chat() {
         if (value) {
           chunkCount++;
           const ab = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-          console.log(`🎵 Received PCM chunk ${chunkCount}: ${ab.byteLength} bytes`);
+          if (chunkCount === 1) {
+            const firstChunkTime = Date.now();
+            console.log(`🎵 Received first PCM chunk[#${reqId}] (${firstChunkTime - requestStartTime}ms after request, ${firstChunkTime - responseReceivedTime}ms after HTTP response): ${ab.byteLength} bytes`);
+          } else {
+            console.log(`🎵 Received PCM chunk ${chunkCount}: ${ab.byteLength} bytes`);
+          }
           schedulePcmChunk(ab);
         }
       }

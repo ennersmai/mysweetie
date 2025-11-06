@@ -130,6 +130,7 @@ export async function synthesizeResembleTTS(
           continue;
         }
         logger.debug(`Processing Resemble TTS chunk ${i + 1}/${textChunks.length}: "${chunk.substring(0, 50)}..."`);
+        const requestStartTime = Date.now();
 
         // Make request to Resemble.ai
         const axiosConfig: any = {
@@ -157,6 +158,8 @@ export async function synthesizeResembleTTS(
         }
 
         const response: AxiosResponse<Readable> = await axios(axiosConfig);
+        const responseReceivedTime = Date.now();
+        logger.debug(`Resemble TTS chunk ${i + 1} HTTP response received (${responseReceivedTime - requestStartTime}ms after request)`);
 
         if (response.status !== 200) {
           let errorText = '';
@@ -172,8 +175,15 @@ export async function synthesizeResembleTTS(
           throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
         }
 
+        // Track when first PCM chunk arrives
+        let firstChunkTime: number | null = null;
+        
         // Parse WAV to PCM and stream directly for low latency
         await streamWAVToPCM(response.data, (pcmChunk: Buffer) => {
+          if (firstChunkTime === null) {
+            firstChunkTime = Date.now();
+            logger.debug(`Resemble TTS chunk ${i + 1} first PCM data received (${firstChunkTime - requestStartTime}ms after request, ${firstChunkTime - responseReceivedTime}ms after HTTP response)`);
+          }
           pcmStream.push(pcmChunk);
         });
         
