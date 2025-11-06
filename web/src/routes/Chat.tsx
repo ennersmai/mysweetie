@@ -365,6 +365,13 @@ export default function Chat() {
     ttsLastEndTimeRef.current = endAt;
 
     source.onended = () => {
+      // Clean up: disconnect audio nodes to free memory
+      try {
+        source.disconnect();
+      } catch {}
+      try {
+        gain.disconnect();
+      } catch {}
       // Remove this source first
       ttsSourcesRef.current = ttsSourcesRef.current.filter(s => s !== source);
       const remaining = ttsPlayheadRef.current - audioCtx.currentTime;
