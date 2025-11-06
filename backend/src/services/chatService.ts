@@ -386,15 +386,17 @@ export async function* processChat(request: ChatRequest) {
     }
     
     // After streaming ends, check moderation on complete response
+    // Note: shouldStopStreaming only means we stopped reading early (e.g., token limit),
+    // but we still need to moderate and allow TTS for the content we received
     logger.info({
         message: 'Streaming ended, checking moderation',
         shouldStopStreaming,
         fullResponseLength: fullResponse.trim().length,
-        willCheckModeration: !shouldStopStreaming && fullResponse.trim().length > 0,
+        willCheckModeration: fullResponse.trim().length > 0,
     });
     
-    if (!shouldStopStreaming && fullResponse.trim().length > 0) {
-        // Check complete response for moderation
+    if (fullResponse.trim().length > 0) {
+        // Check complete response for moderation (regardless of shouldStopStreaming)
         const moderationResult = await checkModeration(fullResponse);
         
         if (moderationResult.flagged) {
@@ -418,8 +420,7 @@ export async function* processChat(request: ChatRequest) {
         yield { type: 'moderation_passed' };
     } else {
         logger.warn({
-            message: 'Skipping moderation check',
-            reason: shouldStopStreaming ? 'streaming was stopped' : 'fullResponse is empty',
+            message: 'Skipping moderation check - fullResponse is empty',
             fullResponseLength: fullResponse.trim().length,
         });
     }
