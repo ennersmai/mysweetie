@@ -10,7 +10,6 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
 import Modal from '../components/Modal';
 import VoiceCallButton from '../components/VoiceCallButton';
 import MobileBottomNav from '../components/MobileBottomNav';
-import { createWAVParser, processWAVChunk } from '../utils/wavParser';
 
 type Message = { id?: string; role: 'user' | 'assistant'; content: string };
 type Memory = { id: string; memory_text: string };
@@ -171,9 +170,6 @@ export default function Chat() {
   const ttsEndResolversRef = useRef<Array<() => void>>([]);
   // Preserve 1 leftover byte between chunks to maintain 16-bit alignment
   const ttsCarryByteRef = useRef<number | null>(null);
-  // Accumulator for WAV chunks - we'll decode complete WAV files as they arrive
-  const ttsWavBufferRef = useRef<Uint8Array[]>([]);
-  const ttsWavParserRef = useRef<ReturnType<typeof createWAVParser> | null>(null);
   // Track when the network stream has fully completed for the current sentence
   const ttsNetworkDoneRef = useRef<boolean>(false);
   // Monotonic counter to tag each TTS PCM request for debugging/correlation
@@ -517,9 +513,6 @@ export default function Chat() {
     ttsValidatedBinaryRef.current = false;
     // Reset carry byte
     ttsCarryByteRef.current = null;
-    // Reset WAV buffer accumulator and parser for new stream
-    ttsWavBufferRef.current = [];
-    ttsWavParserRef.current = createWAVParser();
     // Network not done until we finish reading
     ttsNetworkDoneRef.current = false;
     
@@ -545,11 +538,10 @@ export default function Chat() {
         console.error(`TTS[#${reqId}] no response body`);
         return;
       }
-      console.log(`TTS[#${reqId}] got response, starting to read WAV data`);
+      console.log(`TTS[#${reqId}] got response, starting to read PCM data`);
       const reader = res.body.getReader();
-      
+      // Read streaming PCM chunks directly (backend parses WAV to PCM)
       let chunkCount = 0;
-      
       while (true) {
         let readResult;
         try { readResult = await reader.read(); } catch (e) { 
@@ -559,146 +551,13 @@ export default function Chat() {
         const { value, done } = readResult;
         if (done) {
           console.log(`TTS[#${reqId}] stream ended, received ${chunkCount} chunks`);
-          // Process any remaining buffered data
-          const parser = ttsWavParserRef.current;
-          if (parser && parser.buffer.length > 0) {
-            processWAVChunk(parser, new Uint8Array(0));
-          }
-          // Decode any complete WAV files we've accumulated
-          // This handles files with 0xFFFFFFFF data size (unknown size - decode when stream ends)
-          await decodeAccumulatedWAV();
           break;
         }
         if (value) {
           chunkCount++;
-          const wavChunk = new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
-          console.log(`🎵 Received WAV chunk ${chunkCount}: ${wavChunk.length} bytes`);
-          
-          // Accumulate WAV chunks
-          ttsWavBufferRef.current.push(wavChunk);
-          
-          // Parse to detect when we have a complete WAV file
-          const parser = ttsWavParserRef.current;
-          if (parser) {
-            processWAVChunk(parser, wavChunk);
-            
-            // Check if we've received a complete WAV file - decode immediately!
-            // Note: For files with expectedDataSize === 0xFFFFFFFF, we'll decode when stream ends
-            const isComplete = !parser.searchingForDataChunk && parser.dataOffset !== -1 && 
-              parser.expectedDataSize !== 0xFFFFFFFF && 
-              parser.dataReceived >= parser.expectedDataSize;
-            
-            if (isComplete) {
-              // Calculate the size of the complete WAV file (header + data)
-              // If expectedDataSize is 0xFFFFFFFF, use actual received data size
-              const actualDataSize = parser.expectedDataSize === 0xFFFFFFFF 
-                ? parser.dataReceived 
-                : parser.expectedDataSize;
-              const wavFileSize = parser.dataOffset + actualDataSize;
-              
-              // Extract and decode this complete WAV file
-              await decodeWAVFile(wavFileSize);
-              
-              // Remove the decoded WAV file from buffer and reset parser for next WAV file
-              const totalBuffered = ttsWavBufferRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-              if (totalBuffered > wavFileSize) {
-                // Remove the decoded WAV file bytes from buffer
-                let bytesToRemove = wavFileSize;
-                while (bytesToRemove > 0 && ttsWavBufferRef.current.length > 0) {
-                  const firstChunk = ttsWavBufferRef.current[0];
-                  if (bytesToRemove >= firstChunk.length) {
-                    bytesToRemove -= firstChunk.length;
-                    ttsWavBufferRef.current.shift();
-                  } else {
-                    // Partial chunk - keep the remainder
-                    ttsWavBufferRef.current[0] = firstChunk.subarray(bytesToRemove);
-                    bytesToRemove = 0;
-                  }
-                }
-                // Reset parser and continue with remaining data
-                ttsWavParserRef.current = createWAVParser();
-                // Process remaining buffered data with new parser
-                const remainingParser = ttsWavParserRef.current;
-                for (const remainingChunk of ttsWavBufferRef.current) {
-                  processWAVChunk(remainingParser, remainingChunk);
-                }
-              } else {
-                // All data was in this WAV file, clear buffer and reset parser
-                ttsWavBufferRef.current = [];
-                ttsWavParserRef.current = createWAVParser();
-              }
-            }
-          }
-        }
-      }
-      
-      // Helper function to decode a WAV file of specified size from accumulated buffer
-      async function decodeWAVFile(wavFileSize: number) {
-        if (ttsWavBufferRef.current.length === 0) return;
-        
-        // Extract exactly wavFileSize bytes from the buffer
-        const completeWav = new Uint8Array(wavFileSize);
-        let offset = 0;
-        let bytesRemaining = wavFileSize;
-        
-        for (let i = 0; i < ttsWavBufferRef.current.length && bytesRemaining > 0; i++) {
-          const chunk = ttsWavBufferRef.current[i];
-          const bytesToTake = Math.min(chunk.length, bytesRemaining);
-          completeWav.set(chunk.subarray(0, bytesToTake), offset);
-          offset += bytesToTake;
-          bytesRemaining -= bytesToTake;
-        }
-        
-        if (offset < wavFileSize) {
-          console.warn(`🎵 Warning: Only extracted ${offset} bytes, expected ${wavFileSize}`);
-          return;
-        }
-        
-        console.log(`🎵 Decoding complete WAV file: ${completeWav.length} bytes`);
-        const audioCtx = audioCtxRef.current;
-        if (!audioCtx) {
-          console.error('No AudioContext available for WAV decoding');
-          return;
-        }
-        
-        try {
-          // Use browser's native WAV decoder - handles all WAV formats correctly
-          const audioBuffer = await audioCtx.decodeAudioData(completeWav.buffer.slice(completeWav.byteOffset, completeWav.byteOffset + completeWav.byteLength));
-          console.log(`🎵 Decoded WAV: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.sampleRate}Hz, ${audioBuffer.numberOfChannels} channels`);
-          
-          // Extract PCM data from decoded AudioBuffer
-          const pcmData = audioBuffer.getChannelData(0); // Get first channel
-          
-          // Convert Float32Array to Int16 PCM
-          const pcmInt16 = new Int16Array(pcmData.length);
-          for (let i = 0; i < pcmData.length; i++) {
-            // Clamp and convert float [-1, 1] to int16 [-32768, 32767]
-            pcmInt16[i] = Math.max(-32768, Math.min(32767, Math.round(pcmData[i] * 32767)));
-          }
-          
-          // Convert to ArrayBuffer and stream immediately
-          const arrayBuffer = new ArrayBuffer(pcmInt16.length * 2);
-          const dv = new DataView(arrayBuffer);
-          for (let i = 0; i < pcmInt16.length; i++) {
-            dv.setInt16(i * 2, pcmInt16[i], true); // little-endian
-          }
-          
-          schedulePcmChunk(arrayBuffer);
-        } catch (error: any) {
-          console.error(`🎵 Error decoding WAV:`, error);
-        }
-      }
-      
-      // Decode any remaining WAV file at the end
-      async function decodeAccumulatedWAV() {
-        const parser = ttsWavParserRef.current;
-        if (parser && !parser.searchingForDataChunk && parser.dataOffset !== -1 && parser.dataReceived > 0) {
-          // Handle case where expectedDataSize is 0xFFFFFFFF (Resemble.ai uses this for some files)
-          const actualDataSize = parser.expectedDataSize === 0xFFFFFFFF 
-            ? parser.dataReceived 
-            : parser.expectedDataSize;
-          const wavFileSize = parser.dataOffset + actualDataSize;
-          await decodeWAVFile(wavFileSize);
+          const ab = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+          console.log(`🎵 Received PCM chunk ${chunkCount}: ${ab.byteLength} bytes`);
+          schedulePcmChunk(ab);
         }
       }
       // Ensure any remaining accumulated samples are played

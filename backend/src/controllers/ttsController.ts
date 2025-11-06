@@ -99,10 +99,10 @@ export const handleArcanaPcm = async (req: Request, res: Response): Promise<void
     // Create abort controller for request cancellation
     const abortController = new AbortController();
 
-    // Synthesize speech using Resemble.ai (returns WAV stream)
-    let wavStream: Readable;
+    // Synthesize speech using Resemble.ai (returns PCM stream)
+    let pcmStream: Readable;
     try {
-      wavStream = await synthesizeResembleTTS({
+      pcmStream = await synthesizeResembleTTS({
         text,
         voiceName: speaker,
         signal: abortController.signal
@@ -157,8 +157,8 @@ export const handleArcanaPcm = async (req: Request, res: Response): Promise<void
       logger.warn({ message: 'Failed to deduct credit', userId, error: (e as any)?.message });
     }
 
-    // Stream WAV back to client (client will parse to PCM)
-    res.setHeader('Content-Type', 'audio/wav');
+    // Stream PCM back to client (parsed from WAV on backend for low latency)
+    res.setHeader('Content-Type', 'audio/pcm');
     res.setHeader('Accept-Ranges', 'none');
     res.setHeader('Cache-Control', 'no-store, no-transform');
     res.setHeader('Content-Encoding', 'identity');
@@ -167,18 +167,18 @@ export const handleArcanaPcm = async (req: Request, res: Response): Promise<void
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
     let bytes = 0;
-    wavStream.on('data', (chunk: Buffer) => {
+    pcmStream.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
       res.write(chunk);
     });
 
-    wavStream.on('end', () => {
+    pcmStream.on('end', () => {
       logger.info({ message: 'Resemble TTS stream end', requestId, bytes });
       res.end();
     });
 
-    wavStream.on('error', (e: any) => {
-      logger.error({ message: 'Error streaming Resemble WAV', requestId, error: e?.message || String(e) });
+    pcmStream.on('error', (e: any) => {
+      logger.error({ message: 'Error streaming Resemble PCM', requestId, error: e?.message || String(e) });
       try {
         if (!res.headersSent) {
           res.status(500).end();
@@ -191,7 +191,7 @@ export const handleArcanaPcm = async (req: Request, res: Response): Promise<void
     // Handle client disconnect
     req.on('close', () => {
       abortController.abort();
-      wavStream.destroy();
+      pcmStream.destroy();
     });
   } catch (error: any) {
     logger.error({ message: 'Resemble PCM handler error', error: error?.message || String(error) });
