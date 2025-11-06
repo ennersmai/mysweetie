@@ -1284,13 +1284,22 @@ export default function Chat() {
                 }
                 
                 // Start TTS if moderation already passed, otherwise wait for moderation_passed
+                // If moderation_passed doesn't arrive within 2 seconds, start TTS anyway (moderation might have been skipped)
                 if (voiceEnabled && ttsModerationPassedRef.current) {
                   console.log('✅ Starting TTS for final response (moderation already passed)');
                   // Process complete response for TTS (only once)
                   ttsAppendSentence(finalText);
                 } else if (voiceEnabled) {
-                  // Moderation not passed yet, but we have final - wait for moderation_passed
+                  // Moderation not passed yet, but we have final - wait for moderation_passed with timeout
                   console.log('⏳ Final received, waiting for moderation check before starting TTS');
+                  // Set timeout to start TTS if moderation_passed doesn't arrive (moderation might be skipped or delayed)
+                  setTimeout(() => {
+                    if (!ttsModerationPassedRef.current && ttsCompleteResponseRef.current.trim().length > 0) {
+                      console.log('⏰ Moderation check timeout - starting TTS anyway (moderation may have been skipped)');
+                      ttsModerationPassedRef.current = true; // Mark as passed to prevent duplicate
+                      ttsAppendSentence(ttsCompleteResponseRef.current.trim());
+                    }
+                  }, 2000); // 2 second timeout
                 }
                 
                 // Display final complete text in UI
