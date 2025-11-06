@@ -17,7 +17,7 @@ function currentMonthUtc(): string {
 
 export const handleArcanaPcm = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { text, speaker } = req.body || {};
+    const { text, speaker, isFirstRequest = false } = req.body || {};
 
     if (!text || !speaker) {
       res.status(400).json({ error: 'Both "text" and "speaker" are required.' });
@@ -113,9 +113,11 @@ export const handleArcanaPcm = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    // On success: deduct one credit (welcome credits first, then voice credits)
+    // On success: deduct one credit only on first request of a response (welcome credits first, then voice credits)
     try {
-      if (welcomeCredits > 0) {
+      // Only deduct credit if this is the first TTS request for this response
+      if (isFirstRequest) {
+        if (welcomeCredits > 0) {
         // Deduct from welcome credits
         const { error: rpcError } = await supabaseAdmin.rpc('decrement_welcome_credits', {
           user_id: userId,
@@ -152,6 +154,7 @@ export const handleArcanaPcm = async (req: Request, res: Response): Promise<void
             .eq('id', userId);
         }
         logger.info({ message: 'Voice credit used', userId, remainingCredits: voiceCredits - 1 });
+        }
       }
     } catch (e) {
       logger.warn({ message: 'Failed to deduct credit', userId, error: (e as any)?.message });

@@ -155,7 +155,7 @@ export default function Chat() {
   const ttsPlayheadRef = useRef<number>(0); // seconds scheduled ahead in AudioContext time
   const ttsSampleRateRef = useRef<number>(16000); // Use 16000 Hz to match TTS output
   const ttsSentenceBufRef = useRef<string>('');
-  const ttsQueueRef = useRef<{ speaker: string; text: string }[]>([]);
+  const ttsQueueRef = useRef<{ speaker: string; text: string; isFirstRequest?: boolean }[]>([]);
   const ttsProcessingRef = useRef<boolean>(false);
   const ttsStreamingRef = useRef<boolean>(false);
   const ttsAbortRef = useRef<AbortController | null>(null);
@@ -176,6 +176,12 @@ export default function Chat() {
   const ttsRequestSeqRef = useRef<number>(0);
   // Whether we've received a final full response for the current turn
   const ttsGotFinalRef = useRef<boolean>(false);
+  // Track if we've deducted voice credit for the current response
+  const ttsCreditDeductedRef = useRef<boolean>(false);
+  // Track complete response for moderation check before TTS
+  const ttsCompleteResponseRef = useRef<string>('');
+  // Whether moderation has passed for current response
+  const ttsModerationPassedRef = useRef<boolean>(false);
   // Safe max characters per TTS request to avoid provider truncation
   const TTS_MAX_CHARS = 500;
 
@@ -479,7 +485,7 @@ export default function Chat() {
   }, []);
 
   // Speak a single sentence via HTTP PCM endpoint
-  const speakPcm = useCallback(async (speaker: string, text: string) => {
+  const speakPcm = useCallback(async (speaker: string, text: string, isFirstRequest: boolean = false) => {
     if (!text.trim()) return;
     
     // Prevent concurrent TTS network requests (but allow if network is done, even if audio is playing)
@@ -532,6 +538,7 @@ export default function Chat() {
         modelId: 'arcana',
         samplingRate: 16000, // Use Resemble.ai sample rate
         lang: 'eng',
+        isFirstRequest, // Pass the flag from queue
         }, controller.signal as any);
       } catch (e) {
         console.warn(`TTS[#${reqId}] request aborted/failed:`, e);
@@ -596,7 +603,11 @@ export default function Chat() {
     ttsProcessingRef.current = true;
     try {
       while (ttsQueueRef.current.length > 0) {
-        const { speaker, text } = ttsQueueRef.current.shift()!;
+        const { speaker, text, isFirstRequest = false } = ttsQueueRef.current.shift()!;
+        // Mark credit as deducted if this is the first request
+        if (isFirstRequest) {
+          ttsCreditDeductedRef.current = true;
+        }
         // Ensure previous network stream is done before starting next (not waiting for playback)
         if (ttsStreamingRef.current) {
           await new Promise<void>((resolve) => {
@@ -606,7 +617,7 @@ export default function Chat() {
           });
         }
         // Start TTS - speakPcm will return when network stream ends
-        await speakPcm(speaker, text);
+        await speakPcm(speaker, text, isFirstRequest);
         // speakPcm already waits for network stream to end, so we can immediately continue to next
         if (stickToBottomRef.current) {
           const el = messagesListRef.current;
@@ -625,7 +636,9 @@ export default function Chat() {
     const parts = segmentTextForTts(trimmed);
     console.log(`🎵 Enqueueing TTS ${parts.length} segment(s) (processing: ${ttsProcessingRef.current}, streaming: ${ttsStreamingRef.current})`);
     parts.forEach((p, idx) => {
-      ttsQueueRef.current.push({ speaker, text: p });
+      // Mark first request to deduct credit only once
+      const isFirst = idx === 0 && !ttsCreditDeductedRef.current;
+      ttsQueueRef.current.push({ speaker, text: p, isFirstRequest: isFirst });
       if (idx === 0) console.log(`🎵 TTS segment[1/${parts.length}]: "${p.substring(0, 60)}${p.length > 60 ? '…' : ''}" (${p.length} chars)`);
     });
     
@@ -1108,6 +1121,9 @@ export default function Chat() {
       ttsQueueRef.current = [];
       ttsSentenceBufRef.current = '';
       ttsGotFinalRef.current = false;
+      ttsCreditDeductedRef.current = false;
+      ttsCompleteResponseRef.current = '';
+      ttsModerationPassedRef.current = false;
     }
     try {
       // New API call to the Node.js backend
@@ -1196,10 +1212,9 @@ export default function Chat() {
                   assistantMessageRef.current += completeText;
                   wordBufferRef.current += completeText;
                   
-                  if (voiceEnabled) {
-                    // Speak complete sentences as they arrive for faster response
-                    ttsAppendSentence(completeText);
-                  }
+                  // Accumulate complete response for moderation check
+                  // Don't start TTS yet - wait for moderation to pass
+                  ttsCompleteResponseRef.current += completeText;
                   
                   // Update UI with only complete sentences
                   setMessages(prev => {
@@ -1230,9 +1245,24 @@ export default function Chat() {
                   if (!el) return;
                   el.scrollTop = el.scrollHeight;
                 }, 0);
+              } else if (data.type === 'moderation_passed') {
+                // Moderation passed - now we can start TTS for the complete response
+                ttsModerationPassedRef.current = true;
+                if (voiceEnabled) {
+                  // Use complete response if available, otherwise use accumulated
+                  const completeResponse = ttsCompleteResponseRef.current.trim() || assistantMessageRef.current.trim();
+                  if (completeResponse.length > 0) {
+                    console.log('✅ Moderation passed, starting TTS for complete response');
+                    // Process complete response phrase by phrase for TTS
+                    ttsAppendSentence(completeResponse);
+                  }
+                }
               } else if (data.type === 'final' && data.fullResponse) {
                 const finalText: string = data.fullResponse;
                 ttsGotFinalRef.current = true;
+                
+                // Update complete response ref
+                ttsCompleteResponseRef.current = finalText;
                 
                 // Update credits after successful message
                 if (welcomeCredits > 0) {
@@ -1241,13 +1271,13 @@ export default function Chat() {
                   setTextMessagesToday(prev => prev + 1);
                 }
                 
-                // Speak any remaining buffer text to ensure we don't miss the end
-                if (voiceEnabled) {
-                  const remainingInBuffer = uiTextBufferRef.current.trim();
-                  if (remainingInBuffer.length > 0) {
-                    console.log(`🎵 Final TTS: speaking remaining buffer "${remainingInBuffer.substring(0, 50)}..." (${remainingInBuffer.length} chars)`);
-                    ttsAppendSentence(remainingInBuffer);
-                  }
+                // If moderation already passed, start TTS now
+                if (voiceEnabled && ttsModerationPassedRef.current) {
+                  // Process complete response for TTS
+                  ttsAppendSentence(finalText);
+                } else if (voiceEnabled) {
+                  // Moderation not passed yet, but we have final - wait for moderation_passed
+                  // (moderation check happens after streaming, so this should be rare)
                 }
                 
                 // Display final complete text in UI

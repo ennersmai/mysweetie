@@ -352,39 +352,10 @@ export async function* processChat(request: ChatRequest) {
                             // Enforce token limit during streaming
                             const combinedTokens = encode(fullResponse + content);
                             if (combinedTokens.length <= MAX_RESPONSE_TOKENS) {
-                                // Add to moderation buffer for assistant replies (don't add to fullResponse yet)
+                                // Stream content immediately - moderation check happens at end
                                 moderationBuffer += content;
-                                
-                                // Extract complete phrases from moderation buffer
-                                const { phrases, remaining } = extractCompletePhrases(moderationBuffer);
-                                
-                                // If we have 2+ complete phrases, check moderation
-                                if (phrases.length >= 2) {
-                                    const twoPhrases = phrases.slice(0, 2).join(' ');
-                                    const moderationResult = await checkModeration(twoPhrases);
-                                    
-                                    if (moderationResult.flagged) {
-                                        // Hard-block: stop streaming, abort controller, yield moderation error
-                                        logger.error({
-                                            message: 'Content blocked by moderation - stopping response',
-                                            categories: moderationResult.categories,
-                                            contentPreview: twoPhrases.substring(0, 200),
-                                        });
-                                        shouldStopStreaming = true;
-                                        try { controller.abort(); } catch {}
-                                        yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
-                                        // Clear moderation buffer - don't add blocked content to fullResponse
-                                        moderationBuffer = '';
-                                        break;
-                                    }
-                                    
-                                    // Content is safe - add to fullResponse, yield the first 2 phrases, and remove from buffer
-                                    const phrasesToYield = phrases.slice(0, 2).join('');
-                                    fullResponse += phrasesToYield;
-                                    moderationBuffer = phrases.slice(2).join('') + remaining;
-                                    yield { type: 'chunk', content: phrasesToYield };
-                                }
-                                // If less than 2 phrases, continue buffering without yielding or adding to fullResponse
+                                fullResponse += content;
+                                yield { type: 'chunk', content };
                             } else {
                                 const truncatedText = decode(combinedTokens.slice(0, MAX_RESPONSE_TOKENS));
                                 // Parse the truncated response immediately to remove incomplete sentences
@@ -414,51 +385,25 @@ export async function* processChat(request: ChatRequest) {
         if (shouldStopStreaming) break;
     }
     
-    // After streaming ends, check remaining content in moderation buffer
-    if (moderationBuffer.trim().length > 0 && !shouldStopStreaming) {
-        const { phrases, remaining } = extractCompletePhrases(moderationBuffer);
+    // After streaming ends, check moderation on complete response
+    if (!shouldStopStreaming && fullResponse.trim().length > 0) {
+        // Check complete response for moderation
+        const moderationResult = await checkModeration(fullResponse);
         
-        // Check remaining complete phrases
-        if (phrases.length > 0) {
-            // Check all remaining phrases together
-            const phrasesToCheck = phrases.join(' ');
-            const moderationResult = await checkModeration(phrasesToCheck);
-            
-            if (moderationResult.flagged) {
-                logger.error({
-                    message: 'Content blocked by moderation - final check',
-                    categories: moderationResult.categories,
-                    contentPreview: phrasesToCheck.substring(0, 200),
-                });
-                yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
-                // Don't add blocked content to fullResponse - clear moderationBuffer
-                moderationBuffer = remaining;
-            } else {
-                // Safe to yield remaining phrases
-                const phrasesToYield = phrases.join('');
-                fullResponse += phrasesToYield;
-                yield { type: 'chunk', content: phrasesToYield };
-                moderationBuffer = remaining;
-            }
+        if (moderationResult.flagged) {
+            logger.error({
+                message: 'Content blocked by moderation - complete response check',
+                categories: moderationResult.categories,
+                contentPreview: fullResponse.substring(0, 200),
+            });
+            yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
+            // Clear fullResponse since it's blocked
+            fullResponse = '';
+            return;
         }
         
-        // Handle any remaining partial phrase
-        if (remaining.trim().length > 0) {
-            // Check partial phrase as well
-            const moderationResult = await checkModeration(remaining);
-            if (moderationResult.flagged) {
-                logger.error({
-                    message: 'Content blocked by moderation - partial phrase',
-                    categories: moderationResult.categories,
-                    contentPreview: remaining.substring(0, 200),
-                });
-                yield { type: 'moderation_blocked', error: 'Content blocked by moderation' };
-                // Don't add to fullResponse
-            } else {
-                fullResponse += remaining;
-                yield { type: 'chunk', content: remaining };
-            }
-        }
+        // Moderation passed - send flag to allow TTS
+        yield { type: 'moderation_passed' };
     }
     
     // If content was blocked, don't proceed with saving to history
