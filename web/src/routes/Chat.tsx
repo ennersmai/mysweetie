@@ -330,8 +330,11 @@ export default function Chat() {
     source.connect(gain);
     gain.connect(audioCtx.destination);
 
-    // Compute start time with small overlap for crossfade
-    let startAt = Math.max(audioCtx.currentTime + 0.01, ttsPlayheadRef.current - TTS_CROSSFADE_S);
+    // Compute start time - use playhead directly for seamless playback (no gaps between sentences)
+    // If playhead is ahead, continue from there; if behind, catch up to current time
+    let startAt = ttsPlayheadRef.current > audioCtx.currentTime 
+      ? ttsPlayheadRef.current - TTS_CROSSFADE_S  // Continue seamlessly from playhead
+      : Math.max(audioCtx.currentTime + 0.01, ttsPlayheadRef.current - TTS_CROSSFADE_S); // Catch up if behind
     const endAt = startAt + audioBuffer.duration;
 
     // Apply crossfade ramps
@@ -498,10 +501,8 @@ export default function Chat() {
     const reqId = ++ttsRequestSeqRef.current;
     console.log(`🎤 Starting TTS[#${reqId}] with voice "${speaker}": "${text.substring(0, 50)}..."`);
     
-    // Ensure all previous samples are flushed before starting new TTS
-    // Don't stop existing sources - let them play out naturally with crossfade
-    flushAccumulatedPcm(true);
-    
+    // Don't flush or reset accumulator when starting new TTS - keep it continuous
+    // This prevents gaps between sentences by maintaining seamless playback
     await ensureAudioContext();
     // Ensure playhead is at least at current time to avoid gaps between sentences
     const audioCtx = audioCtxRef.current;
@@ -512,8 +513,8 @@ export default function Chat() {
     const controller = new AbortController();
     ttsAbortRef.current = controller;
     ttsStreamingRef.current = true;
-    // Reset PCM accumulator for a fresh stream (after flushing previous)
-    ttsPcmAccumRef.current = [];
+    // DON'T reset PCM accumulator - keep it continuous across sentences to avoid gaps
+    // Only reset if this is truly a new response (handled elsewhere)
     // Clear any pending flush timer
     if (ttsFlushTimerRef.current) {
       clearTimeout(ttsFlushTimerRef.current);
