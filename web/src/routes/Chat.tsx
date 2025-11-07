@@ -339,21 +339,28 @@ export default function Chat() {
     // Compute start time - use playhead directly for seamless playback (no gaps between sentences)
     // If playhead is ahead, continue from there; if behind, catch up to current time
     // Cap playhead ahead to prevent excessive delays (max 2 seconds ahead)
+    // But always respect the latest scheduled audio end time to avoid overlapping
     const maxPlayheadAhead = 2.0; // Maximum seconds to schedule ahead
     const currentTime = audioCtx.currentTime;
     const playheadAhead = ttsPlayheadRef.current - currentTime;
     
+    // Find the latest scheduled audio end time to avoid overlapping
+    let latestScheduledEnd = currentTime;
+    if (ttsLastEndTimeRef.current > currentTime) {
+      latestScheduledEnd = ttsLastEndTimeRef.current;
+    }
+    
     let startAt;
     if (playheadAhead > maxPlayheadAhead) {
-      // Playhead is too far ahead, start closer to current time
-      startAt = currentTime + 0.01;
-      console.log(`⚠️ Playhead too far ahead (${playheadAhead.toFixed(2)}s), starting closer to current time`);
-    } else if (ttsPlayheadRef.current > currentTime) {
+      // Playhead is too far ahead, start after latest scheduled audio (or current time if none)
+      startAt = Math.max(latestScheduledEnd + 0.01, currentTime + 0.01);
+      console.log(`⚠️ Playhead too far ahead (${playheadAhead.toFixed(2)}s), starting at ${startAt.toFixed(2)}s (latest scheduled: ${latestScheduledEnd.toFixed(2)}s)`);
+    } else if (ttsPlayheadRef.current > latestScheduledEnd) {
       // Playhead is ahead but reasonable, continue seamlessly
       startAt = ttsPlayheadRef.current - TTS_CROSSFADE_S;
     } else {
-      // Playhead is behind, catch up
-      startAt = Math.max(currentTime + 0.01, ttsPlayheadRef.current - TTS_CROSSFADE_S);
+      // Playhead is behind latest scheduled audio, start after it to avoid overlap
+      startAt = Math.max(latestScheduledEnd + 0.01, currentTime + 0.01);
     }
     const endAt = startAt + audioBuffer.duration;
 
