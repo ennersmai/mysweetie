@@ -1301,20 +1301,21 @@ export default function Chat() {
                 }
                 
                 // Start TTS if moderation already passed and TTS hasn't started yet
-                // If moderation_passed doesn't arrive within 2 seconds, start TTS anyway (moderation might have been skipped)
+                // If moderation_passed doesn't arrive within 500ms, start TTS anyway (moderation should have passed by now)
                 if (voiceEnabled && ttsModerationPassedRef.current && !ttsStartedRef.current) {
                   console.log('✅ Starting TTS for final response (moderation already passed)');
                   ttsStartedRef.current = true;
                   // Process complete response for TTS (only once)
                   ttsAppendSentence(finalText);
                 } else if (voiceEnabled && !ttsStartedRef.current) {
-                  // Moderation not passed yet, but we have final - wait for moderation_passed with timeout
-                  console.log('⏳ Final received, waiting for moderation check before starting TTS');
+                  // Moderation not passed yet, but we have final - wait briefly for moderation_passed
+                  // Since moderation check happens right after streaming ends, it should arrive very quickly
+                  console.log('⏳ Final received, waiting briefly for moderation check before starting TTS');
                   // Clear any existing timeout first
                   if (moderationTimeoutRef.current) {
                     clearTimeout(moderationTimeoutRef.current);
                   }
-                  // Set timeout to start TTS if moderation_passed doesn't arrive (moderation might be skipped or delayed)
+                  // Set short timeout to start TTS if moderation_passed doesn't arrive (should be rare)
                   moderationTimeoutRef.current = setTimeout(() => {
                     if (!ttsStartedRef.current && ttsCompleteResponseRef.current.trim().length > 0) {
                       console.log('⏰ Moderation check timeout - starting TTS anyway (moderation may have been skipped)');
@@ -1323,7 +1324,7 @@ export default function Chat() {
                       ttsAppendSentence(ttsCompleteResponseRef.current.trim());
                     }
                     moderationTimeoutRef.current = null;
-                  }, 2000); // 2 second timeout
+                  }, 500); // Reduced to 500ms - moderation should arrive immediately after final
                 }
                 
                 // Display final complete text in UI
