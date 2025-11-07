@@ -556,12 +556,20 @@ export default function Chat() {
         }, controller.signal as any);
       } catch (e) {
         console.warn(`TTS[#${reqId}] request aborted/failed:`, e);
+        // Mark network as done so queue can continue
+        ttsNetworkDoneRef.current = true;
+        const networkResolvers = ttsNetworkEndResolversRef.current.splice(0);
+        networkResolvers.forEach((r) => { try { r(); } catch {} });
         return;
       }
       const responseReceivedTime = Date.now();
       console.log(`TTS[#${reqId}] HTTP response received (${responseReceivedTime - requestStartTime}ms after request)`);
       if (!res.ok) {
-        console.error(`TTS[#${reqId}] request failed with status: ${res.status}`);
+        console.error(`TTS[#${reqId}] request failed with status: ${res.status} - ${res.statusText}`);
+        // Mark network as done so queue can continue processing next TTS
+        ttsNetworkDoneRef.current = true;
+        const networkResolvers = ttsNetworkEndResolversRef.current.splice(0);
+        networkResolvers.forEach((r) => { try { r(); } catch {} });
         return;
       }
       if (!res.body) {
