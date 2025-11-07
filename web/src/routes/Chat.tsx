@@ -682,6 +682,21 @@ export default function Chat() {
           });
           console.log('✅ Previous network stream finished, starting next TTS');
         }
+        // Reset playhead to latest scheduled audio end before starting next TTS
+        // This prevents playhead from accumulating across multiple TTS requests
+        const audioCtx = audioCtxRef.current;
+        if (audioCtx) {
+          const currentTime = audioCtx.currentTime;
+          let latestScheduledEnd = currentTime;
+          if (ttsLastEndTimeRef.current > currentTime) {
+            latestScheduledEnd = ttsLastEndTimeRef.current;
+          }
+          // Reset playhead to latest scheduled end (or current time if none)
+          // This ensures each TTS request starts from a reasonable position
+          ttsPlayheadRef.current = latestScheduledEnd + 0.01;
+          console.log(`🎵 Queue: Reset playhead to ${ttsPlayheadRef.current.toFixed(2)}s (latest scheduled: ${latestScheduledEnd.toFixed(2)}s) before starting next TTS`);
+        }
+        
         // Start TTS - speakPcm will return when network stream ends
         // speakPcm will reset ttsNetworkDoneRef.current = false at the start
         console.log(`🎵 Queue: Starting TTS for "${text.substring(0, 50)}..." (queue length: ${ttsQueueRef.current.length})`);
