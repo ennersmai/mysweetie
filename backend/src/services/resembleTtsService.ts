@@ -201,6 +201,9 @@ export async function synthesizeResembleTTS(
               }
 
               // Last attempt failed, throw error
+              if (!response) {
+                throw new Error(`Resemble TTS API error: No response received after retries`);
+              }
               throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
             } else {
               // Non-retryable error, throw immediately
@@ -241,12 +244,13 @@ export async function synthesizeResembleTTS(
 
         // Track when first PCM chunk arrives
         let firstChunkTime: number | null = null;
+        const finalResponseReceivedTime = Date.now();
         
         // Parse WAV to PCM and stream directly for low latency
         await streamWAVToPCM(response.data, (pcmChunk: Buffer) => {
           if (firstChunkTime === null) {
             firstChunkTime = Date.now();
-            logger.debug(`Resemble TTS chunk ${i + 1} first PCM data received (${firstChunkTime - requestStartTime}ms after request, ${firstChunkTime - responseReceivedTime}ms after HTTP response)`);
+            logger.debug(`Resemble TTS chunk ${i + 1} first PCM data received (${firstChunkTime - requestStartTime}ms after request, ${firstChunkTime - finalResponseReceivedTime}ms after HTTP response)`);
           }
           pcmStream.push(pcmChunk);
         });
