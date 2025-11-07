@@ -517,12 +517,21 @@ export default function Chat() {
     // Don't flush or reset accumulator when starting new TTS - keep it continuous
     // This prevents gaps between sentences by maintaining seamless playback
     await ensureAudioContext();
-    // Ensure playhead is at least at current time to avoid gaps between sentences
+    // Ensure playhead is reasonable - if it's too far ahead (>5s), reset it to current time
+    // This prevents long delays when starting new TTS requests
     const audioCtx = audioCtxRef.current;
-    if (audioCtx && ttsPlayheadRef.current < audioCtx.currentTime) {
-      ttsPlayheadRef.current = audioCtx.currentTime + 0.01;
+    if (audioCtx) {
+      const currentTime = audioCtx.currentTime;
+      const playheadAhead = ttsPlayheadRef.current - currentTime;
+      if (playheadAhead > 5) {
+        // Playhead is more than 5 seconds ahead, reset to current time to avoid long delays
+        console.log(`⚠️ Playhead too far ahead (${playheadAhead.toFixed(2)}s), resetting to current time`);
+        ttsPlayheadRef.current = currentTime + 0.01;
+      } else if (ttsPlayheadRef.current < currentTime) {
+        // Playhead is behind, catch up
+        ttsPlayheadRef.current = currentTime + 0.01;
+      }
     }
-    // Do not reset playhead here to ensure strict sequential playback across sentences
     const controller = new AbortController();
     ttsAbortRef.current = controller;
     ttsStreamingRef.current = true;
