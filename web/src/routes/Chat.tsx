@@ -338,9 +338,23 @@ export default function Chat() {
 
     // Compute start time - use playhead directly for seamless playback (no gaps between sentences)
     // If playhead is ahead, continue from there; if behind, catch up to current time
-    let startAt = ttsPlayheadRef.current > audioCtx.currentTime 
-      ? ttsPlayheadRef.current - TTS_CROSSFADE_S  // Continue seamlessly from playhead
-      : Math.max(audioCtx.currentTime + 0.01, ttsPlayheadRef.current - TTS_CROSSFADE_S); // Catch up if behind
+    // Cap playhead ahead to prevent excessive delays (max 2 seconds ahead)
+    const maxPlayheadAhead = 2.0; // Maximum seconds to schedule ahead
+    const currentTime = audioCtx.currentTime;
+    const playheadAhead = ttsPlayheadRef.current - currentTime;
+    
+    let startAt;
+    if (playheadAhead > maxPlayheadAhead) {
+      // Playhead is too far ahead, start closer to current time
+      startAt = currentTime + 0.01;
+      console.log(`⚠️ Playhead too far ahead (${playheadAhead.toFixed(2)}s), starting closer to current time`);
+    } else if (ttsPlayheadRef.current > currentTime) {
+      // Playhead is ahead but reasonable, continue seamlessly
+      startAt = ttsPlayheadRef.current - TTS_CROSSFADE_S;
+    } else {
+      // Playhead is behind, catch up
+      startAt = Math.max(currentTime + 0.01, ttsPlayheadRef.current - TTS_CROSSFADE_S);
+    }
     const endAt = startAt + audioBuffer.duration;
 
     // Apply crossfade ramps
