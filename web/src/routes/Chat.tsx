@@ -643,11 +643,14 @@ export default function Chat() {
           });
           console.log('✅ Previous network stream finished, starting next TTS');
         }
-        // Reset network done flag before starting new TTS
-        ttsNetworkDoneRef.current = false;
         // Start TTS - speakPcm will return when network stream ends
+        // speakPcm will reset ttsNetworkDoneRef.current = false at the start
+        console.log(`🎵 Queue: Starting TTS for "${text.substring(0, 50)}..." (queue length: ${ttsQueueRef.current.length})`);
         await speakPcm(speaker, text, isFirstRequest);
-        // speakPcm already waits for network stream to end, so we can immediately continue to next
+        console.log(`🎵 Queue: TTS network stream finished, continuing to next (queue length: ${ttsQueueRef.current.length}, streaming: ${ttsStreamingRef.current}, networkDone: ${ttsNetworkDoneRef.current})`);
+        // After speakPcm returns, network is done (ttsNetworkDoneRef.current = true)
+        // But ttsStreamingRef.current is still true (audio is playing)
+        // So next iteration will check and see network is done, allowing immediate start
         if (stickToBottomRef.current) {
           const el = messagesListRef.current;
           if (el) el.scrollTop = el.scrollHeight;
