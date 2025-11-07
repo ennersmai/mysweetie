@@ -132,47 +132,108 @@ export async function synthesizeResembleTTS(
         logger.debug(`Processing Resemble TTS chunk ${i + 1}/${textChunks.length}: "${chunk.substring(0, 50)}..."`);
         const requestStartTime = Date.now();
 
-        // Make request to Resemble.ai
-        const axiosConfig: any = {
-          method: 'POST',
-          url: RESEMBLE_STREAMING_ENDPOINT,
-          headers: {
-            'Authorization': `Bearer ${RESEMBLE_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          data: JSON.stringify({
-            project_uuid: projectUuid,
-            voice_uuid: voiceUuid,
-            data: chunk,
-            precision: 'PCM_16',
-            sample_rate: 16000,
-            use_hd: false
-          }),
-          responseType: 'stream',
-          validateStatus: () => true
-        };
+        // Make request to Resemble.ai with retry logic for transient errors
+        const maxRetries = 3;
+        const retryableStatuses = [502, 503, 504, 429]; // Bad Gateway, Service Unavailable, Gateway Timeout, Too Many Requests
+        let response: AxiosResponse<Readable> | null = null;
+        let lastError: Error | null = null;
 
-        // Only add signal if it's provided
-        if (signal) {
-          axiosConfig.signal = signal;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          try {
+            // Check if aborted before retry
+            if (signal?.aborted) {
+              logger.info('Resemble TTS request aborted during retry');
+              pcmStream.destroy(new Error('Request aborted'));
+              return;
+            }
+
+            const axiosConfig: any = {
+              method: 'POST',
+              url: RESEMBLE_STREAMING_ENDPOINT,
+              headers: {
+                'Authorization': `Bearer ${RESEMBLE_API_KEY}`,
+                'Content-Type': 'application/json'
+              },
+              data: JSON.stringify({
+                project_uuid: projectUuid,
+                voice_uuid: voiceUuid,
+                data: chunk,
+                precision: 'PCM_16',
+                sample_rate: 16000,
+                use_hd: false
+              }),
+              responseType: 'stream',
+              validateStatus: () => true
+            };
+
+            // Only add signal if it's provided
+            if (signal) {
+              axiosConfig.signal = signal;
+            }
+
+            response = await axios(axiosConfig);
+            const responseReceivedTime = Date.now();
+            logger.debug(`Resemble TTS chunk ${i + 1} HTTP response received (${responseReceivedTime - requestStartTime}ms after request, attempt ${attempt + 1})`);
+
+            // If successful, break out of retry loop
+            if (response.status === 200) {
+              break;
+            }
+
+            // If error status, check if retryable
+            if (retryableStatuses.includes(response.status)) {
+              let errorText = '';
+              try {
+                const chunks: Buffer[] = [];
+                response.data.on('data', (chunk: Buffer) => chunks.push(chunk));
+                await new Promise(resolve => response.data.on('end', resolve));
+                errorText = Buffer.concat(chunks).toString('utf8');
+              } catch (e) {
+                errorText = 'Failed to read error response';
+              }
+
+              // If not last attempt, retry with exponential backoff
+              if (attempt < maxRetries - 1) {
+                const delay = Math.min(1000 * Math.pow(2, attempt), 5000); // Exponential backoff, max 5s
+                logger.warn(`Resemble TTS chunk ${i + 1} failed with ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries}): ${errorText.substring(0, 100)}`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+              }
+
+              // Last attempt failed, throw error
+              throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
+            } else {
+              // Non-retryable error, throw immediately
+              let errorText = '';
+              try {
+                const chunks: Buffer[] = [];
+                response.data.on('data', (chunk: Buffer) => chunks.push(chunk));
+                await new Promise(resolve => response.data.on('end', resolve));
+                errorText = Buffer.concat(chunks).toString('utf8');
+              } catch (e) {
+                errorText = 'Failed to read error response';
+              }
+              throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
+            }
+          } catch (error: any) {
+            lastError = error;
+            
+            // Check if it's a network error or retryable status
+            const status = error?.response?.status;
+            if (attempt < maxRetries - 1 && (!status || retryableStatuses.includes(status))) {
+              const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
+              logger.warn(`Resemble TTS chunk ${i + 1} request failed, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries}): ${error?.message || String(error)}`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+            
+            // Not retryable or out of retries, throw
+            throw error;
+          }
         }
 
-        const response: AxiosResponse<Readable> = await axios(axiosConfig);
-        const responseReceivedTime = Date.now();
-        logger.debug(`Resemble TTS chunk ${i + 1} HTTP response received (${responseReceivedTime - requestStartTime}ms after request)`);
-
-        if (response.status !== 200) {
-          let errorText = '';
-          try {
-            const chunks: Buffer[] = [];
-            response.data.on('data', (chunk: Buffer) => chunks.push(chunk));
-            await new Promise(resolve => response.data.on('end', resolve));
-            errorText = Buffer.concat(chunks).toString('utf8');
-          } catch (e) {
-            errorText = 'Failed to read error response';
-          }
-
-          throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
+        if (!response || response.status !== 200) {
+          throw lastError || new Error('Failed to get successful response from Resemble.ai after retries');
         }
 
         // Track when first PCM chunk arrives
