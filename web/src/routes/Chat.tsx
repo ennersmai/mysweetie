@@ -631,13 +631,20 @@ export default function Chat() {
           ttsCreditDeductedRef.current = true;
         }
         // Ensure previous network stream is done before starting next (not waiting for playback)
-        if (ttsStreamingRef.current) {
+        if (ttsStreamingRef.current && !ttsNetworkDoneRef.current) {
+          console.log('⏳ Waiting for previous TTS network stream to finish...');
           await new Promise<void>((resolve) => {
             // If network already done, resolve immediately
-            if (!ttsStreamingRef.current || ttsNetworkDoneRef.current) return resolve();
+            if (!ttsStreamingRef.current || ttsNetworkDoneRef.current) {
+              console.log('✅ Previous network stream already done, continuing');
+              return resolve();
+            }
             ttsNetworkEndResolversRef.current.push(resolve);
           });
+          console.log('✅ Previous network stream finished, starting next TTS');
         }
+        // Reset network done flag before starting new TTS
+        ttsNetworkDoneRef.current = false;
         // Start TTS - speakPcm will return when network stream ends
         await speakPcm(speaker, text, isFirstRequest);
         // speakPcm already waits for network stream to end, so we can immediately continue to next
