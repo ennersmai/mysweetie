@@ -531,19 +531,28 @@ export default function Chat() {
     // Don't flush or reset accumulator when starting new TTS - keep it continuous
     // This prevents gaps between sentences by maintaining seamless playback
     await ensureAudioContext();
-    // Ensure playhead is reasonable - if it's too far ahead (>5s), reset it to current time
-    // This prevents long delays when starting new TTS requests
+    // Ensure playhead is reasonable - if it's too far ahead, cap it but don't reset below scheduled audio
+    // This prevents long delays when starting new TTS requests while avoiding overlapping audio
     const audioCtx = audioCtxRef.current;
     if (audioCtx) {
       const currentTime = audioCtx.currentTime;
       const playheadAhead = ttsPlayheadRef.current - currentTime;
+      
+      // Find the latest scheduled audio end time to avoid overlapping
+      let latestScheduledEnd = currentTime;
+      if (ttsLastEndTimeRef.current > currentTime) {
+        latestScheduledEnd = ttsLastEndTimeRef.current;
+      }
+      
       if (playheadAhead > 5) {
-        // Playhead is more than 5 seconds ahead, reset to current time to avoid long delays
-        console.log(`⚠️ Playhead too far ahead (${playheadAhead.toFixed(2)}s), resetting to current time`);
-        ttsPlayheadRef.current = currentTime + 0.01;
-      } else if (ttsPlayheadRef.current < currentTime) {
-        // Playhead is behind, catch up
-        ttsPlayheadRef.current = currentTime + 0.01;
+        // Playhead is more than 5 seconds ahead, cap it to latest scheduled end + small buffer
+        // This prevents long delays while ensuring no overlap
+        const cappedPlayhead = latestScheduledEnd + 0.01;
+        console.log(`⚠️ Playhead too far ahead (${playheadAhead.toFixed(2)}s), capping to ${cappedPlayhead.toFixed(2)}s (latest scheduled: ${latestScheduledEnd.toFixed(2)}s)`);
+        ttsPlayheadRef.current = cappedPlayhead;
+      } else if (ttsPlayheadRef.current < latestScheduledEnd) {
+        // Playhead is behind the latest scheduled audio, catch up to avoid gaps
+        ttsPlayheadRef.current = latestScheduledEnd + 0.01;
       }
     }
     const controller = new AbortController();
