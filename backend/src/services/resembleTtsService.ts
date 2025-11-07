@@ -172,6 +172,12 @@ export async function synthesizeResembleTTS(
             }
 
             response = await axios(axiosConfig);
+            
+            // TypeScript null check - axios should always return a response, but check for safety
+            if (!response) {
+              throw new Error('Resemble TTS API error: No response received from axios');
+            }
+            
             const responseReceivedTime = Date.now();
             logger.debug(`Resemble TTS chunk ${i + 1} HTTP response received (${responseReceivedTime - requestStartTime}ms after request, attempt ${attempt + 1})`);
 
@@ -184,10 +190,16 @@ export async function synthesizeResembleTTS(
             if (retryableStatuses.includes(response.status)) {
               let errorText = '';
               try {
-                const chunks: Buffer[] = [];
-                response.data.on('data', (chunk: Buffer) => chunks.push(chunk));
-                await new Promise(resolve => response.data.on('end', resolve));
-                errorText = Buffer.concat(chunks).toString('utf8');
+                // TypeScript null check - response is already checked above, but ensure data exists
+                if (!response || !response.data) {
+                  errorText = 'No response data available';
+                } else {
+                  const chunks: Buffer[] = [];
+                  const responseData = response.data; // Store in variable for TypeScript
+                  responseData.on('data', (chunk: Buffer) => chunks.push(chunk));
+                  await new Promise(resolve => responseData.on('end', resolve));
+                  errorText = Buffer.concat(chunks).toString('utf8');
+                }
               } catch (e) {
                 errorText = 'Failed to read error response';
               }
@@ -201,21 +213,21 @@ export async function synthesizeResembleTTS(
               }
 
               // Last attempt failed, throw error
-              if (!response) {
-                throw new Error(`Resemble TTS API error: No response received after retries`);
-              }
               throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
             } else {
               // Non-retryable error, throw immediately
-              if (!response) {
-                throw new Error('Resemble TTS API error: No response received');
-              }
               let errorText = '';
               try {
-                const chunks: Buffer[] = [];
-                response.data.on('data', (chunk: Buffer) => chunks.push(chunk));
-                await new Promise(resolve => response.data.on('end', resolve));
-                errorText = Buffer.concat(chunks).toString('utf8');
+                // TypeScript null check - response is already checked above, but ensure data exists
+                if (!response || !response.data) {
+                  errorText = 'No response data available';
+                } else {
+                  const chunks: Buffer[] = [];
+                  const responseData = response.data; // Store in variable for TypeScript
+                  responseData.on('data', (chunk: Buffer) => chunks.push(chunk));
+                  await new Promise(resolve => responseData.on('end', resolve));
+                  errorText = Buffer.concat(chunks).toString('utf8');
+                }
               } catch (e) {
                 errorText = 'Failed to read error response';
               }
