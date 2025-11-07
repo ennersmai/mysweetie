@@ -163,7 +163,7 @@ export default function Chat() {
   const uiTextBufferRef = useRef<string>(''); // Accumulator for UI streaming
   // Accumulator to create larger, click-free PCM buffers
   const ttsPcmAccumRef = useRef<number[]>([]);
-  const PCM_MIN_SAMPLES = 3200; // ~200ms at 16kHz - increased for better quality and smoother playback
+  const PCM_MIN_SAMPLES = 8000; // ~500ms at 16kHz - increased for better quality and smoother playback
   const ttsValidatedBinaryRef = useRef<boolean>(false);
   const ttsFlushTimerRef = useRef<number | null>(null);
   // Promises to resolve when current TTS playback fully ends
