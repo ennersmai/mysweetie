@@ -204,6 +204,9 @@ export async function synthesizeResembleTTS(
               throw new Error(`Resemble TTS API error (${response.status}): ${errorText}`);
             } else {
               // Non-retryable error, throw immediately
+              if (!response) {
+                throw new Error('Resemble TTS API error: No response received');
+              }
               let errorText = '';
               try {
                 const chunks: Buffer[] = [];
