@@ -142,7 +142,8 @@ export class ProductionAudioManager {
       const modifiedProcessorCode = aecProcessorCode
         .replace(/^import\s+.*$/gm, '') // Remove import statements
         .replace(/^export\s+.*$/gm, '') // Remove export statements
-        .replace(/^declare\s+const\s+WebRtcAec3:.*$/gm, '') // Remove WebRtcAec3 type declaration
+        // Remove multi-line WebRtcAec3 type declaration (matches from declare to semicolon)
+        .replace(/^declare\s+const\s+WebRtcAec3:[\s\S]*?;$/gm, '')
         .replace(/:\s*MessageEvent/g, '') // Remove MessageEvent type annotation
         .replace(/:\s*any\s*/g, ' ') // Remove :any type annotations
         .replace(/:\s*Float32Array\[\]\[\]\s*/g, ' ') // Remove Float32Array[][] type annotations
@@ -184,9 +185,15 @@ export class ProductionAudioManager {
           stack: e?.stack,
           name: e?.name
         });
-        // Log a snippet of the script to help debug syntax errors
-        const scriptPreview = finalWorkletScript.substring(0, 500);
-        console.error('Script preview (first 500 chars):', scriptPreview);
+        // Log snippets of the script to help debug syntax errors
+        const scriptPreview = finalWorkletScript.substring(0, 1000);
+        console.error('Script preview (first 1000 chars):', scriptPreview);
+        // Also log where the processor code starts (might be where the error is)
+        const processorStartIndex = finalWorkletScript.indexOf('// --- Start of aec-processor.js code ---');
+        if (processorStartIndex >= 0) {
+          const processorPreview = finalWorkletScript.substring(processorStartIndex, processorStartIndex + 500);
+          console.error('Processor code preview (first 500 chars):', processorPreview);
+        }
         throw e;
       }
       
