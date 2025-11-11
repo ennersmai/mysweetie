@@ -21,7 +21,7 @@ export class ProductionAudioManager {
   private isPlayingTTS = false;
   private isSendingAudio = false;
   private manuallyStoppedPlayback = false;
-  private ttsStartTime = 0;
+  private ttsStartTime = 0; // Track when TTS started for grace period
   private playbackPlayhead = 0; // Scheduled playback time for seamless transitions
   private lastGainNode: GainNode | null = null; // For crossfading
   private readonly CROSSFADE_DURATION = 0.01; // 10ms crossfade between buffers
@@ -201,11 +201,20 @@ export class ProductionAudioManager {
       console.log(`🔍 VAD Threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)}, isPlayingTTS: ${this.isPlayingTTS})`);
     }
     
-    // Extended grace period: Ignore VAD for 500ms after TTS starts to prevent immediate false triggers
-    const inGracePeriod = this.isPlayingTTS && (now - this.ttsStartTime) < 500;
-    if (inGracePeriod) {
-      // Skip VAD processing during initial TTS playback
-      return;
+    // During TTS playback, use higher threshold to prevent echo detection
+    // But still allow barge-in if user speaks loudly enough
+    if (this.isPlayingTTS) {
+      // Use higher threshold during TTS (already set above)
+      // Add a short grace period after TTS starts to prevent immediate echo
+      const timeSinceTTSStart = now - this.ttsStartTime;
+      const gracePeriodMs = 300; // 300ms grace period to prevent immediate echo
+      
+      if (timeSinceTTSStart < gracePeriodMs) {
+        // Skip VAD during initial grace period to prevent immediate echo
+        return;
+      }
+      // After grace period, VAD is active with higher threshold (2.5x)
+      // This allows barge-in while preventing most echo
     }
     
     // Log VAD activity occasionally for debugging
@@ -412,7 +421,7 @@ export class ProductionAudioManager {
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
-      this.ttsStartTime = performance.now(); // Start grace period
+      this.ttsStartTime = performance.now(); // Track start time for grace period
     }
 
     try {
@@ -478,7 +487,8 @@ export class ProductionAudioManager {
       const totalSamples = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
       
       // Only flush if we have minimum samples OR if buffer is getting too large
-      const durationMs = (totalSamples / 24000) * 1000;
+      // TTS outputs at 16kHz, so calculate duration based on that
+      const durationMs = (totalSamples / 16000) * 1000;
       const shouldFlush = totalSamples >= this.PCM_MIN_SAMPLES || durationMs > 800;
       
       if (shouldFlush) {
@@ -531,7 +541,8 @@ export class ProductionAudioManager {
       }
       
       // Create single smooth audio buffer
-      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 24000);
+      // TTS outputs at 16kHz, so we need to use 16kHz sample rate to avoid pitch issues
+      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 16000);
       const channelData = audioBuffer.getChannelData(0);
       
       for (let i = 0; i < combinedSamples.length; i++) {
@@ -588,7 +599,8 @@ export class ProductionAudioManager {
       }
       
       // Create single smooth audio buffer
-      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 24000);
+      // TTS outputs at 16kHz, so we need to use 16kHz sample rate to avoid pitch issues
+      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 16000);
       const channelData = audioBuffer.getChannelData(0);
       
       for (let i = 0; i < combinedSamples.length; i++) {
@@ -703,7 +715,7 @@ export class ProductionAudioManager {
     this.lastGainNode = gainNode;
     
     this.currentSource.onended = () => {
-      console.log(`✓ Buffer finished playing`);
+      console.log(`✓ Buffer finished playing (isPlayingTTS: ${this.isPlayingTTS})`);
       this.currentSource = null;
       
       if (this.manuallyStoppedPlayback) {
@@ -720,11 +732,23 @@ export class ProductionAudioManager {
         this.playbackPlayhead = 0; // Reset playhead
         this.lastGainNode = null; // Clear gain node reference
         
-        if (!this.isPlayingTTS && this.onPlaybackComplete) {
-          console.log('✅ TTS session complete and queue empty - notifying backend');
+        // Only clear isPlayingTTS and notify completion if TTS session is actually done
+        // Keep isPlayingTTS=true if more audio might be coming
+        if (this.isPlayingTTS) {
+          // Wait a bit to see if more audio arrives before clearing TTS state
+          setTimeout(() => {
+            if (this.audioQueue.length === 0 && !this.isPlaying && this.isPlayingTTS) {
+              console.log('✅ TTS session complete - no more audio after delay');
+              this.isPlayingTTS = false;
+              this.ttsStartTime = 0; // Reset TTS start time
+              if (this.onPlaybackComplete) {
+                this.onPlaybackComplete();
+              }
+            }
+          }, 200); // 200ms delay to allow more audio to arrive
+        } else if (this.onPlaybackComplete) {
+          console.log('✅ Playback complete - notifying backend');
           this.onPlaybackComplete();
-        } else if (this.isPlayingTTS) {
-          console.log('⏸️  Queue empty but keeping isPlayingTTS=true (more sentences may be coming)');
         }
       }
     };
@@ -753,7 +777,7 @@ export class ProductionAudioManager {
     this.audioQueue = [];
     this.isPlaying = false;
     this.isPlayingTTS = false;
-    this.ttsStartTime = 0; // Reset grace period
+    this.ttsStartTime = 0; // Reset TTS start time
     this.playbackPlayhead = 0; // Reset playhead
     this.lastGainNode = null; // Clear gain node reference
     
@@ -791,7 +815,7 @@ export class ProductionAudioManager {
     if (this.isPlayingTTS) {
       console.log('✅ Marking TTS session as complete');
       this.isPlayingTTS = false;
-      this.ttsStartTime = 0; // Reset grace period
+      this.ttsStartTime = 0; // Reset TTS start time
       
       // Reset VAD state to ensure clean detection after TTS
       this.vadSpeaking = false;
