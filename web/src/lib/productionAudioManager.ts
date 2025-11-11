@@ -440,8 +440,8 @@ export class ProductionAudioManager {
   }
 
   startRecording(): boolean {
-    if (!this.echoCancellationNode) {
-      console.error('AudioWorklet not initialized - echo cancellation node not ready');
+    if (!this.workletNode) {
+      console.error('AudioWorklet not initialized - worklet node not ready');
       return false;
     }
 
@@ -854,12 +854,8 @@ export class ProductionAudioManager {
     this.pcmAccumulator = [];
     this.pcmCarryByte = null;
     
-    // Reset echo cancellation filter when TTS stops
-    // This ensures clean audio when user speaks without TTS playing
-    if (this.echoCancellationNode) {
-      this.echoCancellationNode.port.postMessage({ type: 'reset' });
-      console.log('🔄 Echo cancellation filter reset - bypassing echo cancellation for clean audio');
-    }
+    // Note: Echo cancellation is handled by browser's native AEC via WebRTC loopback
+    // No need to reset anything - browser handles it automatically
     
     console.log('🛑 Playback stopped and cleared');
   }
