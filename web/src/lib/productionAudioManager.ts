@@ -129,6 +129,17 @@ export class ProductionAudioManager {
         // Processed PCM data (already echo-cancelled by browser's native AEC)
         const pcmData: Float32Array = event.data;
         
+        // Debug: Log audio data occasionally to verify we're receiving audio
+        if (Math.random() < 0.01) {
+          // Calculate RMS to check if audio is actually present
+          let sum = 0;
+          for (let i = 0; i < pcmData.length; i++) {
+            sum += pcmData[i] * pcmData[i];
+          }
+          const rms = Math.sqrt(sum / pcmData.length);
+          console.log(`🎤 Audio data received: ${pcmData.length} samples, RMS=${rms.toFixed(6)}, calibrating=${this.isCalibrating}`);
+        }
+        
         // Always maintain ring buffer (last ~1200ms of audio)
         this.ringBuffer.push(pcmData);
         if (this.ringBuffer.length > this.RING_BUFFER_SIZE) {
