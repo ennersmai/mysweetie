@@ -167,8 +167,14 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
       
       // Compute error (echo-cancelled signal)
       const error = micInput[n] - predictedEcho;
+      
+      // Safety check: if predicted echo is much larger than input, something is wrong
+      // This can happen during filter adaptation - limit the cancellation to prevent distortion
+      const maxCancellation = Math.abs(micInput[n]) * 0.9; // Don't cancel more than 90% of input
+      const clampedError = Math.max(-maxCancellation, Math.min(maxCancellation, error));
+      
       // Clamp output to prevent distortion (safety measure)
-      output[n] = Math.max(-1, Math.min(1, error));
+      output[n] = Math.max(-1, Math.min(1, clampedError));
       
       // Compute reference signal power for normalization
       let refPower = this.epsilon;
