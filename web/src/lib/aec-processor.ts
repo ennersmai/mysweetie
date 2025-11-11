@@ -25,8 +25,8 @@ class AECProcessor extends AudioWorkletProcessor {
           // Loading from public URL prevents Vite from bundling it and breaking WASM loading code
           // The library expects to load WASM from /webrtcaec3-0.3.0.wasm (from public directory)
           // @vite-ignore tells Vite to treat this as a runtime URL, not a bundled module
+          // Using a variable prevents TypeScript from resolving it as a module path at compile time
           const libPath: string = '/webrtcaec3-0.3.0.js';
-          // @ts-expect-error - TypeScript can't resolve public directory files at compile time
           const mod = await import(/* @vite-ignore */ libPath);
           const WebRtcAec3 = (mod as any).default ?? (mod as any).WebRtcAec3;
           
