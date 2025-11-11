@@ -297,7 +297,7 @@ export default function VoiceCallButton({
             });
             
             // After calibration duration, send calibration_complete message
-            const calibrationDuration = (message as any).duration || 2500;
+            const calibrationDuration = (message as any).duration || 500;
             setTimeout(() => {
               if (audioManagerRef.current && websocketRef.current?.readyState === WebSocket.OPEN) {
                 console.log('✅ Calibration period complete, sending calibration_complete');

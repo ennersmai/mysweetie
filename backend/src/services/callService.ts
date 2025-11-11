@@ -1288,8 +1288,8 @@ export class CallService {
     session.calibrationStartTime = Date.now();
     
     // Request calibration audio from client
-    // Calibration duration: 2-3 seconds of background noise
-    const calibrationDuration = 2500; // 2.5 seconds
+    // Calibration duration: 500ms of background noise (enough for noise floor detection)
+    const calibrationDuration = 500; // 500ms - faster startup, user can speak sooner
     
     session.clientWebSocket.send(JSON.stringify({
       type: 'calibration_start',
