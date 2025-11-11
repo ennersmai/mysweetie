@@ -20,6 +20,9 @@ const DECAY_FACTOR = 0.95; // Energy decays by 5% each frame (~2.67ms at 48kHz)
 // This gives ~50% decay in ~13 frames (~35ms), matching acoustic latency
 
 const BARGE_IN_MULTIPLIER = 1.5; // Mic must be this many times louder than TTS to barge in
+
+const AI_ENERGY_FLOOR = 0.005; // AI must be louder than this to enable barge-in
+// Prevents false triggers from startup artifacts when AI audio level is too low
 // ============================================================================
 
 class AudioProcessor extends AudioWorkletProcessor {
@@ -165,13 +168,20 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.updateNoiseFloor(boostedRMSMic);
     
     // Echo-aware logic with smoothed reference signal and learned echo ratio
-    if (this.isTTSSpeaking && peakRmsAI > 0) {
-      // AI is speaking: use learned echo ratio to predict expected echo level
-      // Then require mic to be BARGE_IN_MULTIPLIER times louder than expected echo
-      const expectedEcho = peakRmsAI * this.learnedEchoRatio;
-      const bargeInThreshold = expectedEcho * BARGE_IN_MULTIPLIER;
-      const aiEnergyThreshold = bargeInThreshold + this.currentVadThreshold;
-      return boostedRMSMic > aiEnergyThreshold && boostedRMSMic > this.noiseFloor;
+    if (this.isTTSSpeaking) {
+      // ONLY apply barge-in logic if the AI's voice is loud enough to be a reliable reference
+      if (peakRmsAI > AI_ENERGY_FLOOR) {
+        // AI is speaking: use learned echo ratio to predict expected echo level
+        // Then require mic to be BARGE_IN_MULTIPLIER times louder than expected echo
+        const expectedEcho = peakRmsAI * this.learnedEchoRatio;
+        const bargeInThreshold = expectedEcho * BARGE_IN_MULTIPLIER;
+        const aiEnergyThreshold = bargeInThreshold + this.currentVadThreshold;
+        return boostedRMSMic > aiEnergyThreshold && boostedRMSMic > this.noiseFloor;
+      } else {
+        // If the AI is "speaking" but the energy is below our floor,
+        // it's likely a silent gap or startup noise. DO NOT trigger.
+        return false;
+      }
     } else {
       // AI is silent: normal VAD threshold
       return boostedRMSMic > this.currentVadThreshold && boostedRMSMic > this.noiseFloor;
