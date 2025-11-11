@@ -23,6 +23,9 @@ const BARGE_IN_MULTIPLIER = 1.5; // Mic must be this many times louder than TTS 
 
 const AI_ENERGY_FLOOR = 0.005; // AI must be louder than this to enable barge-in
 // Prevents false triggers from startup artifacts when AI audio level is too low
+
+const CALIBRATION_ENERGY_FLOOR = 0.001; // Minimum energy for calibration data collection
+// Lower than AI_ENERGY_FLOOR - just ensures we're not dividing by zero
 // ============================================================================
 
 class AudioProcessor extends AudioWorkletProcessor {
@@ -59,7 +62,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Dynamic calibration state for echo-aware VAD
     this.isCalibrating = false;
     this.echoRatioHistory = [];
-    this.learnedEchoRatio = 0.2; // Safe default (20% echo ratio)
+    this.learnedEchoRatio = 0.7; // Safe default - "hot mic" fallback (70% echo ratio)
     
     // Message handler for TTS state updates
     this.port.onmessage = (event) => {
@@ -97,7 +100,16 @@ class AudioProcessor extends AudioWorkletProcessor {
         if (this.echoRatioHistory.length > 0) {
           // Calculate average echo ratio
           const sum = this.echoRatioHistory.reduce((a, b) => a + b, 0);
-          this.learnedEchoRatio = sum / this.echoRatioHistory.length;
+          const averageRatio = sum / this.echoRatioHistory.length;
+          
+          // THE FINAL SAFEGUARD: Ensure result is a sane number
+          if (!isNaN(averageRatio) && averageRatio > 0) {
+            this.learnedEchoRatio = averageRatio;
+          } else {
+            // If calibration failed (e.g., total silence), fallback to a safe, aggressive default
+            console.warn("⚠️ Echo calibration failed to gather data. Falling back to default ratio.");
+            this.learnedEchoRatio = 0.7; // The "hot mic" default
+          }
           
           // Log the learned ratio
           if (this.port) {
@@ -107,9 +119,12 @@ class AudioProcessor extends AudioWorkletProcessor {
               samples: this.echoRatioHistory.length
             });
           }
-          console.log(`[AudioProcessor] Calibration complete: learnedEchoRatio=${this.learnedEchoRatio.toFixed(4)} (${this.echoRatioHistory.length} samples)`);
+          console.log(`✅ Calibration complete. Learned echo ratio: ${this.learnedEchoRatio.toFixed(4)}`);
         } else {
-          // No samples collected, keep default
+          // No samples collected, fallback to safe default
+          console.warn("⚠️ Echo calibration failed to gather data. Falling back to default ratio.");
+          this.learnedEchoRatio = 0.7; // The "hot mic" default
+          
           if (this.port) {
             this.port.postMessage({
               type: 'calibration_complete',
@@ -117,7 +132,7 @@ class AudioProcessor extends AudioWorkletProcessor {
               samples: 0
             });
           }
-          console.log(`[AudioProcessor] Calibration complete: no samples collected, using default ratio=${this.learnedEchoRatio.toFixed(4)}`);
+          console.log(`✅ Calibration complete. Learned echo ratio: ${this.learnedEchoRatio.toFixed(4)} (fallback)`);
         }
       }
     };
@@ -212,14 +227,21 @@ class AudioProcessor extends AudioWorkletProcessor {
       this.peakRmsAI = Math.max(rmsAI, this.peakRmsAI * DECAY_FACTOR);
       
       // Collect echo ratio samples during calibration
-      if (this.isCalibrating && this.peakRmsAI > 0.01 && rmsMic > 0.01) {
-        // Calculate current echo ratio (mic energy / AI peak energy)
-        const echoRatio = rmsMic / this.peakRmsAI;
-        this.echoRatioHistory.push(echoRatio);
-        
-        // Limit history size to prevent memory issues
-        if (this.echoRatioHistory.length > 1000) {
-          this.echoRatioHistory.shift();
+      // THE GUARD: Only collect data if both signals are active and meaningful
+      if (this.isCalibrating) {
+        if (this.peakRmsAI > CALIBRATION_ENERGY_FLOOR && rmsMic > CALIBRATION_ENERGY_FLOOR) {
+          // Calculate current echo ratio (mic energy / AI peak energy)
+          const currentRatio = rmsMic / this.peakRmsAI;
+          
+          // Another guard: Don't add absurdly high ratios (e.g., a cough during calibration)
+          if (currentRatio > 0 && currentRatio < 5.0) {
+            this.echoRatioHistory.push(currentRatio);
+            
+            // Limit history size to prevent memory issues
+            if (this.echoRatioHistory.length > 1000) {
+              this.echoRatioHistory.shift();
+            }
+          }
         }
       }
     }
