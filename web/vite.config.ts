@@ -124,10 +124,17 @@ export default defineConfig({
           if (assetInfo.name?.endsWith('.wasm')) {
             return 'assets/[name][extname]'
           }
+          // Ensure worklet files are NOT treated as assets - they should be chunks
+          if (assetInfo.name?.includes('aec-processor') || assetInfo.name?.includes('processor')) {
+            // This shouldn't happen, but if it does, we want to know
+            console.warn('⚠️ Worklet file being treated as asset:', assetInfo.name)
+          }
           return 'assets/[name]-[hash][extname]'
         },
         // Ensure worklet files are treated as chunks (modules), not assets
-        manualChunks: undefined
+        manualChunks: undefined,
+        // Ensure worklet chunks are output with .js extension
+        chunkFileNames: 'assets/[name]-[hash].js'
       }
     }
   }
