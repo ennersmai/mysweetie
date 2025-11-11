@@ -1004,10 +1004,11 @@ export class ProductionAudioManager {
       return;
     }
     
-    if (this.isPlayingTTS) {
-      console.log('✅ Marking TTS session as complete, re-enabling VAD');
-      this.isPlayingTTS = false;
-      this.ttsStartTime = 0; // Reset TTS start time
+      if (this.isPlayingTTS) {
+        console.log('✅ Marking TTS session as complete, re-enabling VAD');
+        this.isPlayingTTS = false;
+        this.ttsStartTime = 0; // Reset TTS start time
+        this.isBargeInGated = false; // Reset barge-in gate
       
       // Reset VAD state to ensure clean detection after TTS
       this.vadSpeaking = false;
