@@ -91,13 +91,13 @@ class AudioProcessor extends AudioWorkletProcessor {
         this.isCalibrating = false;
         
         if (this.echoRatioHistory.length > 0) {
-          // Calculate average echo ratio
-          const sum = this.echoRatioHistory.reduce((a, b) => a + b, 0);
-          const averageRatio = sum / this.echoRatioHistory.length;
+          // Calculate median echo ratio (more robust against outliers than average)
+          const sorted = [...this.echoRatioHistory].sort((a, b) => a - b);
+          const medianRatio = sorted[Math.floor(sorted.length / 2)];
           
           // THE FINAL SAFEGUARD: Ensure result is a sane number
-          if (!isNaN(averageRatio) && averageRatio > 0) {
-            this.learnedEchoRatio = averageRatio;
+          if (!isNaN(medianRatio) && medianRatio > 0) {
+            this.learnedEchoRatio = medianRatio;
           } else {
             // If calibration failed (e.g., total silence), fallback to a safe default
             console.warn("⚠️ Echo calibration failed to gather data. Falling back to default ratio.");
@@ -112,7 +112,7 @@ class AudioProcessor extends AudioWorkletProcessor {
               samples: this.echoRatioHistory.length
             });
           }
-          console.log(`✅ Calibration complete. Learned echo ratio: ${this.learnedEchoRatio.toFixed(4)}`);
+          console.log(`✅ Calibration complete. Learned echo ratio (median): ${this.learnedEchoRatio.toFixed(4)} (${this.echoRatioHistory.length} samples)`);
         } else {
           // No samples collected, fallback to safe default
           console.warn("⚠️ Echo calibration failed to gather data. Falling back to default ratio.");

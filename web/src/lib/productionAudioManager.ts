@@ -9,9 +9,13 @@ export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;
   private playbackContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
-  private audioQueue: AudioBuffer[] = [];
+  private audioQueue: AudioBuffer[] = []; // Master queue of all audio buffers
+  private scheduledBuffers: Array<{ source: AudioBufferSourceNode; endTime: number }> = []; // Currently scheduled buffers
   private isPlaying = false;
   private currentSource: AudioBufferSourceNode | null = null;
+  private queueManagerTimer: number | null = null; // Timer for smart queue management
+  private readonly QUEUE_CHECK_INTERVAL = 250; // Check queue every 250ms
+  private readonly TARGET_BUFFER_DURATION = 2.0; // Maintain 2 seconds of scheduled audio
   private onPlaybackComplete: (() => void) | null = null;
   private onSpeechStart: (() => void) | null = null;
   private onSpeechEnd: (() => void) | null = null;
@@ -492,8 +496,11 @@ export class ProductionAudioManager {
         
         this.audioQueue.push(audioBuffer);
         
-        if (!this.isPlaying) {
-          this.playNextInQueue();
+        // Start smart queue manager if not already running
+        if (!this.isPlaying && !this.queueManagerTimer) {
+          console.log('🎵 Starting smart playback queue manager');
+          this.isPlaying = true;
+          this.startSmartQueueManager();
         }
       }
     } catch (error) {
@@ -604,12 +611,7 @@ export class ProductionAudioManager {
         channelData[i] = combinedSamples[i] / 32768.0;
       }
       
-      // Apply fade-in to first buffer if this is the start of playback
-      // This prevents the crack/pop artifact from sudden audio start
-      if (this.isFirstBuffer) {
-        this.applyFadeIn(audioBuffer, this.FADE_IN_DURATION);
-        this.isFirstBuffer = false;
-      }
+      // Fade-in will be applied by scheduleSingleBuffer when first buffer is scheduled
       
       console.log(`📦 Flushed ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer added to queue (queue length: ${this.audioQueue.length + 1})`);
       
@@ -620,12 +622,13 @@ export class ProductionAudioManager {
       // Add to playback queue
       this.audioQueue.push(audioBuffer);
       
-      // Start playback if not already playing
-      if (!this.isPlaying) {
-        console.log('🎵 Queue was idle, starting playback');
-        this.playNextInQueue();
+      // Start smart queue manager if not already running
+      if (!this.isPlaying && !this.queueManagerTimer) {
+        console.log('🎵 Starting smart playback queue manager');
+        this.isPlaying = true;
+        this.startSmartQueueManager();
       } else {
-        console.log(`⏳ Currently playing, buffer queued (${this.audioQueue.length} in queue)`);
+        console.log(`⏳ Buffer queued (${this.audioQueue.length} in master queue, ${this.scheduledBuffers.length} scheduled)`);
       }
       
     } catch (error) {
@@ -669,12 +672,7 @@ export class ProductionAudioManager {
         channelData[i] = combinedSamples[i] / 32768.0;
       }
       
-      // Apply fade-in to first buffer if this is the start of playback
-      // This prevents the crack/pop artifact from sudden audio start
-      if (this.isFirstBuffer) {
-        this.applyFadeIn(audioBuffer, this.FADE_IN_DURATION);
-        this.isFirstBuffer = false;
-      }
+      // Fade-in will be applied by scheduleSingleBuffer when first buffer is scheduled
       
       console.log(`📦 Final flush: ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer`);
       
@@ -684,10 +682,11 @@ export class ProductionAudioManager {
       // Add to playback queue
       this.audioQueue.push(audioBuffer);
       
-      // Start playback if not already playing
-      if (!this.isPlaying) {
-        console.log('🎵 Queue was idle, starting playback');
-        this.playNextInQueue();
+      // Start smart queue manager if not already running
+      if (!this.isPlaying && !this.queueManagerTimer) {
+        console.log('🎵 Starting smart playback queue manager');
+        this.isPlaying = true;
+        this.startSmartQueueManager();
       }
       
     } catch (error) {
@@ -729,6 +728,163 @@ export class ProductionAudioManager {
     const isWav = signature === 0x52494646;
     
     return !isWebM && !isOgg && !isWav;
+  }
+
+  /**
+   * Start smart queue manager that maintains ~2 seconds of scheduled audio
+   * Prevents audio engine overload and eliminates crackling
+   */
+  private startSmartQueueManager(): void {
+    if (!this.playbackContext) {
+      return;
+    }
+
+    // Clean up finished buffers
+    const now = this.playbackContext.currentTime;
+    this.scheduledBuffers = this.scheduledBuffers.filter(buffer => buffer.endTime > now);
+
+    // Calculate how much audio is currently scheduled ahead
+    let scheduledDuration = 0;
+    if (this.scheduledBuffers.length > 0) {
+      const lastBuffer = this.scheduledBuffers[this.scheduledBuffers.length - 1];
+      scheduledDuration = Math.max(0, lastBuffer.endTime - now);
+    }
+
+    // Schedule more buffers if we have less than target duration
+    while (scheduledDuration < this.TARGET_BUFFER_DURATION && this.audioQueue.length > 0) {
+      const audioBuffer = this.audioQueue.shift()!;
+      const scheduled = this.scheduleSingleBuffer(audioBuffer, now + scheduledDuration);
+      if (scheduled) {
+        scheduledDuration += audioBuffer.duration;
+      } else {
+        // Failed to schedule, put buffer back
+        this.audioQueue.unshift(audioBuffer);
+        break;
+      }
+    }
+
+    // Check if we're done
+    if (this.audioQueue.length === 0 && this.scheduledBuffers.length === 0) {
+      console.log('🏁 All audio scheduled and played - stopping queue manager');
+      this.isPlaying = false;
+      this.queueManagerTimer = null;
+      
+      // Handle completion callback
+      if (this.isPlayingTTS) {
+        setTimeout(() => {
+          if (this.audioQueue.length === 0 && this.scheduledBuffers.length === 0 && this.isPlayingTTS) {
+            console.log('✅ TTS session complete - re-enabling VAD');
+            this.isPlayingTTS = false;
+            this.isFirstBuffer = true;
+            
+            if (this.isTTSSpeakingParam && this.recordingContext) {
+              console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
+              this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
+            }
+            
+            if (this.onPlaybackComplete) {
+              this.onPlaybackComplete();
+            }
+          }
+        }, 200);
+      } else if (this.onPlaybackComplete) {
+        this.onPlaybackComplete();
+      }
+    } else {
+      // Schedule next check
+      this.queueManagerTimer = window.setTimeout(() => {
+        this.startSmartQueueManager();
+      }, this.QUEUE_CHECK_INTERVAL);
+    }
+  }
+
+  /**
+   * Schedule a single audio buffer for playback
+   * Returns true if scheduled successfully, false otherwise
+   */
+  private scheduleSingleBuffer(audioBuffer: AudioBuffer, startTime: number): boolean {
+    if (!this.playbackContext) {
+      return false;
+    }
+
+    const currentTime = this.playbackContext.currentTime;
+    
+    // Ensure we don't schedule in the past
+    if (startTime < currentTime) {
+      startTime = currentTime + 0.01;
+    }
+
+    const endTime = startTime + audioBuffer.duration;
+    
+    try {
+      // Apply fade-in to first buffer if needed
+      if (this.isFirstBuffer) {
+        this.applyFadeIn(audioBuffer, this.FADE_IN_DURATION);
+        this.isFirstBuffer = false;
+      }
+      
+      const source = this.playbackContext.createBufferSource();
+      source.buffer = audioBuffer;
+      
+      const gainNode = this.playbackContext.createGain();
+      gainNode.gain.value = 1.5;
+      
+      source.connect(gainNode);
+      gainNode.connect(this.playbackContext.destination);
+      
+      // Route to TTS reference for echo-aware VAD
+      if (this.ttsReferenceDestination && this.recordingContext) {
+        const resampledBuffer = this.resampleAudioBuffer(
+          audioBuffer,
+          this.playbackContext.sampleRate,
+          this.recordingContext.sampleRate
+        );
+        
+        if (resampledBuffer) {
+          const resampledSource = this.recordingContext.createBufferSource();
+          resampledSource.buffer = resampledBuffer;
+          const resampledGain = this.recordingContext.createGain();
+          resampledGain.gain.value = 1.5;
+          
+          resampledSource.connect(resampledGain);
+          resampledGain.connect(this.ttsReferenceDestination);
+          
+          const recordingCurrentTime = this.recordingContext.currentTime;
+          const playbackCurrentTime = this.playbackContext.currentTime;
+          const timeOffset = startTime - playbackCurrentTime;
+          const resampledStartTime = recordingCurrentTime + timeOffset + 0.01;
+          
+          resampledSource.start(resampledStartTime);
+          
+          resampledSource.onended = () => {
+            resampledGain.disconnect();
+          };
+        }
+      }
+      
+      source.start(startTime);
+      
+      // Track scheduled buffer
+      this.scheduledBuffers.push({ source, endTime });
+      
+      // Store as current source for stopPlayback
+      if (!this.currentSource) {
+        this.currentSource = source;
+        source.onended = () => {
+          this.currentSource = null;
+          // Clean up from scheduled buffers
+          const index = this.scheduledBuffers.findIndex(b => b.source === source);
+          if (index >= 0) {
+            this.scheduledBuffers.splice(index, 1);
+          }
+        };
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error scheduling audio buffer:', error);
+      return false;
+    }
   }
 
   private playNextInQueue(): void {
@@ -897,6 +1053,13 @@ export class ProductionAudioManager {
   stopPlayback(): void {
     this.manuallyStoppedPlayback = true;
     
+    // Stop queue manager
+    if (this.queueManagerTimer) {
+      clearTimeout(this.queueManagerTimer);
+      this.queueManagerTimer = null;
+    }
+    
+    // Stop all scheduled sources
     if (this.currentSource) {
       try {
         this.currentSource.stop();
@@ -906,7 +1069,17 @@ export class ProductionAudioManager {
       this.currentSource = null;
     }
     
+    // Stop all scheduled buffers
+    for (const buffer of this.scheduledBuffers) {
+      try {
+        buffer.source.stop();
+      } catch (error) {
+        // Ignore errors
+      }
+    }
+    
     this.audioQueue = [];
+    this.scheduledBuffers = [];
     this.isPlaying = false;
     
     // SYNC LOCK: Set TTS state synchronously via parameter
@@ -1091,6 +1264,13 @@ export class ProductionAudioManager {
       this.calibrationStopTimer = null;
     }
     this.calibrationStarted = false;
+    
+    // Stop queue manager
+    if (this.queueManagerTimer) {
+      clearTimeout(this.queueManagerTimer);
+      this.queueManagerTimer = null;
+    }
+    this.scheduledBuffers = [];
     
     // Disconnect worklet
     if (this.workletNode) {
