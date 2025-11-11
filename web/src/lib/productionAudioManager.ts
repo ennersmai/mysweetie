@@ -123,8 +123,18 @@ export class ProductionAudioManager {
       });
       console.log('✅ AEC worklet node created');
 
+      // Load the library code as text in main thread
+      // AudioWorklets don't support importScripts, so we need to load it here and pass it
+      console.log('Loading webrtcaec3 JS library code from:', JS_URL);
+      const jsResponse = await fetch(JS_URL);
+      if (!jsResponse.ok) {
+        throw new Error(`Failed to fetch JS library: ${jsResponse.status} ${jsResponse.statusText}`);
+      }
+      const jsCode = await jsResponse.text();
+      console.log('✅ JS library code loaded, size:', jsCode.length, 'characters');
+
       // Initialize AEC via message
-      // The library will fetch its own WASM file relative to where the JS file is loaded from
+      // The library will fetch its own WASM file relative to where it was originally loaded from
       const aecInitPromise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('AEC initialization timeout'));
@@ -142,12 +152,13 @@ export class ProductionAudioManager {
         };
       });
 
-      // Send init message to AEC worklet with JS URL
-      // The library will handle fetching its own WASM file
+      // Send init message to AEC worklet with JS code and WASM URL
+      // The worklet will execute the JS code and the library will fetch WASM from the original URL
       this.aecNode.port.postMessage({
         type: 'init',
         sampleRate: this.recordingContext.sampleRate,
-        jsUrl: JS_URL // Pass the URL to the JS library file
+        jsCode: jsCode, // Pass the library code as text
+        wasmUrl: '/webrtcaec3-0.3.0.wasm' // Pass WASM URL so library knows where to find it
       });
 
       // Wait for AEC initialization

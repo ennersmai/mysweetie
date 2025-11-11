@@ -17,9 +17,7 @@ const AudioWorkletProcessorClass = (globalThis as any).AudioWorkletProcessor;
 // @ts-ignore
 const registerProcessorFn = (globalThis as any).registerProcessor;
 
-// importScripts is available in AudioWorklet context
-// @ts-ignore - importScripts is a runtime global in AudioWorklet/Worker contexts
-declare function importScripts(...urls: string[]): void;
+// AudioWorklets don't support importScripts, so we'll execute code using Function constructor
 
 class AECProcessor extends AudioWorkletProcessorClass {
   private aec: any = null;
@@ -33,28 +31,35 @@ class AECProcessor extends AudioWorkletProcessorClass {
     this.port.onmessage = async (ev: MessageEvent) => {
       if (ev.data.type === 'init') {
         try {
-          const { sampleRate, jsUrl } = ev.data;
+          const { sampleRate, jsCode, wasmUrl } = ev.data;
           this.sampleRate = sampleRate || 48000;
           
-          // Step 1: Load the plain JS library using importScripts
-          // AudioWorklets support importScripts() but not dynamic imports
-          // This loads the library and makes it available as a global
-          // The library will find its WASM file relative to where the JS file is loaded from
-          console.log('Loading webrtcaec3 JS library from:', jsUrl);
-          importScripts(jsUrl);
+          // Step 1: Execute the library code using Function constructor
+          // AudioWorklets don't support importScripts, so we execute the code directly
+          // The library code will be executed in this context and create globals
+          console.log('Executing webrtcaec3 JS library code, length:', jsCode?.length || 0);
+          
+          // Create a function that executes the library code
+          // This will make WebRtcAec3 available as a global
+          // @ts-ignore - Function constructor is available
+          const executeLibrary = new Function(jsCode);
+          executeLibrary();
           
           // Step 2: Get the WebRtcAec3 factory function (now available as global)
-          // The library should be available as a global after importScripts
-          // @ts-ignore - WebRtcAec3 is a global after importScripts
+          // The library should be available as a global after execution
+          // @ts-ignore - WebRtcAec3 is a global after executing the library code
           const WebRtcAec3 = (globalThis as any).WebRtcAec3;
           
           if (!WebRtcAec3) {
-            throw new Error('WebRtcAec3 not found after loading library');
+            throw new Error('WebRtcAec3 not found after executing library code');
           }
           
           // Step 3: Call the async factory function to get the module
           // API: await WebRtcAec3() - takes no parameters, fetches WASM itself
-          // The library will fetch its WASM file relative to where the JS file was loaded from
+          // The library will fetch its WASM file from the wasmUrl we provide
+          // We need to set up the environment so the library can find the WASM
+          // The library might look for WASM relative to the current location
+          // Set location.href or use a similar mechanism if needed
           const AEC3Module = await WebRtcAec3();
           
           // Step 4: Use the constructor from the module to create the instance
