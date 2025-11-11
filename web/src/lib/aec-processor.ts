@@ -31,7 +31,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
     this.port.onmessage = async (ev: MessageEvent) => {
       if (ev.data.type === 'init') {
         try {
-          const { sampleRate, jsCode, wasmUrl } = ev.data;
+          const { sampleRate, jsCode } = ev.data;
           this.sampleRate = sampleRate || 48000;
           
           // Step 1: Execute the library code using Function constructor
