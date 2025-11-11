@@ -1,0 +1,128 @@
+/**
+ * AEC (Acoustic Echo Canceller) AudioWorkletProcessor
+ * 
+ * Real-time echo cancellation using webrtcaec3.js library.
+ * Processes microphone input against TTS playback to produce echo-free audio.
+ */
+
+// Load the webrtcaec3.js library via importScripts (AudioWorklets don't support ES6 imports)
+importScripts('/webrtcaec3-0.3.0.js');
+
+class AECProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.aec = null;
+    this.aecModule = null; // The WebRtcAec3 module instance
+    this.sampleRate = 48000; // Default sample rate
+    this.renderNumChannels = 1; // Mono render/output (TTS) - what's being played
+    this.captureNumChannels = 1; // Mono capture/input (mic) - what's being recorded
+    
+    // Message handler for initialization
+    this.port.onmessage = async (ev) => {
+      if (ev.data.type === 'init') {
+        try {
+          this.sampleRate = ev.data.sampleRate || 48000;
+          
+          // Step 1: Get the WebRtcAec3 module instance
+          // WebRtcAec3() is a function that returns a promise for the module
+          this.aecModule = await WebRtcAec3();
+          
+          // Step 2: Create AEC3 instance with constructor
+          // Constructor: (sampleRate, renderNumChannels, captureNumChannels)
+          // renderNumChannels = number of TTS/render channels (mono = 1)
+          // captureNumChannels = number of mic/capture channels (mono = 1)
+          this.aec = new this.aecModule.AEC3(
+            this.sampleRate,
+            this.renderNumChannels,
+            this.captureNumChannels
+          );
+          
+          console.log(`✅ AEC initialized at ${this.sampleRate}Hz (${this.renderNumChannels} render, ${this.captureNumChannels} capture channels)`);
+          
+          // Notify main thread that initialization is complete
+          this.port.postMessage({ type: 'init-done' });
+        } catch (error) {
+          console.error('❌ Failed to initialize AEC:', error);
+          this.port.postMessage({ 
+            type: 'init-error', 
+            error: error.message 
+          });
+        }
+      }
+    };
+  }
+  
+  process(inputs, outputs) {
+    // Guard: If AEC is not initialized, output silence
+    if (!this.aec) {
+      const output = outputs[0];
+      if (output && output[0]) {
+        output[0].fill(0); // Fill with silence
+      }
+      return true; // Keep processor alive
+    }
+    
+    // Get inputs: mic on input 0, TTS on input 1
+    const micInput = inputs[0];
+    const ttsInput = inputs[1];
+    const cleanOutput = outputs[0];
+    
+    // Check if we have valid inputs and output
+    if (!micInput || !micInput[0] || !cleanOutput || !cleanOutput[0]) {
+      return true; // Keep processor alive
+    }
+    
+    const micChannel = micInput[0];
+    const ttsChannel = ttsInput && ttsInput[0] ? ttsInput[0] : null;
+    const outputChannel = cleanOutput[0];
+    
+    try {
+      // Analyze playback: Feed TTS audio to AEC's analyze method
+      // analyze expects Float32Array[] (array of channels)
+      // This tells the AEC what audio is being played so it can cancel echoes
+      if (ttsChannel && ttsChannel.length > 0) {
+        this.aec.analyze([ttsChannel]); // Wrap in array for channel format
+      }
+      
+      // Process microphone: Process mic input against analyzed playback
+      // process expects (outputBuffer, inputData) where:
+      // - outputBuffer is Float32Array[] (array of channels) that will be modified in place
+      // - inputData is Float32Array[] (array of channels)
+      
+      // First, get the required output buffer size
+      const bufSz = this.aec.processSize([micChannel]);
+      
+      // Create output buffer (array of Float32Arrays, one per channel)
+      const outBuf = [new Float32Array(bufSz)];
+      
+      // Process: this modifies outBuf in place
+      this.aec.process(outBuf, [micChannel]); // Wrap both in arrays for channel format
+      
+      // Copy processed audio to worklet output buffer
+      const processedChannel = outBuf[0];
+      if (processedChannel && processedChannel.length > 0) {
+        // Copy what we can (may be different size due to AEC processing)
+        const copyLength = Math.min(processedChannel.length, outputChannel.length);
+        outputChannel.set(processedChannel.subarray(0, copyLength));
+        // Fill remainder with silence if needed
+        if (copyLength < outputChannel.length) {
+          outputChannel.fill(0, copyLength);
+        }
+      } else {
+        // Fallback: output silence if processing failed
+        outputChannel.fill(0);
+      }
+    } catch (error) {
+      // On error, output silence to prevent audio artifacts
+      console.error('AEC processing error:', error);
+      outputChannel.fill(0);
+    }
+    
+    // Return true to keep the processor alive
+    return true;
+  }
+}
+
+// Register the processor so it can be instantiated
+registerProcessor('aec-processor', AECProcessor);
+

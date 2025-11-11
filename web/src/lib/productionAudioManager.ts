@@ -32,7 +32,10 @@ export class ProductionAudioManager {
   private isFirstBuffer = true; // Track if this is the first buffer of TTS session (for fade-in)
 
   // AudioWorklet components
-  private workletNode: AudioWorkletNode | null = null;
+  private workletNode: AudioWorkletNode | null = null; // VAD worklet
+  private aecNode: AudioWorkletNode | null = null; // AEC worklet
+  private ttsDestinationNode: MediaStreamAudioDestinationNode | null = null; // Captures TTS for AEC
+  private ttsSourceNode: MediaStreamAudioSourceNode | null = null; // TTS source in recording context
   private ringBuffer: Float32Array[] = [];
   private readonly RING_BUFFER_SIZE = 350; // ~933ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
@@ -90,20 +93,73 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
+      // Load AEC worklet first
+      await this.recordingContext.audioWorklet.addModule('/aec-processor.js');
+      console.log('✅ AEC processor loaded');
+      
       // Load audio worklet for simple VAD
       await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
-      console.log('✅ Audio processor loaded');
+      console.log('✅ Audio processor (VAD) loaded');
 
-      // Create audio worklet node with single input (microphone only)
+      // Create AEC worklet node with 2 inputs (mic, TTS) and 1 output (clean audio)
+      this.aecNode = new AudioWorkletNode(this.recordingContext, 'aec-processor', {
+        numberOfInputs: 2,
+        numberOfOutputs: 1
+      });
+      console.log('✅ AEC worklet node created');
+
+      // Initialize AEC via message
+      const aecInitPromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('AEC initialization timeout'));
+        }, 10000); // 10 second timeout
+        
+        this.aecNode!.port.onmessage = (event) => {
+          if (event.data.type === 'init-done') {
+            clearTimeout(timeout);
+            console.log('✅ AEC initialized successfully');
+            resolve();
+          } else if (event.data.type === 'init-error') {
+            clearTimeout(timeout);
+            reject(new Error(`AEC initialization error: ${event.data.error}`));
+          }
+        };
+      });
+
+      // Send init message to AEC worklet
+      this.aecNode.port.postMessage({
+        type: 'init',
+        sampleRate: this.recordingContext.sampleRate
+      });
+
+      // Wait for AEC initialization
+      await aecInitPromise;
+
+      // Create TTS destination node in playback context to capture TTS audio
+      this.ttsDestinationNode = this.playbackContext.createMediaStreamDestination();
+      console.log('✅ TTS destination node created');
+
+      // Create TTS source node in recording context from TTS stream
+      // This will auto-resample 16kHz → 48kHz
+      this.ttsSourceNode = this.recordingContext.createMediaStreamSource(this.ttsDestinationNode.stream);
+      console.log('✅ TTS source node created (auto-resampling 16kHz → 48kHz)');
+
+      // Create VAD worklet node with single input (receives clean audio from AEC)
       this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor', {
         numberOfInputs: 1,
         numberOfOutputs: 1 // Pass-through output
       });
+      console.log('✅ VAD worklet node created');
 
-      // Connect microphone stream to worklet
+      // Build new audio chain:
+      // micSource → AEC (input 0)
+      // ttsSourceNode → AEC (input 1)
+      // AEC → VAD worklet
       const micSource = this.recordingContext.createMediaStreamSource(this.mediaStream);
-      micSource.connect(this.workletNode);
-      console.log('✅ Connected microphone to worklet');
+      micSource.connect(this.aecNode, 0, 0); // Mic to AEC input 0
+      this.ttsSourceNode.connect(this.aecNode, 0, 1); // TTS to AEC input 1
+      this.aecNode.connect(this.workletNode); // AEC output to VAD input
+      console.log('✅ Audio chain configured: mic → AEC → VAD');
 
       // Handle messages from VAD worklet
       this.workletNode.port.onmessage = (event) => {
@@ -699,7 +755,12 @@ export class ProductionAudioManager {
       gainNode.gain.value = 1.5;
       
       source.connect(gainNode);
+      
+      // Route TTS audio to both speakers (user hears) and AEC input (for echo cancellation)
       gainNode.connect(this.playbackContext.destination);
+      if (this.ttsDestinationNode) {
+        gainNode.connect(this.ttsDestinationNode);
+      }
       
       source.start(startTime);
       
@@ -794,8 +855,11 @@ export class ProductionAudioManager {
     
     this.currentSource.connect(gainNode);
     
-    // Route TTS audio to playback destination (user hears this)
+    // Route TTS audio to both speakers (user hears) and AEC input (for echo cancellation)
     gainNode.connect(this.playbackContext.destination);
+    if (this.ttsDestinationNode) {
+      gainNode.connect(this.ttsDestinationNode);
+    }
     
     // Store gain node for next crossfade
     this.lastGainNode = gainNode;
@@ -1024,7 +1088,23 @@ export class ProductionAudioManager {
     }
     this.scheduledBuffers = [];
     
-    // Disconnect worklet
+    // Disconnect AEC worklet
+    if (this.aecNode) {
+      this.aecNode.disconnect();
+      this.aecNode.port.onmessage = null;
+      this.aecNode = null;
+    }
+    
+    // Disconnect TTS source node
+    if (this.ttsSourceNode) {
+      this.ttsSourceNode.disconnect();
+      this.ttsSourceNode = null;
+    }
+    
+    // Disconnect TTS destination node (no need to disconnect, just nullify)
+    this.ttsDestinationNode = null;
+    
+    // Disconnect VAD worklet
     if (this.workletNode) {
       this.workletNode.disconnect();
       this.workletNode.port.onmessage = null;
