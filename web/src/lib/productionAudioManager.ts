@@ -930,6 +930,7 @@ export class ProductionAudioManager {
               console.log('✅ TTS session complete - no more audio after delay, re-enabling VAD');
               this.isPlayingTTS = false;
               this.ttsStartTime = 0; // Reset TTS start time
+              this.isBargeInGated = false; // Reset barge-in gate
               if (this.onPlaybackComplete) {
                 this.onPlaybackComplete();
               }
@@ -967,6 +968,7 @@ export class ProductionAudioManager {
     this.isPlaying = false;
     this.isPlayingTTS = false;
     this.ttsStartTime = 0; // Reset TTS start time
+    this.isBargeInGated = false; // Reset barge-in gate
     this.playbackPlayhead = 0; // Reset playhead
     this.lastGainNode = null; // Clear gain node reference
     
