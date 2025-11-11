@@ -212,20 +212,37 @@ export class ProductionAudioManager {
 
     // Set up handler for processed audio stream (with native AEC applied)
     this.processedMicStream = new MediaStream();
-    this.loopbackPeerConnection.ontrack = (event) => {
-      // The ontrack event fires for remote tracks
-      // In our loopback, this is the microphone audio AFTER native AEC processing
-      if (event.track.kind === 'audio') {
-        this.processedMicStream!.addTrack(event.track);
-        console.log('✅ Received processed microphone track (with native AEC)');
-      }
-    };
+    
+    // Promise to wait for the processed track
+    let trackReceived = false;
+    const trackPromise = new Promise<void>((resolve) => {
+      this.loopbackPeerConnection!.ontrack = (event) => {
+        // The ontrack event fires for remote tracks
+        // In our loopback, this is the microphone audio AFTER native AEC processing
+        if (event.track.kind === 'audio' && !trackReceived) {
+          this.processedMicStream!.addTrack(event.track);
+          trackReceived = true;
+          console.log('✅ Received processed microphone track (with native AEC)');
+          resolve();
+        }
+      };
+    });
 
     // Complete the loopback by creating offer/answer
     // We loop back to ourselves, so we use the same offer as both local and remote
     const offer = await this.loopbackPeerConnection.createOffer();
     await this.loopbackPeerConnection.setLocalDescription(offer);
     await this.loopbackPeerConnection.setRemoteDescription(offer);
+    
+    // Wait for the processed track to be received (with timeout)
+    await Promise.race([
+      trackPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, 2000)) // 2 second timeout
+    ]);
+    
+    if (!trackReceived) {
+      console.warn('⚠️ Processed mic track not received - will use raw mic stream');
+    }
     
     console.log('✅ WebRTC loopback established - native AEC active');
   }
