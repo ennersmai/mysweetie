@@ -150,21 +150,20 @@ export class ProductionAudioManager {
         .replace(/^\/\/\s*Declare WebRtcAec3.*$/gm, '')
         // Fallback: remove any remaining declare statements (single line)
         .replace(/^declare\s+const\s+WebRtcAec3.*$/gm, '')
-        // Remove type annotations - handle union types and complex types by matching until = or ;
-        // This handles cases like `: Float32Array[] | null =` or `: any =`
-        // Match : followed by type (anything except = or ;) until we hit = or ;
-        .replace(/:\s*[^=;]+(?=\s*[=;])/g, '') // Remove type annotations before = or ;
-        // Remove function parameter type annotations (before comma or closing paren)
-        .replace(/:\s*[^,)]+(?=\s*[,)])/g, '') // Remove parameter type annotations
+        // Remove type annotations - exclude / and * to avoid matching inside comments
+        // Match : followed by type (anything except =, ;, /, *) until we hit = or ;
+        .replace(/:\s*[^=;\/\*]+(?=\s*[=;])/g, '') // Remove type annotations before = or ;
+        // Remove function parameter type annotations (exclude / and * to avoid comments)
+        .replace(/:\s*[^,)\/\*]+(?=\s*[,)])/g, '') // Remove parameter type annotations
         // Also handle return type annotations like `): boolean {`
         .replace(/\)\s*:\s*\w+\s*\{/g, ') {') // Remove return type annotations
-        // Remove remaining simple type annotations (fallback)
-        .replace(/:\s*MessageEvent/g, '') // Remove MessageEvent type annotation
-        .replace(/:\s*any\s*/g, ' ') // Remove :any type annotations
-        .replace(/:\s*Float32Array\[\]\[\]\s*/g, ' ') // Remove Float32Array[][] type annotations
-        .replace(/:\s*number\s*/g, ' ') // Remove :number type annotations
-        .replace(/:\s*boolean\s*/g, ' ') // Remove :boolean type annotations
-        .replace(/private\s+/g, '') // Remove private keyword
+        // Remove remaining simple type annotations (fallback, exclude comment chars)
+        .replace(/:\s*MessageEvent(?![^\/]*\/\/)/g, '') // Remove MessageEvent type annotation
+        .replace(/:\s*any\s*(?![^\/]*\/\/)/g, ' ') // Remove :any type annotations
+        .replace(/:\s*Float32Array\[\]\[\]\s*(?![^\/]*\/\/)/g, ' ') // Remove Float32Array[][] type annotations
+        .replace(/:\s*number\s*(?![^\/]*\/\/)/g, ' ') // Remove :number type annotations
+        .replace(/:\s*boolean\s*(?![^\/]*\/\/)/g, ' ') // Remove :boolean type annotations
+        .replace(/private\s+(?![^\/]*\/\/)/g, '') // Remove private keyword
         .replace(/@ts-expect-error\s*/g, '') // Remove @ts-expect-error comments
         .replace(/\/\/\s*@ts-expect-error.*$/gm, '') // Remove @ts-expect-error comment lines
         .replace(/\/\/\s*@ts-ignore.*$/gm, ''); // Remove @ts-ignore comment lines
