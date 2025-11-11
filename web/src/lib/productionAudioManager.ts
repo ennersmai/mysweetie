@@ -21,8 +21,6 @@ export class ProductionAudioManager {
   private isPlayingTTS = false;
   private isSendingAudio = false;
   private manuallyStoppedPlayback = false;
-  private ttsStartTime = 0; // Track when TTS started for grace period
-  private isBargeInGated = false; // Gate to prevent false triggers during TTS startup
   private playbackPlayhead = 0; // Scheduled playback time for seamless transitions
   private lastGainNode: GainNode | null = null; // For crossfading
   private readonly CROSSFADE_DURATION = 0.01; // 10ms crossfade between buffers
@@ -30,30 +28,19 @@ export class ProductionAudioManager {
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
   
-  // WebRTC two-peer-connection loopback for native echo cancellation
-  private pc1: RTCPeerConnection | null = null; // Sender
-  private pc2: RTCPeerConnection | null = null; // Receiver
-  private webrtcDestination: MediaStreamAudioDestinationNode | null = null;
-  private processedMicStream: MediaStream | null = null;
+  // Echo-aware VAD: TTS reference signal for comparison
+  private ttsReferenceDestination: MediaStreamAudioDestinationNode | null = null;
+  private ttsReferenceSource: MediaStreamAudioSourceNode | null = null;
   private ringBuffer: Float32Array[] = [];
   private readonly RING_BUFFER_SIZE = 350; // ~933ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
   private finalAudioBlob: Blob | null = null;
 
-  // VAD state
+  // VAD state (managed by echo-aware VAD worklet, but we track speaking state here)
   private vadSpeaking = false;
-  private vadLastAboveThreshold = 0;
-  private baseVadThreshold = 0.1; // Higher threshold to avoid false triggers from background noise
-  private currentVadThreshold = 0.1;
-  private readonly vadHangoverMs = 800;
-  private vadConsecutiveFrames = 0;
-  private readonly vadMinFrames = 2; // Responsive to speech
-  private readonly micBoostFactor = 5.0; // Higher mic boost for better detection
-  
-  // Noise floor detection
-  private noiseFloor = 0.005; // Minimum RMS to consider as potential speech
-  private noiseFloorSamples: number[] = [];
-  private readonly NOISE_FLOOR_SAMPLES = 50; // Samples to calculate noise floor
+  private baseVadThreshold = 0.1; // Base threshold (for logging/debugging)
+  private currentVadThreshold = 0.1; // Current threshold (for logging/debugging)
+  private readonly micBoostFactor = 5.0; // Mic boost factor (for threshold conversion)
 
   // PCM accumulation for TTS playback
   private pcmAccumulator: Int16Array[] = [];
@@ -103,94 +90,77 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Try WebRTC loopback for native echo cancellation (may not work in all browsers)
-      // If it fails, fall back to raw mic with browser's built-in AEC
-      try {
-        await this.setupWebRTCLoopback();
-      } catch (error) {
-        console.warn('⚠️ WebRTC loopback setup failed, using raw mic with browser AEC:', error);
-      }
+      // Create TTS reference destination for echo-aware VAD
+      // This captures TTS audio so the worklet can compare it with mic audio
+      this.ttsReferenceDestination = this.playbackContext.createMediaStreamDestination();
+      console.log('✅ Created TTS reference destination for echo-aware VAD');
 
-      // Load audio worklet for processing audio stream
+      // Load audio worklet for echo-aware VAD
       await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
       console.log('✅ Audio processor loaded');
 
-      // Create audio worklet node for processing audio
-      this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor');
+      // Create audio worklet node with 2 inputs (mic and TTS reference)
+      this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor', {
+        numberOfInputs: 2,
+        numberOfOutputs: 0 // No audio output, only messages
+      });
 
-      // Connect microphone stream to worklet
-      // Use processed stream if available (from WebRTC loopback), otherwise use raw mic
-      // Browser's built-in AEC (via getUserMedia) should still work on raw mic
-      const processedTracks = this.processedMicStream?.getAudioTracks() || [];
-      const hasUnmutedProcessedTracks = processedTracks.length > 0 && processedTracks.some(t => !t.muted);
-      
-      if (hasUnmutedProcessedTracks) {
-        const processedSource = this.recordingContext.createMediaStreamSource(this.processedMicStream!);
-        processedSource.connect(this.workletNode);
-        console.log('✅ Connected processed mic stream (with native AEC) to worklet');
-      } else {
-        if (processedTracks.length > 0) {
-          console.warn('⚠️ Processed tracks are muted - WebRTC loopback not working, using raw mic');
-        } else {
-          console.log('ℹ️ Using raw mic stream (browser AEC enabled via getUserMedia)');
-        }
-        // Use raw mic stream - browser's AEC is already enabled via getUserMedia constraints
-        const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
-        source.connect(this.workletNode);
-      }
+      // Connect microphone stream to worklet input 0
+      const micSource = this.recordingContext.createMediaStreamSource(this.mediaStream);
+      micSource.connect(this.workletNode, 0, 0);
+      console.log('✅ Connected microphone to worklet input 0');
 
-      // Handle incoming processed audio from worklet
+      // Connect TTS reference stream to worklet input 1
+      this.ttsReferenceSource = this.recordingContext.createMediaStreamSource(this.ttsReferenceDestination.stream);
+      this.ttsReferenceSource.connect(this.workletNode, 0, 1);
+      console.log('✅ Connected TTS reference to worklet input 1');
+
+      // Handle messages from echo-aware VAD worklet
       this.workletNode.port.onmessage = (event) => {
-        // Processed PCM data (already echo-cancelled by browser's native AEC)
-        const pcmData: Float32Array = event.data;
+        const message = event.data;
         
-        // Debug: Log audio data occasionally to verify we're receiving audio
-        if (Math.random() < 0.01) {
-          // Calculate RMS to check if audio is actually present
-          let sum = 0;
-          for (let i = 0; i < pcmData.length; i++) {
-            sum += pcmData[i] * pcmData[i];
+        if (message.type === 'speech_start') {
+          // Echo-aware VAD detected speech
+          this.handleSpeechStart();
+        } else if (message.type === 'speech_end') {
+          // Echo-aware VAD detected speech end
+          this.handleSpeechEnd();
+        } else if (message.type === 'audio_data') {
+          // Audio data from worklet (for ring buffer and recording)
+          const pcmData: Float32Array = message.data;
+          
+          // Always maintain ring buffer (last ~1200ms of audio)
+          this.ringBuffer.push(pcmData);
+          if (this.ringBuffer.length > this.RING_BUFFER_SIZE) {
+            this.ringBuffer.shift();
           }
-          const rms = Math.sqrt(sum / pcmData.length);
-          console.log(`🎤 Audio data received: ${pcmData.length} samples, RMS=${rms.toFixed(6)}, calibrating=${this.isCalibrating}`);
-        }
-        
-        // Always maintain ring buffer (last ~1200ms of audio)
-        this.ringBuffer.push(pcmData);
-        if (this.ringBuffer.length > this.RING_BUFFER_SIZE) {
-          this.ringBuffer.shift();
-        }
-        
-        // Debug: Log ring buffer status occasionally
-        if (Math.random() < 0.001) {
-          console.log(`🔍 Ring buffer status: ${this.ringBuffer.length}/${this.RING_BUFFER_SIZE} chunks, TTS playing: ${this.isPlayingTTS}`);
-        }
-        
-        // Ensure recording context stays active during TTS
-        if (this.recordingContext && this.recordingContext.state === 'suspended') {
-          console.log('🔧 Resuming suspended recording context');
-          this.recordingContext.resume();
-        }
-        
-        // During calibration, send audio chunks directly without VAD processing
-        if (this.isCalibrating && this.onCalibrationChunk) {
-          // Convert Float32Array to Int16Array PCM for calibration
-          const int16Data = new Int16Array(pcmData.length);
-          for (let i = 0; i < pcmData.length; i++) {
-            // Clamp to [-1, 1] and convert to 16-bit integer
-            const sample = Math.max(-1, Math.min(1, pcmData[i]));
-            int16Data[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+          
+          // Ensure recording context stays active during TTS
+          if (this.recordingContext && this.recordingContext.state === 'suspended') {
+            console.log('🔧 Resuming suspended recording context');
+            this.recordingContext.resume();
           }
-          this.onCalibrationChunk(int16Data.buffer);
-          return; // Skip VAD processing during calibration
-        }
-        
-        // Run VAD on this chunk
-        this.runVadOnPcm(pcmData);
-        
-        // If actively recording speech, accumulate in utterance buffer
-        if (this.isSendingAudio) {
-          this.utteranceBuffer.push(pcmData);
+          
+          // During calibration, send audio chunks directly without VAD processing
+          if (this.isCalibrating && this.onCalibrationChunk) {
+            // Convert Float32Array to Int16Array PCM for calibration
+            const int16Data = new Int16Array(pcmData.length);
+            for (let i = 0; i < pcmData.length; i++) {
+              // Clamp to [-1, 1] and convert to 16-bit integer
+              const sample = Math.max(-1, Math.min(1, pcmData[i]));
+              int16Data[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+            }
+            this.onCalibrationChunk(int16Data.buffer);
+            return; // Skip recording during calibration
+          }
+          
+          // If actively recording speech, accumulate in utterance buffer
+          if (this.isSendingAudio) {
+            this.utteranceBuffer.push(pcmData);
+          }
+        } else if (message.type === 'tts_state_ack') {
+          // Worklet acknowledged TTS state change
+          console.log(`✅ Worklet acknowledged TTS state: ${message.isPlaying ? 'playing' : 'stopped'}`);
         }
       };
 
@@ -204,291 +174,88 @@ export class ProductionAudioManager {
   }
 
   /**
-   * Set up WebRTC two-peer-connection loopback for native echo cancellation
-   * Uses two peer connections (PC1 sender, PC2 receiver) to avoid browser muting tracks
-   * This leverages the browser's built-in, hardware-accelerated AEC
+   * Handle speech start event from echo-aware VAD worklet
    */
-  private async setupWebRTCLoopback(): Promise<void> {
-    if (!this.playbackContext || !this.recordingContext || !this.mediaStream) {
-      throw new Error('Cannot setup WebRTC loopback - contexts not initialized');
-    }
-
-    console.log('🔄 Setting up WebRTC two-peer-connection loopback for native echo cancellation...');
-
-    // Create MediaStreamDestination node for TTS audio output
-    // This will be used as the reference signal for echo cancellation
-    this.webrtcDestination = this.playbackContext.createMediaStreamDestination();
-    console.log('✅ Created WebRTC destination for TTS audio');
-
-    // Create two peer connections (PC1 = sender, PC2 = receiver)
-    this.pc1 = new RTCPeerConnection({ iceServers: [] });
-    this.pc2 = new RTCPeerConnection({ iceServers: [] });
-
-    // Set up ICE candidate exchange between PC1 and PC2
-    this.pc1.onicecandidate = (e) => {
-      if (e.candidate && this.pc2) {
-        this.pc2.addIceCandidate(e.candidate);
-      }
-    };
-    this.pc2.onicecandidate = (e) => {
-      if (e.candidate && this.pc1) {
-        this.pc1.addIceCandidate(e.candidate);
-      }
-    };
-
-    // Get AI voice stream and original mic track ID for identification
-    const aiVoiceStream = this.webrtcDestination.stream;
-    const originalMicTrack = this.mediaStream.getAudioTracks()[0];
-    const originalMicTrackId = originalMicTrack.id;
-    const aiVoiceTrackId = aiVoiceStream.getAudioTracks()[0]?.id;
-
-    // Set up handler for processed audio stream (with native AEC applied)
-    this.processedMicStream = new MediaStream();
-    
-    // Promise to wait for the processed mic track
-    let processedMicTrack: MediaStreamTrack | null = null;
-    let micTrackReceived = false;
-    const trackPromise = new Promise<void>((resolve) => {
-      this.pc2!.ontrack = (event) => {
-        const incomingTrack = event.track;
-        
-        if (incomingTrack.kind === 'audio') {
-          // The crucial logic: The processed track is an AUDIO track that is NOT the original mic track ID
-          // Browsers often reuse the ID for the reference track, but create a new one for the processed mic track
-          const isNotOriginalMic = incomingTrack.id !== originalMicTrackId;
-          const isNotAiVoice = incomingTrack.id !== aiVoiceTrackId;
-          
-          // Check if it's the processed mic track (different ID from original)
-          if (isNotOriginalMic && isNotAiVoice && !micTrackReceived) {
-            // Check if it's muted. If it is, something is still wrong with the loopback.
-            if (incomingTrack.muted) {
-              console.error('🔥 Received processed mic track, but it is MUTED. Loopback failed.', {
-                enabled: incomingTrack.enabled,
-                muted: incomingTrack.muted,
-                readyState: incomingTrack.readyState,
-                id: incomingTrack.id,
-                originalMicId: originalMicTrackId,
-                aiVoiceId: aiVoiceTrackId
-              });
-              return; // Don't use muted track
-            }
-            
-            // This is the processed microphone track!
-            processedMicTrack = incomingTrack;
-            this.processedMicStream!.addTrack(processedMicTrack);
-            micTrackReceived = true;
-            console.log('✅ Received PROCESSED microphone track (with native AEC)', {
-              enabled: incomingTrack.enabled,
-              muted: incomingTrack.muted,
-              readyState: incomingTrack.readyState,
-              id: incomingTrack.id,
-              originalMicId: originalMicTrackId
-            });
-            resolve();
-          } else {
-            // This is either the AI voice reference track or the original mic track
-            console.log('📢 Received REFERENCE track (AI voice or original mic)', {
-              enabled: incomingTrack.enabled,
-              muted: incomingTrack.muted,
-              id: incomingTrack.id,
-              isOriginalMic: incomingTrack.id === originalMicTrackId,
-              isAiVoice: incomingTrack.id === aiVoiceTrackId
-            });
-          }
-        }
-      };
-    });
-
-    // Add tracks to PC1 (the sender)
-    // Add AI voice track (reference signal)
-    aiVoiceStream.getAudioTracks().forEach(track => {
-      this.pc1!.addTrack(track, aiVoiceStream);
-      console.log('✅ Added TTS audio track to PC1 (sender)');
-    });
-
-    // Add microphone track (with AEC enabled)
-    this.mediaStream.getAudioTracks().forEach(track => {
-      this.pc1!.addTrack(track, this.mediaStream!);
-      console.log('✅ Added microphone track to PC1 (sender)');
-    });
-
-    // Perform offer/answer dance to connect PC1 and PC2
-    const offer = await this.pc1.createOffer();
-    await this.pc1.setLocalDescription(offer);
-    await this.pc2.setRemoteDescription(offer);
-
-    const answer = await this.pc2.createAnswer();
-    await this.pc2.setLocalDescription(answer);
-    await this.pc1.setRemoteDescription(answer);
-
-    console.log('✅ Peer connections established (PC1 ↔ PC2)');
-
-    // Wait for the processed mic track to be received (with timeout)
-    await Promise.race([
-      trackPromise,
-      new Promise<void>((resolve) => setTimeout(resolve, 3000)) // 3 second timeout
-    ]);
-    
-    if (!processedMicTrack) {
-      console.error('⚠️ WebRTC Loopback FAILED. Could not get a processed mic track. Falling back to raw mic.');
-      // Clear the processed stream since it's not usable
-      this.processedMicStream = new MediaStream();
-    } else {
-      console.log('✅ WebRTC Loopback successfully established. Using processed mic stream for VAD.');
+  private handleSpeechStart(): void {
+    if (this.vadSpeaking) {
+      return; // Already speaking
     }
     
-    console.log('✅ WebRTC two-peer-connection loopback established', {
-      processedStreamTracks: this.processedMicStream.getAudioTracks().length,
-      micTrackReceived: !!processedMicTrack,
-      hasProcessedTrack: !!processedMicTrack
-    });
+    this.vadSpeaking = true;
+    const timestamp = performance.now();
+    console.log(`🎤 Echo-aware VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms`);
+    
+    // Check if this is an interrupt (user speaking during TTS)
+    const isInterrupt = this.isPlayingTTS;
+    
+    // Initialize utterance buffer WITH ring buffer (captures first word!)
+    this.utteranceBuffer = [...this.ringBuffer];
+    this.isSendingAudio = true;
+    console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll)`);
+    
+    // Handle interrupt
+    if (isInterrupt) {
+      console.log('🎤 Interrupt detected - stopping TTS playback');
+      
+      // Stop TTS playback
+      this.stopPlayback();
+      
+      // Send explicit interrupt command to backend
+      if (this.onInterrupt) {
+        console.log('⚡ Sending interrupt command to backend');
+        this.onInterrupt();
+      }
+    }
+    
+    // ALWAYS notify backend that user started speaking
+    if (this.onSpeechStart) {
+      this.onSpeechStart();
+    }
   }
-
-
+  
   /**
-   * VAD analysis on raw PCM data
+   * Handle speech end event from echo-aware VAD worklet
    */
-  private runVadOnPcm(pcmData: Float32Array): void {
-    // Calculate RMS with mic boost
-    let sum = 0;
-    for (let i = 0; i < pcmData.length; i++) {
-      sum += pcmData[i] * pcmData[i];
-    }
-    const rms = Math.sqrt(sum / pcmData.length) * this.micBoostFactor;
-    
-    // Update noise floor detection (only when not speaking and not playing TTS)
-    if (!this.vadSpeaking && !this.isPlayingTTS) {
-      this.noiseFloorSamples.push(rms);
-      if (this.noiseFloorSamples.length > this.NOISE_FLOOR_SAMPLES) {
-        this.noiseFloorSamples.shift();
-      }
-      
-      // Calculate adaptive noise floor (90th percentile of recent samples)
-      if (this.noiseFloorSamples.length >= 20) {
-        const sorted = [...this.noiseFloorSamples].sort((a, b) => a - b);
-        const percentile90 = Math.floor(sorted.length * 0.9);
-        this.noiseFloor = Math.max(0.005, sorted[percentile90] * 1.5); // 1.5x the 90th percentile
-      }
+  private handleSpeechEnd(): void {
+    if (!this.vadSpeaking) {
+      return; // Not speaking
     }
     
-    const now = performance.now();
+    this.vadSpeaking = false;
+    console.log(`🔇 Echo-aware VAD: SPEECH ENDED`);
     
-    // During TTS playback, use native AEC (via WebRTC loopback) for echo cancellation
-    // Browser's native AEC should handle most echo, so we can use a moderate threshold
-    if (this.isPlayingTTS) {
-      // Barge-in gate: ignore VAD triggers during first 200ms of TTS
-      // This prevents false triggers from initial audio burst before AEC adapts
-      if (this.isBargeInGated) {
-        // Skip VAD during barge-in gate period
-        return;
-      }
-      
-      // Short grace period to allow native AEC to adapt (after gate period)
-      const timeSinceTTSStart = performance.now() - (this.ttsStartTime || 0);
-      const gracePeriodMs = 300; // 300ms grace period for native AEC to adapt
-      
-      if (timeSinceTTSStart < gracePeriodMs) {
-        // Skip VAD during initial adaptation period
-        return;
-      }
-      
-      // Use moderate threshold (2x) - native AEC should handle most echo
-      // This allows normal barge-in while filtering residual echo
-      this.currentVadThreshold = this.baseVadThreshold * 2.0; // Moderate threshold
+    this.isSendingAudio = false;
+    
+    // Reset manual stop flag
+    this.manuallyStoppedPlayback = false;
+    console.log('🔓 Reset manuallyStoppedPlayback - ready for next AI response');
+    
+    // Concatenate all Float32Arrays into single array
+    const totalLength = this.utteranceBuffer.reduce((sum, arr) => sum + arr.length, 0);
+    const finalPcm = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of this.utteranceBuffer) {
+      finalPcm.set(chunk, offset);
+      offset += chunk.length;
     }
     
-    // Check if RMS is above both threshold and noise floor
-    const aboveThreshold = rms >= this.currentVadThreshold;
-    const aboveNoiseFloor = rms >= this.noiseFloor;
+    console.log(`📦 Assembling ${this.utteranceBuffer.length} chunks (${totalLength} samples) into WAV`);
     
-    if (aboveThreshold && aboveNoiseFloor) {
-      this.vadLastAboveThreshold = now;
-      this.vadConsecutiveFrames++;
-      
-      // Same consecutive frames for both cases - responsive to speech
-      const requiredFrames = this.vadMinFrames;
-      
-      // Only confirm speech after consecutive frames
-      if (!this.vadSpeaking && this.vadConsecutiveFrames >= requiredFrames) {
-        // Allow interrupts - don't block legitimate user speech
-        
-        this.vadSpeaking = true;
-        const timestamp = performance.now();
-        console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
-        
-        // Check if this is an interrupt (user speaking during TTS)
-        const isInterrupt = this.isPlayingTTS;
-        
-        // Initialize utterance buffer WITH ring buffer (captures first word!)
-        this.utteranceBuffer = [...this.ringBuffer];
-        this.isSendingAudio = true;
-        console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll)`);
-        
-        // Handle interrupt
-        if (isInterrupt) {
-          console.log('🎤 Interrupt detected - stopping TTS playback');
-          
-          // Drop threshold IMMEDIATELY for tracking user's speech
-          this.currentVadThreshold = this.baseVadThreshold;
-          console.log(`🔧 VAD threshold dropped to normal (${this.currentVadThreshold.toFixed(4)})`);
-          
-          // Stop TTS playback
-          this.stopPlayback();
-          
-          // Send explicit interrupt command to backend
-          if (this.onInterrupt) {
-            console.log('⚡ Sending interrupt command to backend');
-            this.onInterrupt();
-          }
-        }
-        
-        // ALWAYS notify backend that user started speaking
-        if (this.onSpeechStart) {
-          this.onSpeechStart();
-        }
-      }
-    } else {
-      // Reset consecutive frames counter
-      this.vadConsecutiveFrames = 0;
-      
-      if (this.vadSpeaking && now - this.vadLastAboveThreshold > this.vadHangoverMs) {
-        this.vadSpeaking = false;
-        console.log(`🔇 VAD: SPEECH ENDED (silence for ${(now - this.vadLastAboveThreshold).toFixed(0)}ms)`);
-        
-        this.isSendingAudio = false;
-        
-        // Reset manual stop flag
-        this.manuallyStoppedPlayback = false;
-        console.log('🔓 Reset manuallyStoppedPlayback - ready for next AI response');
-        
-        // Concatenate all Float32Arrays into single array
-        const totalLength = this.utteranceBuffer.reduce((sum, arr) => sum + arr.length, 0);
-        const finalPcm = new Float32Array(totalLength);
-        let offset = 0;
-        for (const chunk of this.utteranceBuffer) {
-          finalPcm.set(chunk, offset);
-          offset += chunk.length;
-        }
-        
-        console.log(`📦 Assembling ${this.utteranceBuffer.length} chunks (${totalLength} samples) into WAV`);
-        
-        // Convert to 16kHz WAV
-        const sampleRate = this.recordingContext?.sampleRate || 48000;
-        const wavBlob = this.pcmToWav16k(finalPcm, sampleRate);
-        
-        // Store for sending
-        this.finalAudioBlob = wavBlob;
-        
-        // Clear buffer
-        this.utteranceBuffer = [];
-        
-        console.log(`✅ WAV file ready: ${wavBlob.size} bytes`);
-        
-        // Call callback
-        if (this.onSpeechEnd) {
-          this.onSpeechEnd();
-        }
-      }
+    // Convert to 16kHz WAV
+    const sampleRate = this.recordingContext?.sampleRate || 48000;
+    const wavBlob = this.pcmToWav16k(finalPcm, sampleRate);
+    
+    // Store for sending
+    this.finalAudioBlob = wavBlob;
+    
+    // Clear buffer
+    this.utteranceBuffer = [];
+    
+    console.log(`✅ WAV file ready: ${wavBlob.size} bytes`);
+    
+    // Call callback
+    if (this.onSpeechEnd) {
+      this.onSpeechEnd();
     }
   }
 
@@ -591,18 +358,16 @@ export class ProductionAudioManager {
     
     // Set TTS playing state ONLY if not already playing
     if (!this.isPlayingTTS) {
-      console.log('🎵 Starting TTS playback session - echo cancellation active, VAD threshold increased');
+      console.log('🎵 Starting TTS playback session - echo-aware VAD active');
       this.isPlayingTTS = true;
-      this.ttsStartTime = performance.now(); // Track start time for grace period
       
-      // Enable barge-in gate to prevent false triggers during TTS startup
-      this.isBargeInGated = true;
-      console.log('🛡️ Barge-in gate is ON for 200ms');
-      
-      setTimeout(() => {
-        this.isBargeInGated = false;
-        console.log('🛡️ Barge-in gate is OFF. Ready for user interrupt.');
-      }, 200); // 200ms gate duration
+      // Notify worklet that TTS is starting
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({
+          type: 'tts_state',
+          isPlaying: true
+        });
+      }
     }
 
     try {
@@ -891,14 +656,12 @@ export class ProductionAudioManager {
     
     this.currentSource.connect(gainNode);
     
-    // Route TTS audio through WebRTC destination for native echo cancellation
-    // Also connect to regular destination for playback
-    if (this.webrtcDestination) {
-      // Connect to WebRTC destination (for echo cancellation reference)
-      gainNode.connect(this.webrtcDestination);
+    // Route TTS audio to both playback destination AND reference destination
+    // Reference destination feeds the echo-aware VAD worklet for comparison
+    gainNode.connect(this.playbackContext.destination); // User hears this
+    if (this.ttsReferenceDestination) {
+      gainNode.connect(this.ttsReferenceDestination); // Worklet compares this with mic
     }
-    // Always connect to regular destination for playback
-    gainNode.connect(this.playbackContext.destination);
     
     // Store gain node for next crossfade
     this.lastGainNode = gainNode;
@@ -929,8 +692,15 @@ export class ProductionAudioManager {
             if (this.audioQueue.length === 0 && !this.isPlaying && this.isPlayingTTS) {
               console.log('✅ TTS session complete - no more audio after delay, re-enabling VAD');
               this.isPlayingTTS = false;
-              this.ttsStartTime = 0; // Reset TTS start time
-              this.isBargeInGated = false; // Reset barge-in gate
+              
+              // Notify worklet that TTS stopped
+              if (this.workletNode) {
+                this.workletNode.port.postMessage({
+                  type: 'tts_state',
+                  isPlaying: false
+                });
+              }
+              
               if (this.onPlaybackComplete) {
                 this.onPlaybackComplete();
               }
@@ -966,16 +736,21 @@ export class ProductionAudioManager {
     
     this.audioQueue = [];
     this.isPlaying = false;
-    this.isPlayingTTS = false;
-    this.ttsStartTime = 0; // Reset TTS start time
-    this.isBargeInGated = false; // Reset barge-in gate
+    
+    // Notify worklet that TTS stopped
+    if (this.isPlayingTTS && this.workletNode) {
+      this.isPlayingTTS = false;
+      this.workletNode.port.postMessage({
+        type: 'tts_state',
+        isPlaying: false
+      });
+    }
+    
     this.playbackPlayhead = 0; // Reset playhead
     this.lastGainNode = null; // Clear gain node reference
     
     // Reset VAD state when playback stops
     this.vadSpeaking = false;
-    this.vadConsecutiveFrames = 0;
-    this.vadLastAboveThreshold = 0;
     this.currentVadThreshold = this.baseVadThreshold;
     console.log(`🔄 VAD state reset in stopPlayback - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
     
@@ -1009,18 +784,19 @@ export class ProductionAudioManager {
       if (this.isPlayingTTS) {
         console.log('✅ Marking TTS session as complete, re-enabling VAD');
         this.isPlayingTTS = false;
-        this.ttsStartTime = 0; // Reset TTS start time
-        this.isBargeInGated = false; // Reset barge-in gate
+        
+        // Notify worklet that TTS stopped
+        if (this.workletNode) {
+          this.workletNode.port.postMessage({
+            type: 'tts_state',
+            isPlaying: false
+          });
+        }
       
       // Reset VAD state to ensure clean detection after TTS
       this.vadSpeaking = false;
-      this.vadConsecutiveFrames = 0;
-      this.vadLastAboveThreshold = 0;
       this.currentVadThreshold = this.baseVadThreshold; // Reset to normal threshold
       console.log(`🔄 VAD state reset after TTS completion - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
-      
-      // Note: Echo cancellation is handled by browser's native AEC via WebRTC loopback
-      // No need to reset anything - browser handles it automatically
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
@@ -1082,6 +858,14 @@ export class ProductionAudioManager {
     this.baseVadThreshold = Math.max(0.001, Math.min(0.5, clientThreshold)); // Clamp to reasonable range
     this.currentVadThreshold = this.baseVadThreshold;
     
+    // Send threshold to worklet (worklet uses raw RMS, so send backend threshold directly)
+    if (this.workletNode) {
+      this.workletNode.port.postMessage({
+        type: 'vad_threshold',
+        threshold: backendThreshold
+      });
+    }
+    
     console.log(`🎯 VAD threshold updated from backend calibration: backend=${backendThreshold.toFixed(6)}, client=${this.baseVadThreshold.toFixed(4)} (multiplied by ${this.micBoostFactor}x)`);
   }
 
@@ -1102,21 +886,13 @@ export class ProductionAudioManager {
     this.stopRecording();
     this.stopPlayback();
     
-    // Close WebRTC peer connections
-    if (this.pc1) {
-      this.pc1.close();
-      this.pc1 = null;
-    }
-    if (this.pc2) {
-      this.pc2.close();
-      this.pc2 = null;
-    }
-    if (this.pc1 || this.pc2) {
-      console.log('✅ Closed WebRTC peer connections');
+    // Disconnect TTS reference source
+    if (this.ttsReferenceSource) {
+      this.ttsReferenceSource.disconnect();
+      this.ttsReferenceSource = null;
     }
     
     this.vadSpeaking = false;
-    this.vadLastAboveThreshold = 0;
     this.isSendingAudio = false;
     
     // Clear buffers
