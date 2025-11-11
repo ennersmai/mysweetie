@@ -137,21 +137,31 @@ export class ProductionAudioManager {
         .replace(/export\s+default\s+WebRtcAec3;?/g, ''); // Remove default export if present
       
       // Remove any import/export statements from processor code
+      // Also strip TypeScript syntax since this will be executed as plain JavaScript
       // The processor code should only contain the class definition and registration
       const modifiedProcessorCode = aecProcessorCode
         .replace(/^import\s+.*$/gm, '') // Remove import statements
-        .replace(/^export\s+.*$/gm, ''); // Remove export statements
+        .replace(/^export\s+.*$/gm, '') // Remove export statements
+        .replace(/:\s*MessageEvent/g, '') // Remove MessageEvent type annotation
+        .replace(/:\s*any\s*/g, ' ') // Remove :any type annotations
+        .replace(/:\s*Float32Array\[\]\[\]\s*/g, ' ') // Remove Float32Array[][] type annotations
+        .replace(/:\s*number\s*/g, ' ') // Remove :number type annotations
+        .replace(/:\s*boolean\s*/g, ' ') // Remove :boolean type annotations
+        .replace(/private\s+/g, '') // Remove private keyword
+        .replace(/@ts-ignore\s*/g, '') // Remove @ts-ignore comments
+        .replace(/\/\/\s*@ts-ignore.*$/gm, ''); // Remove @ts-ignore comment lines
       
       // Construct the final module script
-      const finalWorkletScript = `
-// --- Start of webrtcaec3.js library code ---
-${modifiedLibraryCode}
-// --- End of webrtcaec3.js library code ---
-
-// --- Start of aec-processor.js code ---
-${modifiedProcessorCode}
-// --- End of aec-processor.js code ---
-`;
+      // Use array join instead of template literal to avoid syntax errors from backticks/${} in code
+      const finalWorkletScript = [
+        '// --- Start of webrtcaec3.js library code ---',
+        modifiedLibraryCode,
+        '// --- End of webrtcaec3.js library code ---',
+        '',
+        '// --- Start of aec-processor.js code ---',
+        modifiedProcessorCode,
+        '// --- End of aec-processor.js code ---'
+      ].join('\n');
       
       // Create a Blob URL from the combined script
       const blob = new Blob([finalWorkletScript], { type: 'application/javascript' });
@@ -164,9 +174,17 @@ ${modifiedProcessorCode}
         console.log('✅ AEC processor loaded from blob URL');
         // Clean up the blob URL after loading
         URL.revokeObjectURL(blobUrl);
-      } catch (e) {
+      } catch (e: any) {
         URL.revokeObjectURL(blobUrl); // Clean up on error too
         console.error('Failed to load AEC worklet module:', e);
+        console.error('Error details:', {
+          message: e?.message,
+          stack: e?.stack,
+          name: e?.name
+        });
+        // Log a snippet of the script to help debug syntax errors
+        const scriptPreview = finalWorkletScript.substring(0, 500);
+        console.error('Script preview (first 500 chars):', scriptPreview);
         throw e;
       }
       

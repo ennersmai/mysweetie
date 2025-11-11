@@ -11,21 +11,21 @@
 
 // AudioWorkletProcessor and registerProcessor are globals in AudioWorklet context
 // In IIFE format, access them via globalThis (available in all JavaScript contexts)
-// @ts-ignore - These are runtime globals provided by the browser
-const AudioWorkletProcessorClass = (globalThis as any).AudioWorkletProcessor;
-// @ts-ignore
-const registerProcessorFn = (globalThis as any).registerProcessor;
+// Note: TypeScript syntax removed for Blob execution - use plain JavaScript
+const AudioWorkletProcessorClass = globalThis.AudioWorkletProcessor;
+const registerProcessorFn = globalThis.registerProcessor;
 
 class AECProcessor extends AudioWorkletProcessorClass {
-  private aec: any = null;
-  private outBuf: Float32Array[] | null = null; // Pre-allocated buffer for clean output
-  private sampleRate: number = 48000; // Default sample rate
+  // Note: TypeScript type annotations removed for Blob execution
+  aec = null;
+  outBuf = null; // Pre-allocated buffer for clean output
+  sampleRate = 48000; // Default sample rate
   
   constructor() {
     super();
     
     // Message handler for initialization
-    this.port.onmessage = async (ev: MessageEvent) => {
+    this.port.onmessage = async (ev) => {
       if (ev.data.type === 'init') {
         try {
           const { sampleRate, wasm } = ev.data;
@@ -33,7 +33,6 @@ class AECProcessor extends AudioWorkletProcessorClass {
           
           // WebRtcAec3 is now in scope (from the combined module script)
           // No need to load or execute library code - it's already available
-          // @ts-ignore - WebRtcAec3 is available from the library code in the same module
           if (typeof WebRtcAec3 === 'undefined') {
             throw new Error('WebRtcAec3 not found in scope - library code may not have loaded correctly');
           }
@@ -41,7 +40,6 @@ class AECProcessor extends AudioWorkletProcessorClass {
           // Step 1: Call the async factory function with the pre-fetched WASM buffer
           // This prevents network requests from within the Blob worklet
           // The factory accepts wasmBinary parameter to provide the WASM buffer directly
-          // @ts-ignore - WebRtcAec3 is available from the library code in the same module
           const AEC3Module = await WebRtcAec3({ wasmBinary: wasm });
           
           // Step 4: Use the constructor from the module to create the instance
@@ -60,18 +58,21 @@ class AECProcessor extends AudioWorkletProcessorClass {
           
           // Notify main thread that initialization is complete
           this.port.postMessage({ type: 'init-done' });
-        } catch (error: any) {
+        } catch (error) {
           console.error('❌ Failed to initialize AEC:', error);
+          const errorMessage = error && typeof error === 'object' && 'message' in error 
+            ? error.message 
+            : String(error);
           this.port.postMessage({ 
             type: 'init-error', 
-            error: error.message || String(error)
+            error: errorMessage
           });
         }
       }
     };
   }
   
-  process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
+  process(inputs, outputs) {
     // Guard: If AEC is not initialized or output buffer not ready, output silence
     if (!this.aec || !this.outBuf) {
       const output = outputs[0];
