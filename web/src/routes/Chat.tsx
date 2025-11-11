@@ -120,11 +120,11 @@ export default function Chat() {
   const longPressTimerRef = useRef<number | null>(null);
 
   const MODEL_OPTIONS: { key: string; desc: string; premium?: boolean }[] = [
-    { key: 'Sweet Myth', desc: 'Grok-4 Fast — quick, capable general model' },
-    { key: 'Swift Muse', desc: 'Dolphin Mistral 24B (Venice) — creative and expressive' },
-    { key: 'Crystal Focus', desc: 'ReMM Slerp L2 13B — concise, logical responses.', premium: true },
-    { key: 'Midnight Nova', desc: 'Anubis 70B — powerful roleplay and character immersion.', premium: true },
-    { key: 'Silver Whisper', desc: 'Euryale 70B — advanced storytelling with rich detail.', premium: true },
+    { key: 'Sweet Myth', desc: 'Quick, capable general model' },
+    { key: 'Swift Muse', desc: 'Creative and expressive' },
+    { key: 'Crystal Focus', desc: 'Concise, logical responses.', premium: true },
+    { key: 'Midnight Nova', desc: 'Powerful roleplay and character immersion.', premium: true },
+    { key: 'Silver Whisper', desc: 'Advanced storytelling with rich detail.', premium: true },
   ];
   // Import voices from centralized config
   const ALLOWED_VOICES = [
