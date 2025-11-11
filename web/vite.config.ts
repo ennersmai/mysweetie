@@ -60,7 +60,9 @@ export default defineConfig({
             return 'assets/[name][extname]'
           }
           return 'assets/[name]-[hash][extname]'
-        }
+        },
+        // Ensure worklet files are treated as chunks (modules), not assets
+        manualChunks: undefined
       }
     }
   }

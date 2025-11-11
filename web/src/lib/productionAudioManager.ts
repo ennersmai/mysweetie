@@ -5,6 +5,10 @@
  * Outputs 16kHz WAV files optimized for Groq STT.
  */
 
+// Import the worklet file so Vite processes it as a module dependency
+// This ensures it gets compiled from .ts to .js in the build
+import './aec-processor.ts';
+
 export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;
   private playbackContext: AudioContext | null = null;
@@ -94,11 +98,12 @@ export class ProductionAudioManager {
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
       // Load AEC worklet first (imported as module, processed by Vite)
-      // Use new URL() pattern - Vite will rewrite this at build time to the .js asset
-      // Never hard-code the hashed asset path or .ts extension
-      // IMPORTANT: Use relative path from this file's location
-      const aecProcessorModuleUrl = new URL('./aec-processor.ts', import.meta.url);
-      await this.recordingContext.audioWorklet.addModule(aecProcessorModuleUrl);
+      // CRITICAL: Use new URL() pattern WITHOUT ?url - this tells Vite to process it as a module
+      // Vite will compile .ts to .js and rewrite the URL at build time
+      // The file MUST be in src/ (not public/) so Vite can process it
+      await this.recordingContext.audioWorklet.addModule(
+        new URL('./aec-processor.ts', import.meta.url)
+      );
       console.log('✅ AEC processor loaded');
       
       // Load audio worklet for simple VAD
