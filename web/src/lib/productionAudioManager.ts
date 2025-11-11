@@ -142,13 +142,15 @@ export class ProductionAudioManager {
       const modifiedProcessorCode = aecProcessorCode
         .replace(/^import\s+.*$/gm, '') // Remove import statements
         .replace(/^export\s+.*$/gm, '') // Remove export statements
+        .replace(/^declare\s+const\s+WebRtcAec3:.*$/gm, '') // Remove WebRtcAec3 type declaration
         .replace(/:\s*MessageEvent/g, '') // Remove MessageEvent type annotation
         .replace(/:\s*any\s*/g, ' ') // Remove :any type annotations
         .replace(/:\s*Float32Array\[\]\[\]\s*/g, ' ') // Remove Float32Array[][] type annotations
         .replace(/:\s*number\s*/g, ' ') // Remove :number type annotations
         .replace(/:\s*boolean\s*/g, ' ') // Remove :boolean type annotations
         .replace(/private\s+/g, '') // Remove private keyword
-        .replace(/@ts-ignore\s*/g, '') // Remove @ts-ignore comments
+        .replace(/@ts-expect-error\s*/g, '') // Remove @ts-expect-error comments
+        .replace(/\/\/\s*@ts-expect-error.*$/gm, '') // Remove @ts-expect-error comment lines
         .replace(/\/\/\s*@ts-ignore.*$/gm, ''); // Remove @ts-ignore comment lines
       
       // Construct the final module script
