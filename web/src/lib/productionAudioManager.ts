@@ -235,13 +235,14 @@ export class ProductionAudioManager {
       }
     };
 
-    // Get track IDs for identification
+    // Get AI voice stream
     const aiVoiceStream = this.webrtcDestination.stream;
-    const aiVoiceTrackId = aiVoiceStream.getAudioTracks()[0]?.id;
-    const micTrackId = this.mediaStream.getAudioTracks()[0]?.id;
 
     // Set up handler for processed audio stream (with native AEC applied)
     this.processedMicStream = new MediaStream();
+    
+    // Track which tracks we've received (first is AI voice, second is mic)
+    let tracksReceived: MediaStreamTrack[] = [];
     
     // Promise to wait for the processed mic track
     let micTrackReceived = false;
@@ -249,31 +250,39 @@ export class ProductionAudioManager {
       this.pc2!.ontrack = (event) => {
         const incomingTrack = event.track;
         
-        // Identify which track is the microphone (not the AI voice reference)
-        // The mic track will have a different ID than the AI voice track
         if (incomingTrack.kind === 'audio') {
-          const isMicTrack = incomingTrack.id !== aiVoiceTrackId && incomingTrack.id !== micTrackId;
+          tracksReceived.push(incomingTrack);
           
-          if (isMicTrack && !micTrackReceived) {
+          // The first audio track is the AI voice (reference signal)
+          // The second audio track is the processed microphone (with AEC applied)
+          // We identify it by being the second track, or by checking if it's not muted
+          const isSecondTrack = tracksReceived.length === 2;
+          const isUnmutedTrack = incomingTrack.enabled && !incomingTrack.muted;
+          
+          if (isSecondTrack && isUnmutedTrack && !micTrackReceived) {
             // This should be the processed microphone track
-            if (incomingTrack.enabled && !incomingTrack.muted) {
-              this.processedMicStream!.addTrack(incomingTrack);
-              micTrackReceived = true;
-              console.log('✅ Received processed microphone track (with native AEC)', {
-                enabled: incomingTrack.enabled,
-                muted: incomingTrack.muted,
-                readyState: incomingTrack.readyState,
-                id: incomingTrack.id
-              });
-              resolve();
-            } else {
-              console.warn('⚠️ Received mic track but it is disabled or muted', {
-                enabled: incomingTrack.enabled,
-                muted: incomingTrack.muted
-              });
-            }
-          } else if (!isMicTrack) {
-            console.log('📢 Received AI voice reference track (for AEC)');
+            this.processedMicStream!.addTrack(incomingTrack);
+            micTrackReceived = true;
+            console.log('✅ Received processed microphone track (with native AEC)', {
+              enabled: incomingTrack.enabled,
+              muted: incomingTrack.muted,
+              readyState: incomingTrack.readyState,
+              id: incomingTrack.id,
+              trackNumber: tracksReceived.length
+            });
+            resolve();
+          } else if (tracksReceived.length === 1) {
+            console.log('📢 Received AI voice reference track (for AEC)', {
+              enabled: incomingTrack.enabled,
+              muted: incomingTrack.muted,
+              id: incomingTrack.id
+            });
+          } else if (!isUnmutedTrack) {
+            console.warn('⚠️ Received track but it is disabled or muted', {
+              enabled: incomingTrack.enabled,
+              muted: incomingTrack.muted,
+              trackNumber: tracksReceived.length
+            });
           }
         }
       };
