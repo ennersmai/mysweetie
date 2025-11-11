@@ -18,7 +18,7 @@ class AECProcessor extends AudioWorkletProcessor {
     super();
     
     // Message handler for initialization
-    this.port.onmessage = async (ev) => {
+    this.port.onmessage = async (ev: MessageEvent) => {
       if (ev.data.type === 'init') {
         try {
           this.sampleRate = ev.data.sampleRate || 48000;
