@@ -4,20 +4,17 @@
  * Real-time echo cancellation using webrtcaec3.js library.
  * Processes microphone input against TTS playback to produce echo-free audio.
  * 
- * Note: AudioWorkletProcessor and registerProcessor are global APIs provided
- * by the browser in the AudioWorklet context. They are declared in audio-worklet.d.ts
- * for TypeScript type checking, but are available at runtime as globals.
+ * NOTE: This file is loaded as raw text and combined with the library code
+ * into a single module via Blob URL. Do NOT use import/export statements here.
+ * WebRtcAec3 will be available in scope when this code executes.
  */
 
 // AudioWorkletProcessor and registerProcessor are globals in AudioWorklet context
 // In IIFE format, access them via globalThis (available in all JavaScript contexts)
-// Do NOT reference 'self' directly as it may not be defined in IIFE format
 // @ts-ignore - These are runtime globals provided by the browser
 const AudioWorkletProcessorClass = (globalThis as any).AudioWorkletProcessor;
 // @ts-ignore
 const registerProcessorFn = (globalThis as any).registerProcessor;
-
-// AudioWorklets don't support importScripts, so we'll execute code using Function constructor
 
 class AECProcessor extends AudioWorkletProcessorClass {
   private aec: any = null;
@@ -31,35 +28,20 @@ class AECProcessor extends AudioWorkletProcessorClass {
     this.port.onmessage = async (ev: MessageEvent) => {
       if (ev.data.type === 'init') {
         try {
-          const { sampleRate, jsCode } = ev.data;
+          const { sampleRate } = ev.data;
           this.sampleRate = sampleRate || 48000;
           
-          // Step 1: Execute the library code using Function constructor
-          // AudioWorklets don't support importScripts, so we execute the code directly
-          // The library code will be executed in this context and create globals
-          console.log('Executing webrtcaec3 JS library code, length:', jsCode?.length || 0);
-          
-          // Create a function that executes the library code
-          // This will make WebRtcAec3 available as a global
-          // @ts-ignore - Function constructor is available
-          const executeLibrary = new Function(jsCode);
-          executeLibrary();
-          
-          // Step 2: Get the WebRtcAec3 factory function (now available as global)
-          // The library should be available as a global after execution
-          // @ts-ignore - WebRtcAec3 is a global after executing the library code
-          const WebRtcAec3 = (globalThis as any).WebRtcAec3;
-          
-          if (!WebRtcAec3) {
-            throw new Error('WebRtcAec3 not found after executing library code');
+          // WebRtcAec3 is now in scope (from the combined module script)
+          // No need to load or execute library code - it's already available
+          // @ts-ignore - WebRtcAec3 is available from the library code in the same module
+          if (typeof WebRtcAec3 === 'undefined') {
+            throw new Error('WebRtcAec3 not found in scope - library code may not have loaded correctly');
           }
           
-          // Step 3: Call the async factory function to get the module
+          // Step 1: Call the async factory function to get the module
           // API: await WebRtcAec3() - takes no parameters, fetches WASM itself
-          // The library will fetch its WASM file from the wasmUrl we provide
-          // We need to set up the environment so the library can find the WASM
-          // The library might look for WASM relative to the current location
-          // Set location.href or use a similar mechanism if needed
+          // The library will fetch its WASM file relative to where the blob URL was created
+          // @ts-ignore
           const AEC3Module = await WebRtcAec3();
           
           // Step 4: Use the constructor from the module to create the instance

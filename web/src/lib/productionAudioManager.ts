@@ -5,14 +5,12 @@
  * Outputs 16kHz WAV files optimized for Groq STT.
  */
 
-// Import the worklet URL using Vite's special syntax
-// This gives us the URL to the compiled .js file without executing the worklet code
-// The ?worker&url suffix tells Vite to process it and return the final asset URL
-import aecWorkletUrl from './aec-processor.ts?worker&url';
-
-// The webrtcaec3 JS file is in public/ and copied by our Vite plugin
-// The library will find its WASM file relative to where the JS file is loaded from
-const JS_URL = '/webrtcaec3-0.3.0.js';
+// Import library and processor code as raw text to construct a single module
+// Use the ES module version of the library if available, otherwise fall back to regular JS
+// @ts-ignore - ?raw import might not be in type definitions
+import aecLibraryCode from '@ennuicastr/webrtcaec3/dist/webrtcaec3-0.3.0.js?raw';
+// @ts-ignore
+import aecProcessorCode from './aec-processor.ts?raw';
 
 export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;
@@ -102,15 +100,49 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Load AEC worklet using the compiled URL from Vite
-      // The ?worker&url import gives us the correct path to the compiled .js file
+      // Dynamically construct the worklet script as a single ES module
+      // This bypasses all module-loading restrictions by creating our own mega-module
+      console.log('Constructing AEC worklet module from library and processor code...');
+      
+      // Remove export statements from library code so we can use it directly
+      // The library exports WebRtcAec3, we need to make it available in our scope
+      const modifiedLibraryCode = aecLibraryCode
+        .replace(/export\s*{\s*WebRtcAec3\s*};?/g, '') // Remove export statement
+        .replace(/export\s+default\s+WebRtcAec3;?/g, ''); // Remove default export if present
+      
+      // Remove any import/export statements from processor code
+      // The processor code should only contain the class definition and registration
+      const modifiedProcessorCode = aecProcessorCode
+        .replace(/^import\s+.*$/gm, '') // Remove import statements
+        .replace(/^export\s+.*$/gm, ''); // Remove export statements
+      
+      // Construct the final module script
+      const finalWorkletScript = `
+// --- Start of webrtcaec3.js library code ---
+${modifiedLibraryCode}
+// --- End of webrtcaec3.js library code ---
+
+// --- Start of aec-processor.js code ---
+${modifiedProcessorCode}
+// --- End of aec-processor.js code ---
+`;
+      
+      // Create a Blob URL from the combined script
+      const blob = new Blob([finalWorkletScript], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      console.log('✅ AEC worklet module constructed, blob URL created');
+      
+      // Load the worklet module from the Blob URL
       try {
-        await this.recordingContext.audioWorklet.addModule(aecWorkletUrl);
+        await this.recordingContext.audioWorklet.addModule(blobUrl);
+        console.log('✅ AEC processor loaded from blob URL');
+        // Clean up the blob URL after loading
+        URL.revokeObjectURL(blobUrl);
       } catch (e) {
+        URL.revokeObjectURL(blobUrl); // Clean up on error too
         console.error('Failed to load AEC worklet module:', e);
         throw e;
       }
-      console.log('✅ AEC processor loaded');
       
       // Load audio worklet for simple VAD
       await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
@@ -123,18 +155,8 @@ export class ProductionAudioManager {
       });
       console.log('✅ AEC worklet node created');
 
-      // Load the library code as text in main thread
-      // AudioWorklets don't support importScripts, so we need to load it here and pass it
-      console.log('Loading webrtcaec3 JS library code from:', JS_URL);
-      const jsResponse = await fetch(JS_URL);
-      if (!jsResponse.ok) {
-        throw new Error(`Failed to fetch JS library: ${jsResponse.status} ${jsResponse.statusText}`);
-      }
-      const jsCode = await jsResponse.text();
-      console.log('✅ JS library code loaded, size:', jsCode.length, 'characters');
-
       // Initialize AEC via message
-      // The library will fetch its own WASM file relative to where it was originally loaded from
+      // WebRtcAec3 is now in scope, so initialization is simple
       const aecInitPromise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('AEC initialization timeout'));
@@ -152,13 +174,11 @@ export class ProductionAudioManager {
         };
       });
 
-      // Send init message to AEC worklet with JS code and WASM URL
-      // The worklet will execute the JS code and the library will fetch WASM from the original URL
+      // Send init message to AEC worklet
+      // WebRtcAec3 is already in scope, so no need to pass library code
       this.aecNode.port.postMessage({
         type: 'init',
-        sampleRate: this.recordingContext.sampleRate,
-        jsCode: jsCode, // Pass the library code as text
-        wasmUrl: '/webrtcaec3-0.3.0.wasm' // Pass WASM URL so library knows where to find it
+        sampleRate: this.recordingContext.sampleRate
       });
 
       // Wait for AEC initialization
