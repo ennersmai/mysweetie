@@ -19,7 +19,7 @@
 const DECAY_FACTOR = 0.95; // Energy decays by 5% each frame (~2.67ms at 48kHz)
 // This gives ~50% decay in ~13 frames (~35ms), matching acoustic latency
 
-const BARGE_IN_MULTIPLIER = 1.5; // Mic must be this many times louder than TTS to barge in
+const BARGE_IN_MULTIPLIER = 2.5; // Mic must be this many times louder than TTS to barge in (increased for hot mic environments)
 
 const AI_ENERGY_FLOOR = 0.005; // AI must be louder than this to enable barge-in
 // Prevents false triggers from startup artifacts when AI audio level is too low

@@ -54,7 +54,7 @@ export class ProductionAudioManager {
   // Dynamic calibration state for echo-aware VAD
   private calibrationStarted = false; // Track if calibration has been started for this call
   private calibrationStopTimer: number | null = null; // Timer for stopping calibration
-  private readonly CALIBRATION_DURATION = 2000; // 2 seconds calibration window
+  private readonly CALIBRATION_DURATION = 4000; // 4 seconds calibration window (widened for better learning)
 
   // VAD logging throttling
   private lastVADLogTime = 0; // Timestamp of last VAD data log
