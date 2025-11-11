@@ -182,10 +182,20 @@ export class ProductionAudioManager {
       ].join('\n');
       
       // Create a Blob URL from the combined script
-      // Use 'application/javascript' or 'text/javascript' - both should work for ES modules
-      // AudioWorklets require ES module format, which supports top-level await
+      // AudioWorklets loaded via addModule() are treated as ES modules
+      // ES modules support top-level await, so the library code can use await
       const blob = new Blob([finalWorkletScript], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
+      
+      // Verify the script doesn't have syntax errors before loading
+      // This helps catch issues early
+      try {
+        // Just check if it can be parsed (don't execute)
+        new Function(finalWorkletScript);
+      } catch (parseError: any) {
+        console.warn('⚠️ Script parse check failed (might be false positive for modules):', parseError.message);
+        // Don't throw - modules might have syntax that Function() can't parse
+      }
       console.log('✅ AEC worklet module constructed, blob URL created');
       
       // Load the worklet module from the Blob URL
@@ -208,13 +218,28 @@ export class ProductionAudioManager {
         // Also log where the processor code starts (might be where the error is)
         const processorStartIndex = finalWorkletScript.indexOf('// --- Start of aec-processor.js code ---');
         if (processorStartIndex >= 0) {
-          const processorPreview = finalWorkletScript.substring(processorStartIndex, processorStartIndex + 1000);
-          console.error('Processor code preview (first 1000 chars):', processorPreview);
+          const processorPreview = finalWorkletScript.substring(processorStartIndex, processorStartIndex + 1500);
+          console.error('Processor code preview (first 1500 chars):', processorPreview);
           // Try to find the declare statement if it still exists
           const declareIndex = finalWorkletScript.indexOf('declare const WebRtcAec3');
           if (declareIndex >= 0) {
             const declarePreview = finalWorkletScript.substring(declareIndex, declareIndex + 200);
             console.error('⚠️ Found remaining declare statement at index', declareIndex, ':', declarePreview);
+          }
+          // Check if async keyword is present
+          const asyncIndex = finalWorkletScript.indexOf('async (ev) =>');
+          const asyncWithTypeIndex = finalWorkletScript.indexOf('async (ev:');
+          console.error('Async function check:', {
+            'async (ev) =>': asyncIndex >= 0 ? 'Found' : 'Not found',
+            'async (ev:': asyncWithTypeIndex >= 0 ? 'Found (type not removed!)' : 'Not found',
+            asyncIndex,
+            asyncWithTypeIndex
+          });
+          // Check for await usage
+          const awaitIndex = finalWorkletScript.indexOf('await WebRtcAec3');
+          if (awaitIndex >= 0) {
+            const awaitContext = finalWorkletScript.substring(Math.max(0, awaitIndex - 100), awaitIndex + 100);
+            console.error('Await context:', awaitContext);
           }
         }
         throw e;
