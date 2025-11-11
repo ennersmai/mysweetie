@@ -101,25 +101,31 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Set up WebRTC loopback for native echo cancellation
-      await this.setupWebRTCLoopback();
+      // Try WebRTC loopback for native echo cancellation (may not work in all browsers)
+      // If it fails, fall back to raw mic with browser's built-in AEC
+      try {
+        await this.setupWebRTCLoopback();
+      } catch (error) {
+        console.warn('⚠️ WebRTC loopback setup failed, using raw mic with browser AEC:', error);
+      }
 
-      // Load audio worklet for processing the echo-cancelled stream
+      // Load audio worklet for processing audio stream
       await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
       console.log('✅ Audio processor loaded');
 
-      // Create audio worklet node for processing echo-cancelled audio
+      // Create audio worklet node for processing audio
       this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor');
 
-      // Connect processed microphone stream (with native AEC applied) to worklet
-      // Check if processed stream has tracks (ontrack might not have fired yet)
+      // Connect microphone stream to worklet
+      // Use processed stream if available (from WebRTC loopback), otherwise use raw mic
+      // Browser's built-in AEC (via getUserMedia) should still work on raw mic
       if (this.processedMicStream && this.processedMicStream.getAudioTracks().length > 0) {
         const processedSource = this.recordingContext.createMediaStreamSource(this.processedMicStream);
         processedSource.connect(this.workletNode);
         console.log('✅ Connected processed mic stream (with native AEC) to worklet');
       } else {
-        console.warn('⚠️ Processed mic stream not ready - using raw mic stream (AEC may not work)');
-        // Fallback to raw mic stream if processed stream isn't ready
+        console.log('ℹ️ Using raw mic stream (browser AEC enabled via getUserMedia)');
+        // Use raw mic stream - browser's AEC is already enabled via getUserMedia constraints
         const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
         source.connect(this.workletNode);
       }
