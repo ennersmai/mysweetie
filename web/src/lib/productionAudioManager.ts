@@ -105,10 +105,17 @@ export class ProductionAudioManager {
       // Create echo cancellation worklet node
       this.echoCancellationNode = new AudioWorkletNode(this.recordingContext, 'echo-cancellation-processor');
 
-      // Connect microphone → echo canceller → destination (prevents GC)
+      // Connect microphone → echo canceller → dummy destination (prevents GC, no feedback)
+      // Audio is sent via port.postMessage() in the worklet processor, NOT through destination
       const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
       source.connect(this.echoCancellationNode);
-      this.echoCancellationNode.connect(this.recordingContext.destination);
+      
+      // Create a dummy destination (GainNode with 0 gain) to keep the worklet alive
+      // This prevents garbage collection without causing feedback loop
+      const dummyDestination = this.recordingContext.createGain();
+      dummyDestination.gain.value = 0; // Mute to prevent any audio output
+      this.echoCancellationNode.connect(dummyDestination);
+      dummyDestination.connect(this.recordingContext.destination); // Connect to keep node alive, but gain=0 so no audio
 
       // Set up TTS reference signal capture for echo cancellation
       this.setupTTSReferenceCapture();
