@@ -270,11 +270,6 @@ export class ProductionAudioManager {
               this.currentVadThreshold = this.baseVadThreshold;
             }
     
-    // Debug: Log threshold changes to track the issue
-    if (Math.random() < 0.02) {
-      console.log(`🔍 VAD Threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)}, isPlayingTTS: ${this.isPlayingTTS})`);
-    }
-    
     // During TTS playback, use higher threshold to prevent echo detection
     // But still allow barge-in if user speaks loudly enough
     if (this.isPlayingTTS) {
@@ -289,14 +284,6 @@ export class ProductionAudioManager {
       }
       // After grace period, VAD is active with higher threshold (2.5x)
       // This allows barge-in while preventing most echo
-    }
-    
-    // Log VAD activity occasionally for debugging
-    if (Math.random() < 0.01) {
-      const debugInfo = this.isPlayingTTS 
-        ? `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (3x), noiseFloor=${this.noiseFloor.toFixed(4)}, playing=TRUE, speaking=${this.vadSpeaking}`
-        : `VAD: rms=${rms.toFixed(4)}, threshold=${this.currentVadThreshold.toFixed(4)} (1x), noiseFloor=${this.noiseFloor.toFixed(4)}, playing=false, speaking=${this.vadSpeaking}`;
-      console.log(debugInfo);
     }
     
     // Check if RMS is above both threshold and noise floor
@@ -463,12 +450,12 @@ export class ProductionAudioManager {
   }
 
   startRecording(): boolean {
-    if (!this.workletNode) {
-      console.error('AudioWorklet not initialized');
+    if (!this.echoCancellationNode) {
+      console.error('AudioWorklet not initialized - echo cancellation node not ready');
       return false;
     }
 
-    console.log('✅ Recording ready and active (AudioWorklet processing)');
+    console.log('✅ Recording ready and active (Echo cancellation AudioWorklet processing)');
     return true;
   }
 
