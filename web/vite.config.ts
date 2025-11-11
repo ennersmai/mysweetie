@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import svgr from 'vite-plugin-svgr'
+// @ts-ignore - vite-plugin-static-copy may not have type definitions
+import { viteStaticCopy } from 'vite-plugin-static-copy'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
@@ -106,7 +108,25 @@ const copyWasmPlugin = () => {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), svgr(), copyWasmPlugin()],
+  plugins: [
+    react(), 
+    svgr(), 
+    copyWasmPlugin(),
+    // Copy webrtcaec3 library files to output directory root
+    // This bypasses Node module resolution and makes files available at simple URLs
+    viteStaticCopy({
+      targets: [
+        {
+          src: 'node_modules/@ennuicastr/webrtcaec3.js/dist/webrtcaec3-0.3.0.js',
+          dest: '.' // Copies to root of output directory
+        },
+        {
+          src: 'node_modules/@ennuicastr/webrtcaec3.js/dist/webrtcaec3-0.3.0.wasm',
+          dest: '.' // Copies to root of output directory
+        }
+      ]
+    })
+  ],
   publicDir: 'public',
   optimizeDeps: {
     exclude: ['@ennuicastr/webrtcaec3.js'] // Don't pre-bundle, let it load WASM at runtime

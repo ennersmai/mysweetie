@@ -28,7 +28,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
     this.port.onmessage = async (ev: MessageEvent) => {
       if (ev.data.type === 'init') {
         try {
-          const { sampleRate } = ev.data;
+          const { sampleRate, wasm } = ev.data;
           this.sampleRate = sampleRate || 48000;
           
           // WebRtcAec3 is now in scope (from the combined module script)
@@ -38,11 +38,11 @@ class AECProcessor extends AudioWorkletProcessorClass {
             throw new Error('WebRtcAec3 not found in scope - library code may not have loaded correctly');
           }
           
-          // Step 1: Call the async factory function to get the module
-          // API: await WebRtcAec3() - takes no parameters, fetches WASM itself
-          // The library will fetch its WASM file relative to where the blob URL was created
-          // @ts-ignore
-          const AEC3Module = await WebRtcAec3();
+          // Step 1: Call the async factory function with the pre-fetched WASM buffer
+          // This prevents network requests from within the Blob worklet
+          // The factory accepts wasmBinary parameter to provide the WASM buffer directly
+          // @ts-ignore - WebRtcAec3 is available from the library code in the same module
+          const AEC3Module = await WebRtcAec3({ wasmBinary: wasm });
           
           // Step 4: Use the constructor from the module to create the instance
           // API: new AEC3(sampleRate, outputChannels, inputChannels)

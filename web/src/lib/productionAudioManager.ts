@@ -5,12 +5,17 @@
  * Outputs 16kHz WAV files optimized for Groq STT.
  */
 
-// Import library and processor code as raw text to construct a single module
-// Use the ES module version of the library if available, otherwise fall back to regular JS
+// Import processor code as raw text (will be combined with library code)
 // @ts-ignore - ?raw import might not be in type definitions
-import aecLibraryCode from '@ennuicastr/webrtcaec3/dist/webrtcaec3-0.3.0.js?raw';
-// @ts-ignore
 import aecProcessorCode from './aec-processor.ts?raw';
+
+// Import WASM URL using Vite's ?url suffix - this gives us the resolved URL at build time
+// @ts-ignore - ?url import might not be in type definitions
+import wasmUrl from '@ennuicastr/webrtcaec3.js/dist/webrtcaec3-0.3.0.wasm?url';
+
+// Library JS file is copied to output root by vite-plugin-static-copy
+// We'll fetch it at runtime to avoid build-time resolution issues
+const JS_URL = '/webrtcaec3-0.3.0.js';
 
 export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;
@@ -100,12 +105,33 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
+      // Fetch library JS file from simple URL (copied to output root by vite-plugin-static-copy)
+      // This bypasses Node module resolution and avoids build-time errors
+      console.log('Fetching webrtcaec3 library JS file...');
+      const jsResponse = await fetch(JS_URL);
+      if (!jsResponse.ok) {
+        throw new Error(`Failed to fetch JS library: ${jsResponse.status} ${jsResponse.statusText}`);
+      }
+      const aecLibraryCode = await jsResponse.text();
+      console.log('✅ JS library code fetched, size:', aecLibraryCode.length, 'characters');
+      
+      // Pre-fetch WASM buffer in main thread using Vite-resolved URL
+      // This prevents network requests from within the Blob worklet
+      console.log('Pre-fetching WASM module from:', wasmUrl);
+      const wasmResponse = await fetch(wasmUrl);
+      if (!wasmResponse.ok) {
+        throw new Error(`Failed to fetch WASM file: ${wasmResponse.status} ${wasmResponse.statusText}`);
+      }
+      const wasmBuffer = await wasmResponse.arrayBuffer();
+      console.log('✅ WASM buffer pre-fetched, size:', wasmBuffer.byteLength, 'bytes');
+      
       // Dynamically construct the worklet script as a single ES module
       // This bypasses all module-loading restrictions by creating our own mega-module
       console.log('Constructing AEC worklet module from library and processor code...');
       
       // Remove export statements from library code so we can use it directly
       // The library exports WebRtcAec3, we need to make it available in our scope
+      // No need to patch WASM URLs since we're passing the buffer directly to the factory
       const modifiedLibraryCode = aecLibraryCode
         .replace(/export\s*{\s*WebRtcAec3\s*};?/g, '') // Remove export statement
         .replace(/export\s+default\s+WebRtcAec3;?/g, ''); // Remove default export if present
@@ -156,7 +182,7 @@ ${modifiedProcessorCode}
       console.log('✅ AEC worklet node created');
 
       // Initialize AEC via message
-      // WebRtcAec3 is now in scope, so initialization is simple
+      // Pass WASM buffer so library doesn't need to fetch it
       const aecInitPromise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('AEC initialization timeout'));
@@ -174,12 +200,14 @@ ${modifiedProcessorCode}
         };
       });
 
-      // Send init message to AEC worklet
-      // WebRtcAec3 is already in scope, so no need to pass library code
+      // Send init message to AEC worklet with WASM buffer
+      // WebRtcAec3 is already in scope from the combined module
+      // Pass WASM buffer so library doesn't need to fetch it (may need API adjustment)
       this.aecNode.port.postMessage({
         type: 'init',
-        sampleRate: this.recordingContext.sampleRate
-      });
+        sampleRate: this.recordingContext.sampleRate,
+        wasm: wasmBuffer // Pass WASM buffer (may need to check if library supports this)
+      }, [wasmBuffer]); // Transfer the buffer
 
       // Wait for AEC initialization
       await aecInitPromise;
