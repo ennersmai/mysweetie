@@ -62,6 +62,7 @@ export default defineConfig({
   worker: {
     format: 'es' // Use ES modules for workers/worklets
   },
+  assetsInclude: ['**/*.wasm'], // Ensure WASM files are treated as assets
   build: {
     rollupOptions: {
       output: {
