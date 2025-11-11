@@ -5,9 +5,9 @@
  * Outputs 16kHz WAV files optimized for Groq STT.
  */
 
-// Import the worklet file so Vite processes it as a module dependency
-// This ensures it gets compiled from .ts to .js in the build
-import './aec-processor.ts';
+// NOTE: Do NOT import aec-processor.ts here!
+// The worklet must ONLY be loaded via audioWorklet.addModule() to run in the correct context.
+// Importing it here would cause it to execute in the main thread, throwing "AudioWorkletProcessor is not defined"
 
 export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;

@@ -3,9 +3,19 @@
  * 
  * Real-time echo cancellation using webrtcaec3.js library.
  * Processes microphone input against TTS playback to produce echo-free audio.
+ * 
+ * Note: AudioWorkletProcessor and registerProcessor are global APIs provided
+ * by the browser in the AudioWorklet context. They are declared in audio-worklet.d.ts
+ * for TypeScript type checking, but are available at runtime as globals.
  */
 
-class AECProcessor extends AudioWorkletProcessor {
+// AudioWorkletProcessor and registerProcessor are globals in AudioWorklet context
+// Access them via 'self' which is available in AudioWorklet execution context
+// @ts-ignore - These are runtime globals provided by the browser
+const AudioWorkletProcessorClass = (self as any).AudioWorkletProcessor;
+const registerProcessorFn = (self as any).registerProcessor;
+
+class AECProcessor extends AudioWorkletProcessorClass {
   private aec: any = null;
   private aecModule: any = null; // The WebRtcAec3 module instance
   private sampleRate: number = 48000; // Default sample rate
@@ -28,6 +38,10 @@ class AECProcessor extends AudioWorkletProcessor {
           // Using a variable prevents TypeScript from resolving it as a module path at compile time
           const libPath: string = '/webrtcaec3-0.3.0.js';
           const mod = await import(/* @vite-ignore */ libPath);
+          
+          // Temporary: Log mod shape for debugging export structure
+          console.log('webrtcaec3 module shape:', Object.keys(mod), 'default:', !!mod.default, 'WebRtcAec3:', !!(mod as any).WebRtcAec3);
+          
           const WebRtcAec3 = (mod as any).default ?? (mod as any).WebRtcAec3;
           
           // Step 2: Get the WebRtcAec3 module instance
@@ -133,5 +147,5 @@ class AECProcessor extends AudioWorkletProcessor {
 }
 
 // Register the processor so it can be instantiated
-registerProcessor('aec-processor', AECProcessor);
+registerProcessorFn('aec-processor', AECProcessor);
 
