@@ -64,7 +64,7 @@ export const RESEMBLE_VOICES: Record<string, VoiceConfig> = {
     characterName: 'Mary'
   },
   'lana': {
-    uuid: 'c815cd7a',
+    uuid: 'adb84c77',
     displayName: 'Lana',
     characterName: 'Lana'
   },
@@ -80,9 +80,9 @@ export const RESEMBLE_VOICES: Record<string, VoiceConfig> = {
   },
   
   // General selection voices (4) - artistic names
-  'seraphina': {
-    uuid: 'adb84c77',
-    displayName: 'Seraphina'
+  'whisper': {
+    uuid: 'c815cd7a',
+    displayName: 'Whisper'
   },
   'celeste': {
     uuid: 'e28236ee',

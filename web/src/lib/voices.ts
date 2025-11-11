@@ -18,7 +18,7 @@ export const ALLOWED_VOICES: string[] = [
   'chloe',
   
   // General selection voices
-  'seraphina',
+  'whisper',
   'celeste',
   'aurora',
   'luna',

@@ -145,7 +145,7 @@ export default function Chat() {
     'chloe',
     
     // General selection voices
-    'seraphina',
+    'whisper',
     'celeste',
     'aurora',
     'luna',
@@ -1661,7 +1661,7 @@ export default function Chat() {
               
               {/* General Selection Voices */}
               <optgroup label="General Voices">
-                <option className="bg-gray-900 text-white" value="seraphina">Seraphina</option>
+                <option className="bg-gray-900 text-white" value="whisper">Whisper</option>
                 <option className="bg-gray-900 text-white" value="celeste">Celeste</option>
                 <option className="bg-gray-900 text-white" value="aurora">Aurora</option>
                 <option className="bg-gray-900 text-white" value="luna">Luna</option>

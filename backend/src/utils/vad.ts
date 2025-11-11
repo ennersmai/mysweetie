@@ -142,11 +142,11 @@ export class VoiceActivityDetector {
     const percentile90Index = Math.floor(sorted.length * 0.9);
     const noiseFloor = sorted[percentile90Index] || sorted[sorted.length - 1] || 0.001;
 
-    // Set threshold to 2.5x the noise floor to avoid false positives
-    // This ensures voice is clearly above background noise
+    // Set threshold to 1.5x the noise floor for better sensitivity
+    // This ensures voice is above background noise while remaining responsive
     const calibratedThreshold = Math.max(
-      noiseFloor * 2.5,
-      this.config.energyThreshold * 0.5 // Don't go below half of original threshold
+      noiseFloor * 1.5,
+      this.config.energyThreshold * 0.3 // Allow lower threshold for better sensitivity
     );
 
     // Update the config with calibrated threshold

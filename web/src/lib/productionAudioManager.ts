@@ -22,6 +22,9 @@ export class ProductionAudioManager {
   private isSendingAudio = false;
   private manuallyStoppedPlayback = false;
   private ttsStartTime = 0;
+  private playbackPlayhead = 0; // Scheduled playback time for seamless transitions
+  private lastGainNode: GainNode | null = null; // For crossfading
+  private readonly CROSSFADE_DURATION = 0.01; // 10ms crossfade between buffers
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
@@ -633,49 +636,104 @@ export class ProductionAudioManager {
       return;
     }
 
+    if (!this.playbackContext) {
+      return;
+    }
+
     // CRITICAL: Set isPlaying = true SYNCHRONOUSLY
     this.isPlaying = true;
     this.manuallyStoppedPlayback = false;
     
     const audioBuffer = this.audioQueue.shift()!;
+    const currentTime = this.playbackContext.currentTime;
     
-    console.log(`▶️  Playing buffer ${audioBuffer.duration.toFixed(3)}s (isPlaying: ${this.isPlaying}, ${this.audioQueue.length} remaining in queue)`);
+    // Calculate start time for seamless playback
+    let startTime: number;
+    if (this.playbackPlayhead === 0) {
+      // First buffer - start immediately
+      startTime = currentTime + 0.01; // Small delay to ensure scheduling
+    } else {
+      // Subsequent buffers - start slightly before previous ends for crossfade
+      startTime = this.playbackPlayhead - this.CROSSFADE_DURATION;
+      // Ensure we don't schedule in the past
+      if (startTime < currentTime) {
+        startTime = currentTime + 0.01;
+        this.playbackPlayhead = startTime; // Reset playhead if we had to adjust
+      }
+    }
     
-    if (this.playbackContext) {
-      this.currentSource = this.playbackContext.createBufferSource();
-      this.currentSource.buffer = audioBuffer;
+    const endTime = startTime + audioBuffer.duration;
+    this.playbackPlayhead = endTime;
+    
+    console.log(`▶️  Playing buffer ${audioBuffer.duration.toFixed(3)}s at ${startTime.toFixed(3)}s (isPlaying: ${this.isPlaying}, ${this.audioQueue.length} remaining in queue)`);
+    
+    this.currentSource = this.playbackContext.createBufferSource();
+    this.currentSource.buffer = audioBuffer;
+    
+    const gainNode = this.playbackContext.createGain();
+    
+    // Apply crossfade if there's a previous buffer
+    if (this.lastGainNode) {
+      // Fade out previous buffer during crossfade period
+      try {
+        const fadeStart = Math.max(currentTime, startTime - this.CROSSFADE_DURATION);
+        this.lastGainNode.gain.setValueAtTime(1.5, fadeStart);
+        this.lastGainNode.gain.linearRampToValueAtTime(0, startTime);
+      } catch (e) {
+        // Ignore scheduling errors
+      }
       
-      const gainNode = this.playbackContext.createGain();
+      // Fade in new buffer from start
+      try {
+        gainNode.gain.setValueAtTime(0, startTime);
+        gainNode.gain.linearRampToValueAtTime(1.5, startTime + this.CROSSFADE_DURATION);
+      } catch (e) {
+        // Fallback if scheduling fails
+        gainNode.gain.value = 1.5;
+      }
+    } else {
+      // First buffer - no crossfade needed
       gainNode.gain.value = 1.5;
+    }
+    
+    this.currentSource.connect(gainNode);
+    gainNode.connect(this.playbackContext.destination);
+    
+    // Store gain node for next crossfade
+    this.lastGainNode = gainNode;
+    
+    this.currentSource.onended = () => {
+      console.log(`✓ Buffer finished playing`);
+      this.currentSource = null;
       
-      this.currentSource.connect(gainNode);
-      gainNode.connect(this.playbackContext.destination);
+      if (this.manuallyStoppedPlayback) {
+        console.log('🛑 Ignoring onended (playback was manually stopped)');
+        return;
+      }
       
-      this.currentSource.onended = () => {
-        console.log(`✓ Buffer finished playing`);
-        this.currentSource = null;
+      if (this.audioQueue.length > 0) {
+        console.log(`⏭️  More buffers in queue (${this.audioQueue.length}), playing next`);
+        this.playNextInQueue();
+      } else {
+        console.log('🏁 Last buffer finished, queue empty - setting isPlaying = false');
+        this.isPlaying = false;
+        this.playbackPlayhead = 0; // Reset playhead
+        this.lastGainNode = null; // Clear gain node reference
         
-        if (this.manuallyStoppedPlayback) {
-          console.log('🛑 Ignoring onended (playback was manually stopped)');
-          return;
+        if (!this.isPlayingTTS && this.onPlaybackComplete) {
+          console.log('✅ TTS session complete and queue empty - notifying backend');
+          this.onPlaybackComplete();
+        } else if (this.isPlayingTTS) {
+          console.log('⏸️  Queue empty but keeping isPlayingTTS=true (more sentences may be coming)');
         }
-        
-        if (this.audioQueue.length > 0) {
-          console.log(`⏭️  More buffers in queue (${this.audioQueue.length}), playing next`);
-          this.playNextInQueue();
-        } else {
-          console.log('🏁 Last buffer finished, queue empty - setting isPlaying = false');
-          this.isPlaying = false;
-          
-          if (!this.isPlayingTTS && this.onPlaybackComplete) {
-            console.log('✅ TTS session complete and queue empty - notifying backend');
-            this.onPlaybackComplete();
-          } else if (this.isPlayingTTS) {
-            console.log('⏸️  Queue empty but keeping isPlayingTTS=true (more sentences may be coming)');
-          }
-        }
-      };
-      
+      }
+    };
+    
+    try {
+      this.currentSource.start(startTime);
+    } catch (error) {
+      console.error('Error starting audio source:', error);
+      // Fallback to immediate start if scheduling fails
       this.currentSource.start();
     }
   }
@@ -696,6 +754,8 @@ export class ProductionAudioManager {
     this.isPlaying = false;
     this.isPlayingTTS = false;
     this.ttsStartTime = 0; // Reset grace period
+    this.playbackPlayhead = 0; // Reset playhead
+    this.lastGainNode = null; // Clear gain node reference
     
     // Reset VAD state when playback stops
     this.vadSpeaking = false;
@@ -782,6 +842,25 @@ export class ProductionAudioManager {
   stopCalibration(): void {
     console.log('✅ Stopping VAD calibration mode');
     this.isCalibrating = false;
+  }
+
+  /**
+   * Set VAD threshold (from backend calibration)
+   * The backend threshold is in raw RMS energy units
+   * Client-side multiplies RMS by micBoostFactor before comparison
+   * So we need to multiply the backend threshold by micBoostFactor to match
+   */
+  setVADThreshold(backendThreshold: number): void {
+    // Backend threshold is in raw RMS energy (0-1 range typically)
+    // Client-side calculates: rms = rawRMS * micBoostFactor
+    // So client threshold should be: backendThreshold * micBoostFactor
+    const clientThreshold = backendThreshold * this.micBoostFactor;
+    
+    // Set as base threshold (will be used for normal listening)
+    this.baseVadThreshold = Math.max(0.001, Math.min(0.5, clientThreshold)); // Clamp to reasonable range
+    this.currentVadThreshold = this.baseVadThreshold;
+    
+    console.log(`🎯 VAD threshold updated from backend calibration: backend=${backendThreshold.toFixed(6)}, client=${this.baseVadThreshold.toFixed(4)} (multiplied by ${this.micBoostFactor}x)`);
   }
 
   getAssembledAudio(): Blob | null {

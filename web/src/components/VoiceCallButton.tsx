@@ -314,10 +314,13 @@ export default function VoiceCallButton({
           if (audioManagerRef.current) {
             audioManagerRef.current.stopCalibration();
             audioManagerRef.current.setCalibrationCallback(null);
-          }
-          // Show calibration result if available
-          if ((message as any).threshold !== undefined) {
-            console.log(`🎯 VAD threshold calibrated to: ${(message as any).threshold}`);
+            
+            // Apply the calibrated threshold from backend
+            if ((message as any).threshold !== undefined) {
+              const calibratedThreshold = (message as any).threshold;
+              audioManagerRef.current.setVADThreshold(calibratedThreshold);
+              console.log(`🎯 Applied calibrated VAD threshold: ${calibratedThreshold}`);
+            }
           }
           break;
       }

@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 // Default voices for each style
 const REALISTIC_VOICES = ['layla', 'ava', 'mia', 'emma', 'aria', 'natalia'];
 const ANIME_VOICES = ['star', 'natsuki', 'mary', 'lana', 'clover', 'chloe'];
-const GENERAL_VOICES = ['seraphina', 'celeste', 'aurora', 'luna'];
+const GENERAL_VOICES = ['whisper', 'celeste', 'aurora', 'luna'];
 
 export default function NewCharacter() {
   const navigate = useNavigate();
