@@ -54,6 +54,10 @@ export class ProductionAudioManager {
   private calibrationStopTimer: number | null = null; // Timer for stopping calibration
   private readonly CALIBRATION_DURATION = 2000; // 2 seconds calibration window
 
+  // VAD logging throttling
+  private lastVADLogTime = 0; // Timestamp of last VAD data log
+  private readonly VAD_LOG_INTERVAL = 1000; // Log VAD data once per second
+
   async initialize(): Promise<boolean> {
     try {
       console.log('ProductionAudioManager: Initializing AudioWorklet-based audio system');
@@ -136,9 +140,13 @@ export class ProductionAudioManager {
           // Audio data from worklet (for ring buffer and recording)
           const pcmData: Float32Array = message.data;
           
-          // Log VAD data for debugging and manual tuning
+          // Log VAD data for debugging and manual tuning (throttled to once per second)
           if (message.rmsMic !== undefined && message.peakRmsAI !== undefined) {
-            console.log(`VAD Data: Mic=${message.rmsMic.toFixed(4)}, AI Peak=${message.peakRmsAI.toFixed(4)}, TTS Playing=${message.isTTSSpeaking}`);
+            const now = Date.now();
+            if (now - this.lastVADLogTime >= this.VAD_LOG_INTERVAL) {
+              console.log(`VAD Data: Mic=${message.rmsMic.toFixed(4)}, AI Peak=${message.peakRmsAI.toFixed(4)}, TTS Playing=${message.isTTSSpeaking}`);
+              this.lastVADLogTime = now;
+            }
           }
           
           // Always maintain ring buffer (last ~1200ms of audio)
