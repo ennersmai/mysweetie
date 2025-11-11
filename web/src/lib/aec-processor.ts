@@ -25,6 +25,8 @@ class AECProcessor extends AudioWorkletProcessor {
           
           // Step 1: Get the WebRtcAec3 module instance
           // WebRtcAec3() is a function that returns a promise for the module
+          // The library will automatically find the WASM file if it's accessible
+          // WASM should be at /webrtcaec3-0.3.0.wasm (from public directory)
           this.aecModule = await WebRtcAec3();
           
           // Step 2: Create AEC3 instance with constructor

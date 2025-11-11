@@ -1,10 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import svgr from 'vite-plugin-svgr'
-import { copyFileSync, existsSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
-// Plugin to copy WASM and JS files from @ennuicastr/webrtcaec3.js to public directory
+// Plugin to copy WASM file to public directory so it's accessible at runtime
 const copyWasmPlugin = () => {
   return {
     name: 'copy-wasm',
@@ -12,7 +12,7 @@ const copyWasmPlugin = () => {
       const distPath = join(process.cwd(), 'node_modules/@ennuicastr/webrtcaec3.js/dist')
       const publicPath = join(process.cwd(), 'public')
       
-      // Copy WASM file
+      // Copy WASM file to public/ so it's accessible at /webrtcaec3-0.3.0.wasm
       const wasmSource = join(distPath, 'webrtcaec3-0.3.0.wasm')
       const wasmDest = join(publicPath, 'webrtcaec3-0.3.0.wasm')
       
@@ -26,20 +26,26 @@ const copyWasmPlugin = () => {
       } else {
         console.warn('⚠️ WASM file not found at:', wasmSource)
       }
+    },
+    generateBundle() {
+      // Also copy WASM to dist during build so it's available in production
+      const distPath = join(process.cwd(), 'node_modules/@ennuicastr/webrtcaec3.js/dist')
+      const buildPath = join(process.cwd(), 'dist')
       
-      // Copy main JS file (contains WebRtcAec3 export)
-      const jsSource = join(distPath, 'webrtcaec3-0.3.0.js')
-      const jsDest = join(publicPath, 'webrtcaec3-0.3.0.js')
+      const wasmSource = join(distPath, 'webrtcaec3-0.3.0.wasm')
+      const wasmDest = join(buildPath, 'webrtcaec3-0.3.0.wasm')
       
-      if (existsSync(jsSource)) {
+      if (existsSync(wasmSource)) {
         try {
-          copyFileSync(jsSource, jsDest)
-          console.log('✅ Copied webrtcaec3 JS file to public/')
+          // Ensure dist directory exists
+          if (!existsSync(buildPath)) {
+            mkdirSync(buildPath, { recursive: true })
+          }
+          copyFileSync(wasmSource, wasmDest)
+          console.log('✅ Copied webrtcaec3 WASM file to dist/')
         } catch (error) {
-          console.warn('⚠️ Failed to copy JS file:', error)
+          console.warn('⚠️ Failed to copy WASM file to dist:', error)
         }
-      } else {
-        console.warn('⚠️ JS file not found at:', jsSource)
       }
     }
   }
@@ -50,12 +56,18 @@ const copyWasmPlugin = () => {
 export default defineConfig({
   plugins: [react(), svgr(), copyWasmPlugin()],
   publicDir: 'public',
+  optimizeDeps: {
+    exclude: ['@ennuicastr/webrtcaec3.js'] // Don't pre-bundle, let it load WASM at runtime
+  },
+  worker: {
+    format: 'es' // Use ES modules for workers/worklets
+  },
   build: {
     rollupOptions: {
       output: {
         // Let Vite handle all file naming - it will compile .ts to .js automatically
         assetFileNames: (assetInfo) => {
-          // Only special handling for WASM files
+          // Only special handling for WASM files - keep them accessible
           if (assetInfo.name?.endsWith('.wasm')) {
             return 'assets/[name][extname]'
           }
