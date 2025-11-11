@@ -16,6 +16,8 @@ export class ProductionAudioManager {
   private onSpeechStart: (() => void) | null = null;
   private onSpeechEnd: (() => void) | null = null;
   private onInterrupt: (() => void) | null = null;
+  private onCalibrationChunk: ((chunk: ArrayBuffer) => void) | null = null;
+  private isCalibrating = false;
   private isPlayingTTS = false;
   private isSendingAudio = false;
   private manuallyStoppedPlayback = false;
@@ -121,6 +123,19 @@ export class ProductionAudioManager {
         if (this.recordingContext && this.recordingContext.state === 'suspended') {
           console.log('🔧 Resuming suspended recording context');
           this.recordingContext.resume();
+        }
+        
+        // During calibration, send audio chunks directly without VAD processing
+        if (this.isCalibrating && this.onCalibrationChunk) {
+          // Convert Float32Array to Int16Array PCM for calibration
+          const int16Data = new Int16Array(pcmData.length);
+          for (let i = 0; i < pcmData.length; i++) {
+            // Clamp to [-1, 1] and convert to 16-bit integer
+            const sample = Math.max(-1, Math.min(1, pcmData[i]));
+            int16Data[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+          }
+          this.onCalibrationChunk(int16Data.buffer);
+          return; // Skip VAD processing during calibration
         }
         
         // Run VAD on this chunk
@@ -651,6 +666,29 @@ export class ProductionAudioManager {
   setInterruptCallback(callback: (() => void) | null): void {
     console.log('ProductionAudioManager: Setting interrupt callback:', callback ? 'SET' : 'NULL');
     this.onInterrupt = callback;
+  }
+
+  /**
+   * Set calibration callback for sending audio chunks during calibration
+   */
+  setCalibrationCallback(callback: ((chunk: ArrayBuffer) => void) | null): void {
+    this.onCalibrationChunk = callback;
+  }
+
+  /**
+   * Start calibration mode - audio chunks will be sent via calibration callback
+   */
+  startCalibration(): void {
+    console.log('🎯 Starting VAD calibration mode');
+    this.isCalibrating = true;
+  }
+
+  /**
+   * Stop calibration mode
+   */
+  stopCalibration(): void {
+    console.log('✅ Stopping VAD calibration mode');
+    this.isCalibrating = false;
   }
 
   getAssembledAudio(): Blob | null {

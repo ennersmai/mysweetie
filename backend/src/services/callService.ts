@@ -15,7 +15,6 @@ import { memoryOrchestrator } from './memoryOrchestrator';
 import { supabaseAdmin } from '../config/database';
 import { synthesizeResembleTTS } from './resembleTtsService';
 import { getCharacterDefaultVoiceName } from '../config/characterVoices';
-import { streamWAVToPCM } from '../utils/wavParser';
 
 export enum CallState {
   IDLE = 'IDLE',
@@ -60,6 +59,12 @@ export interface CallSession {
    * CLIENT-SIDE ASSEMBLY: Complete audio file assembled by client
    */
   completeAudioBlob?: Buffer;
+  /**
+   * VAD calibration state
+   */
+  isCalibrating?: boolean;
+  calibrationSamples?: Buffer[];
+  calibrationStartTime?: number;
 }
 
 export interface CallMessage {
@@ -123,8 +128,9 @@ export class CallService {
 
     logger.info(`Call session created: ${sessionId} for user ${userId}`);
 
-    // Immediately inform client we're in LISTENING state so UI can reflect correctly
-    this.sendStateUpdate(session, CallState.LISTENING);
+    // Start VAD calibration phase
+    this.startVADCalibration(session);
+
     return session;
   }
 
@@ -257,6 +263,17 @@ export class CallService {
       logger.info(`📨 WebSocket message received for session ${session.id}: isBinary=${isBinary}, length=${data.length}`);
       
       if (isBinary) {
+        // Check if we're in calibration mode
+        if (session.isCalibrating) {
+          // Collect calibration audio samples
+          if (!session.calibrationSamples) {
+            session.calibrationSamples = [];
+          }
+          session.calibrationSamples.push(data);
+          logger.debug(`📊 Collected calibration sample ${session.calibrationSamples.length} for session ${session.id}: ${data.length} bytes`);
+          return;
+        }
+        
         // CLIENT-SIDE ASSEMBLY: Receive complete audio file from client
         logger.info(`🎵 Received complete audio blob from session ${session.id}: ${data.length} bytes`);
         
@@ -360,6 +377,10 @@ export class CallService {
       case 'tts_playback_finished':
         logger.info(`TTS playback finished for session ${session.id}`);
         this.handleTTSPlaybackFinished(session.id);
+        break;
+      case 'calibration_complete':
+        logger.info(`Calibration complete message received for session ${session.id}`);
+        this.completeVADCalibration(session);
         break;
       default:
         logger.warn(`Unknown message type: ${message.type}`);
@@ -802,8 +823,8 @@ export class CallService {
           session.ttsAbortController = new AbortController();
         }
 
-        // Synthesize speech using Resemble.ai (returns WAV stream)
-        const wavStream = await synthesizeResembleTTS({
+        // Synthesize speech using Resemble.ai (returns PCM stream - already parsed from WAV)
+        const pcmStream = await synthesizeResembleTTS({
           text,
           voiceName: characterVoice,
           signal: session.ttsAbortController.signal
@@ -814,20 +835,24 @@ export class CallService {
         // Add timeout to prevent hanging
         const timeoutId = setTimeout(() => {
           logger.error(`Resemble TTS timeout for session ${session.id} - forcing completion`);
-          wavStream.destroy(); // Destroy the stream to stop any ongoing process
+          pcmStream.destroy(); // Destroy the stream to stop any ongoing process
           resolve(); // Force resolve to prevent hanging
         }, 30000); // 30 second timeout (longer for Resemble)
 
-        // Parse WAV to PCM and stream to client
-        streamWAVToPCM(wavStream, (pcmChunk: Buffer) => {
+        // Stream PCM data directly to client (already converted from WAV by synthesizeResembleTTS)
+        pcmStream.on('data', (pcmChunk: Buffer) => {
           if (session.clientWebSocket.readyState === WebSocket.OPEN) {
             session.clientWebSocket.send(pcmChunk);
           }
-        }).then(() => {
+        });
+
+        pcmStream.on('end', () => {
           clearTimeout(timeoutId);
           logger.info(`Resemble TTS stream completed for session ${session.id}`);
           resolve(); // Resolve when stream is done
-        }).catch((error: any) => {
+        });
+
+        pcmStream.on('error', (error: any) => {
           clearTimeout(timeoutId);
           logger.error(`Resemble TTS stream error for session ${session.id}:`, error);
           reject(error);
@@ -837,7 +862,7 @@ export class CallService {
         session.ttsAbortController.signal.addEventListener('abort', () => {
           clearTimeout(timeoutId);
           logger.info(`Resemble TTS request aborted for session ${session.id}`);
-          wavStream.destroy(); // Destroy the stream to stop any ongoing process
+          pcmStream.destroy(); // Destroy the stream to stop any ongoing process
           resolve(); // Resolve when aborted
         });
 
@@ -1248,6 +1273,101 @@ export class CallService {
     }
     
     logger.info(`[TTS FINISHED] ===== TTS PLAYBACK FINISHED COMPLETE =====`);
+  }
+
+  /**
+   * Start VAD calibration phase
+   * Requests background noise samples from client to adjust VAD threshold
+   */
+  private startVADCalibration(session: CallSession): void {
+    logger.info(`🎯 Starting VAD calibration for session ${session.id}`);
+    
+    // Initialize calibration state
+    session.isCalibrating = true;
+    session.calibrationSamples = [];
+    session.calibrationStartTime = Date.now();
+    
+    // Request calibration audio from client
+    // Calibration duration: 2-3 seconds of background noise
+    const calibrationDuration = 2500; // 2.5 seconds
+    
+    session.clientWebSocket.send(JSON.stringify({
+      type: 'calibration_start',
+      duration: calibrationDuration,
+      message: 'Please remain silent for background noise calibration...'
+    }));
+    
+    logger.info(`📡 Sent calibration_start message to client for session ${session.id}`);
+    
+    // Set timeout to complete calibration if client doesn't respond
+    setTimeout(() => {
+      if (session.isCalibrating) {
+        logger.warn(`⏰ Calibration timeout for session ${session.id}, completing with collected samples`);
+        this.completeVADCalibration(session);
+      }
+    }, calibrationDuration + 1000); // Give extra 1 second buffer
+  }
+
+  /**
+   * Complete VAD calibration and adjust threshold
+   */
+  private completeVADCalibration(session: CallSession): void {
+    if (!session.isCalibrating) {
+      logger.warn(`Calibration not active for session ${session.id}`);
+      return;
+    }
+
+    logger.info(`✅ Completing VAD calibration for session ${session.id}`);
+    
+    const samples = session.calibrationSamples || [];
+    const sampleCount = samples.length;
+    
+    if (sampleCount === 0) {
+      logger.warn(`⚠️ No calibration samples collected for session ${session.id}, using default threshold`);
+      session.isCalibrating = false;
+      delete session.calibrationSamples;
+      delete session.calibrationStartTime;
+      
+      // Inform client calibration is complete
+      session.clientWebSocket.send(JSON.stringify({
+        type: 'calibration_complete',
+        threshold: session.vad.getThreshold(),
+        message: 'Calibration complete (no samples collected, using default)'
+      }));
+      
+      // Transition to LISTENING state
+      this.sendStateUpdate(session, CallState.LISTENING);
+      return;
+    }
+
+    logger.info(`📊 Processing ${sampleCount} calibration samples for session ${session.id}`);
+    
+    // Calibrate VAD threshold based on collected samples
+    const calibratedThreshold = session.vad.calibrateThreshold(samples);
+    
+    const calibrationDuration = session.calibrationStartTime 
+      ? Date.now() - session.calibrationStartTime 
+      : 0;
+    
+    logger.info(`🎯 VAD calibration complete for session ${session.id}: threshold=${calibratedThreshold.toFixed(6)}, samples=${sampleCount}, duration=${calibrationDuration}ms`);
+    
+    // Clear calibration state
+    session.isCalibrating = false;
+    delete session.calibrationSamples;
+    delete session.calibrationStartTime;
+    
+    // Inform client calibration is complete
+    session.clientWebSocket.send(JSON.stringify({
+      type: 'calibration_complete',
+      threshold: calibratedThreshold,
+      sampleCount: sampleCount,
+      duration: calibrationDuration,
+      message: 'VAD calibration complete. You can now speak.'
+    }));
+    
+    // Transition to LISTENING state
+    this.sendStateUpdate(session, CallState.LISTENING);
+    logger.info(`🎤 Session ${session.id} ready for voice input with calibrated VAD threshold`);
   }
 }
 

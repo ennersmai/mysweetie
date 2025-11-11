@@ -39,12 +39,16 @@ export interface VoiceCallButtonProps {
 }
 
 export interface CallMessage {
-  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'ai_response_chunk' | 'tts_finished' | 'tts_stream_end' | 'tts_sentence_complete';
+  type: 'command' | 'transcript_update' | 'state_change' | 'error' | 'ai_response' | 'ai_response_chunk' | 'tts_finished' | 'tts_stream_end' | 'tts_sentence_complete' | 'calibration_start' | 'calibration_complete';
   command?: string;
   text?: string;
   is_final?: boolean;
   state?: keyof CallState;
   error?: string;
+  duration?: number;
+  threshold?: number;
+  sampleCount?: number;
+  message?: string;
 }
 
 export default function VoiceCallButton({ 
@@ -276,6 +280,45 @@ export default function VoiceCallButton({
           
         case 'error':
           onError?.(message.error || 'Voice call error occurred');
+          break;
+          
+        case 'calibration_start':
+          console.log('🎯 Calibration start received:', message);
+          if (audioManagerRef.current && websocketRef.current) {
+            // Start calibration mode
+            audioManagerRef.current.startCalibration();
+            
+            // Set up calibration callback to send audio chunks
+            audioManagerRef.current.setCalibrationCallback((chunk: ArrayBuffer) => {
+              if (websocketRef.current?.readyState === WebSocket.OPEN) {
+                // Send binary audio chunk for calibration
+                websocketRef.current.send(chunk);
+              }
+            });
+            
+            // After calibration duration, send calibration_complete message
+            const calibrationDuration = (message as any).duration || 2500;
+            setTimeout(() => {
+              if (audioManagerRef.current && websocketRef.current?.readyState === WebSocket.OPEN) {
+                console.log('✅ Calibration period complete, sending calibration_complete');
+                audioManagerRef.current.stopCalibration();
+                audioManagerRef.current.setCalibrationCallback(null);
+                websocketRef.current.send(JSON.stringify({ type: 'calibration_complete' }));
+              }
+            }, calibrationDuration);
+          }
+          break;
+          
+        case 'calibration_complete':
+          console.log('✅ Calibration complete:', message);
+          if (audioManagerRef.current) {
+            audioManagerRef.current.stopCalibration();
+            audioManagerRef.current.setCalibrationCallback(null);
+          }
+          // Show calibration result if available
+          if ((message as any).threshold !== undefined) {
+            console.log(`🎯 VAD threshold calibrated to: ${(message as any).threshold}`);
+          }
           break;
       }
     } catch (error) {

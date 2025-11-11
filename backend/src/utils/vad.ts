@@ -111,6 +111,67 @@ export class VoiceActivityDetector {
     return this.lastVoiceTime > 0 ? Date.now() - this.lastVoiceTime : Infinity;
   }
 
+  /**
+   * Calibrate VAD threshold based on background noise samples
+   * Analyzes audio samples to determine noise floor and adjusts threshold accordingly
+   * @param audioSamples - Array of PCM audio buffers representing background noise
+   * @returns The calibrated threshold value
+   */
+  public calibrateThreshold(audioSamples: Buffer[]): number {
+    if (audioSamples.length === 0) {
+      return this.config.energyThreshold;
+    }
+
+    const energyValues: number[] = [];
+
+    // Process all calibration samples to collect energy values
+    for (const audioData of audioSamples) {
+      const samples = this.bufferToFloat32(audioData);
+      const energy = this.calculateRMSEnergy(samples);
+      energyValues.push(energy);
+    }
+
+    if (energyValues.length === 0) {
+      return this.config.energyThreshold;
+    }
+
+    // Sort energy values to find percentiles
+    const sorted = [...energyValues].sort((a, b) => a - b);
+    
+    // Calculate noise floor as 90th percentile (to ignore occasional spikes)
+    const percentile90Index = Math.floor(sorted.length * 0.9);
+    const noiseFloor = sorted[percentile90Index] || sorted[sorted.length - 1] || 0.001;
+
+    // Set threshold to 2.5x the noise floor to avoid false positives
+    // This ensures voice is clearly above background noise
+    const calibratedThreshold = Math.max(
+      noiseFloor * 2.5,
+      this.config.energyThreshold * 0.5 // Don't go below half of original threshold
+    );
+
+    // Update the config with calibrated threshold
+    this.config.energyThreshold = calibratedThreshold;
+
+    // Clear energy history to start fresh with new threshold
+    this.energyHistory = [];
+
+    return calibratedThreshold;
+  }
+
+  /**
+   * Get current energy threshold
+   */
+  public getThreshold(): number {
+    return this.config.energyThreshold;
+  }
+
+  /**
+   * Set energy threshold manually
+   */
+  public setThreshold(threshold: number): void {
+    this.config.energyThreshold = Math.max(0.0001, threshold); // Minimum threshold
+  }
+
   private bufferToFloat32(buffer: Buffer): Float32Array {
     const samples = new Float32Array(buffer.length / 2);
     for (let i = 0; i < samples.length; i++) {
