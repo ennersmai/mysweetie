@@ -10,10 +10,12 @@
  */
 
 // AudioWorkletProcessor and registerProcessor are globals in AudioWorklet context
-// Access them via 'self' which is available in AudioWorklet execution context
+// In IIFE format, access them via globalThis (available in all JavaScript contexts)
+// Do NOT reference 'self' directly as it may not be defined in IIFE format
 // @ts-ignore - These are runtime globals provided by the browser
-const AudioWorkletProcessorClass = (self as any).AudioWorkletProcessor;
-const registerProcessorFn = (self as any).registerProcessor;
+const AudioWorkletProcessorClass = (globalThis as any).AudioWorkletProcessor;
+// @ts-ignore
+const registerProcessorFn = (globalThis as any).registerProcessor;
 
 class AECProcessor extends AudioWorkletProcessorClass {
   private aec: any = null;
