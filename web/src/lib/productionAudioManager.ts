@@ -30,6 +30,11 @@ export class ProductionAudioManager {
   private workletNode: AudioWorkletNode | null = null;
   private echoCancellationNode: AudioWorkletNode | null = null;
   private ttsReferenceCaptureNode: ScriptProcessorNode | null = null; // Captures TTS audio for echo cancellation
+  
+  // WebRTC loopback for native echo cancellation
+  private loopbackPeerConnection: RTCPeerConnection | null = null;
+  private webrtcDestination: MediaStreamAudioDestinationNode | null = null;
+  private processedMicStream: MediaStream | null = null;
   private ringBuffer: Float32Array[] = [];
   private readonly RING_BUFFER_SIZE = 350; // ~933ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
@@ -98,40 +103,30 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Load echo cancellation processor (includes audio capture)
-      await this.recordingContext.audioWorklet.addModule('/echo-cancellation-processor.js');
-      console.log('✅ Echo cancellation processor loaded');
+      // Set up WebRTC loopback for native echo cancellation
+      await this.setupWebRTCLoopback();
 
-      // Create echo cancellation worklet node
-      this.echoCancellationNode = new AudioWorkletNode(this.recordingContext, 'echo-cancellation-processor');
+      // Load audio worklet for processing the echo-cancelled stream
+      await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
+      console.log('✅ Audio processor loaded');
 
-      // Connect microphone → echo canceller → dummy destination (prevents GC, no feedback)
-      // Audio is sent via port.postMessage() in the worklet processor, NOT through destination
-      const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
-      source.connect(this.echoCancellationNode);
-      
-      // Create a dummy destination (GainNode with 0 gain) to keep the worklet alive
-      // This prevents garbage collection without causing feedback loop
-      const dummyDestination = this.recordingContext.createGain();
-      dummyDestination.gain.value = 0; // Mute to prevent any audio output
-      this.echoCancellationNode.connect(dummyDestination);
-      dummyDestination.connect(this.recordingContext.destination); // Connect to keep node alive, but gain=0 so no audio
+      // Create audio worklet node for processing echo-cancelled audio
+      this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor');
 
-      // Set up TTS reference signal capture for echo cancellation
-      this.setupTTSReferenceCapture();
+      // Connect processed microphone stream (with native AEC applied) to worklet
+      if (this.processedMicStream) {
+        const processedSource = this.recordingContext.createMediaStreamSource(this.processedMicStream);
+        processedSource.connect(this.workletNode);
+        console.log('✅ Connected processed mic stream (with native AEC) to worklet');
+      } else {
+        console.error('❌ Processed mic stream not available - falling back to raw mic');
+        const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
+        source.connect(this.workletNode);
+      }
 
-      console.log('✅ Audio pipeline connected: microphone → worklet → destination');
-
-      // Handle incoming echo-cancelled audio from worklet
-      this.echoCancellationNode.port.onmessage = (event) => {
-        // Handle statistics messages
-        if (event.data.type === 'stats') {
-          // Log stats more frequently to debug echo cancellation
-          console.log(`📊 Echo Cancel: ERLE=${event.data.erle.toFixed(2)}dB, InputPower=${event.data.inputPower?.toFixed(6) || 'N/A'}, OutputPower=${event.data.outputPower?.toFixed(6) || 'N/A'}, HasRef=${event.data.hasReference || false}`);
-          return;
-        }
-        
-        // Echo-cancelled PCM data
+      // Handle incoming processed audio from worklet
+      this.workletNode.port.onmessage = (event) => {
+        // Processed PCM data (already echo-cancelled by browser's native AEC)
         const pcmData: Float32Array = event.data;
         
         // Always maintain ring buffer (last ~1200ms of audio)
@@ -173,7 +168,7 @@ export class ProductionAudioManager {
         }
       };
 
-      console.log('✅ Echo cancellation message handler configured');
+      console.log('✅ Audio processing pipeline configured');
 
       return true;
     } catch (error) {
@@ -183,7 +178,62 @@ export class ProductionAudioManager {
   }
 
   /**
-   * Set up TTS reference signal capture for echo cancellation
+   * Set up WebRTC loopback for native echo cancellation
+   * This leverages the browser's built-in, hardware-accelerated AEC
+   */
+  private async setupWebRTCLoopback(): Promise<void> {
+    if (!this.playbackContext || !this.recordingContext || !this.mediaStream) {
+      throw new Error('Cannot setup WebRTC loopback - contexts not initialized');
+    }
+
+    console.log('🔄 Setting up WebRTC loopback for native echo cancellation...');
+
+    // Create MediaStreamDestination node for TTS audio output
+    // This will be used as the reference signal for echo cancellation
+    this.webrtcDestination = this.playbackContext.createMediaStreamDestination();
+    console.log('✅ Created WebRTC destination for TTS audio');
+
+    // Create loopback RTCPeerConnection
+    this.loopbackPeerConnection = new RTCPeerConnection({
+      iceServers: [] // No ICE servers needed for loopback
+    });
+
+    // Add TTS audio track (reference signal) to peer connection
+    const ttsTracks = this.webrtcDestination.stream.getAudioTracks();
+    ttsTracks.forEach(track => {
+      this.loopbackPeerConnection!.addTrack(track, this.webrtcDestination!.stream);
+      console.log('✅ Added TTS audio track to peer connection');
+    });
+
+    // Add microphone track (with AEC enabled) to peer connection
+    const micTracks = this.mediaStream.getAudioTracks();
+    micTracks.forEach(track => {
+      this.loopbackPeerConnection!.addTrack(track, this.mediaStream!);
+      console.log('✅ Added microphone track to peer connection');
+    });
+
+    // Set up handler for processed audio stream (with native AEC applied)
+    this.processedMicStream = new MediaStream();
+    this.loopbackPeerConnection.ontrack = (event) => {
+      // The ontrack event fires for remote tracks
+      // In our loopback, this is the microphone audio AFTER native AEC processing
+      if (event.track.kind === 'audio') {
+        this.processedMicStream!.addTrack(event.track);
+        console.log('✅ Received processed microphone track (with native AEC)');
+      }
+    };
+
+    // Complete the loopback by creating offer/answer
+    // We loop back to ourselves, so we use the same offer as both local and remote
+    const offer = await this.loopbackPeerConnection.createOffer();
+    await this.loopbackPeerConnection.setLocalDescription(offer);
+    await this.loopbackPeerConnection.setRemoteDescription(offer);
+    
+    console.log('✅ WebRTC loopback established - native AEC active');
+  }
+
+  /**
+   * Set up TTS reference signal capture for echo cancellation (DEPRECATED - using WebRTC loopback instead)
    * Creates a ScriptProcessorNode that captures TTS audio and sends it to echo canceller
    */
   private setupTTSReferenceCapture(): void {
@@ -270,25 +320,21 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // During TTS playback, disable VAD completely
-    // Browser's built-in echo cancellation (via getUserMedia) should handle most echo
-    // Our software echo cancellation isn't working effectively (ERLE too low)
-    // So we'll rely on VAD threshold adjustment instead
+    // During TTS playback, use native AEC (via WebRTC loopback) for echo cancellation
+    // Browser's native AEC should handle most echo, so we can use a moderate threshold
     if (this.isPlayingTTS) {
-      // Disable VAD completely during TTS to prevent echo from triggering it
-      // User can still interrupt by speaking loudly (but VAD won't detect it)
-      // Alternative: Use a very high threshold (10x) if we want barge-in
+      // Short grace period to allow native AEC to adapt
       const timeSinceTTSStart = performance.now() - (this.ttsStartTime || 0);
-      const gracePeriodMs = 500; // Short grace period
+      const gracePeriodMs = 300; // 300ms grace period for native AEC to adapt
       
       if (timeSinceTTSStart < gracePeriodMs) {
-        // Skip VAD during initial period
+        // Skip VAD during initial adaptation period
         return;
       }
       
-      // Use very high threshold (10x) to allow loud barge-in but filter echo
-      // This is a workaround until echo cancellation is fixed
-      this.currentVadThreshold = this.baseVadThreshold * 10.0; // Very high threshold
+      // Use moderate threshold (2x) - native AEC should handle most echo
+      // This allows normal barge-in while filtering residual echo
+      this.currentVadThreshold = this.baseVadThreshold * 2.0; // Moderate threshold
     }
     
     // Check if RMS is above both threshold and noise floor
@@ -776,14 +822,14 @@ export class ProductionAudioManager {
     
     this.currentSource.connect(gainNode);
     
-    // Route TTS audio through reference capture node for echo cancellation
-    if (this.ttsReferenceCaptureNode) {
-      gainNode.connect(this.ttsReferenceCaptureNode);
-      this.ttsReferenceCaptureNode.connect(this.playbackContext.destination);
-    } else {
-      // Fallback: direct connection if reference capture not available
-      gainNode.connect(this.playbackContext.destination);
+    // Route TTS audio through WebRTC destination for native echo cancellation
+    // Also connect to regular destination for playback
+    if (this.webrtcDestination) {
+      // Connect to WebRTC destination (for echo cancellation reference)
+      gainNode.connect(this.webrtcDestination);
     }
+    // Always connect to regular destination for playback
+    gainNode.connect(this.playbackContext.destination);
     
     // Store gain node for next crossfade
     this.lastGainNode = gainNode;
@@ -990,6 +1036,13 @@ export class ProductionAudioManager {
   cleanup(): void {
     this.stopRecording();
     this.stopPlayback();
+    
+    // Close WebRTC loopback connection
+    if (this.loopbackPeerConnection) {
+      this.loopbackPeerConnection.close();
+      this.loopbackPeerConnection = null;
+      console.log('✅ Closed WebRTC loopback connection');
+    }
     
     this.vadSpeaking = false;
     this.vadLastAboveThreshold = 0;
