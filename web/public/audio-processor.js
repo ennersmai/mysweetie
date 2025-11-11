@@ -26,6 +26,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.vadLastAboveThreshold = 0;
     this.vadMinFrames = 2; // Minimum consecutive frames to trigger speech
     this.vadHangoverMs = 800; // Silence duration before ending speech
+    this.frameCount = 0; // Frame counter for timing (since performance is not available)
     
     // VAD thresholds
     this.baseVadThreshold = 0.1;
@@ -131,7 +132,11 @@ class AudioProcessor extends AudioWorkletProcessor {
     const isSpeech = this.shouldTriggerVAD(rmsMic, rmsAI);
     
     // VAD state machine
-    const now = performance.now();
+    // Use frame count for timing since performance is not available in AudioWorklet
+    // At 48kHz, 128 samples per frame ≈ 2.67ms per frame
+    const frameTimeMs = (128 / 48000) * 1000; // Approximate frame duration
+    this.frameCount++;
+    const now = this.frameCount * frameTimeMs; // Approximate time in ms
     
     if (isSpeech) {
       this.vadConsecutiveFrames++;

@@ -90,10 +90,11 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Create TTS reference destination for echo-aware VAD
+      // Create TTS reference destination in RECORDING context (same sample rate as mic)
       // This captures TTS audio so the worklet can compare it with mic audio
-      this.ttsReferenceDestination = this.playbackContext.createMediaStreamDestination();
-      console.log('✅ Created TTS reference destination for echo-aware VAD');
+      // Must be in same context as worklet to avoid sample rate mismatch
+      this.ttsReferenceDestination = this.recordingContext.createMediaStreamDestination();
+      console.log('✅ Created TTS reference destination for echo-aware VAD (in recording context)');
 
       // Load audio worklet for echo-aware VAD
       await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
@@ -111,9 +112,10 @@ export class ProductionAudioManager {
       console.log('✅ Connected microphone to worklet input 0');
 
       // Connect TTS reference stream to worklet input 1
+      // The reference destination is in the recording context, so no sample rate mismatch
       this.ttsReferenceSource = this.recordingContext.createMediaStreamSource(this.ttsReferenceDestination.stream);
       this.ttsReferenceSource.connect(this.workletNode, 0, 1);
-      console.log('✅ Connected TTS reference to worklet input 1');
+      console.log('✅ Connected TTS reference to worklet input 1 (same sample rate as mic)');
 
       // Handle messages from echo-aware VAD worklet
       this.workletNode.port.onmessage = (event) => {
@@ -257,6 +259,53 @@ export class ProductionAudioManager {
     if (this.onSpeechEnd) {
       this.onSpeechEnd();
     }
+  }
+
+  /**
+   * Resample audio buffer from one sample rate to another using linear interpolation
+   */
+  private resampleAudioBuffer(sourceBuffer: AudioBuffer, sourceRate: number, targetRate: number): AudioBuffer | null {
+    if (!this.recordingContext) return null;
+    
+    if (sourceRate === targetRate) {
+      // No resampling needed - create new buffer with same data
+      const newBuffer = this.recordingContext.createBuffer(
+        sourceBuffer.numberOfChannels,
+        sourceBuffer.length,
+        targetRate
+      );
+      for (let channel = 0; channel < sourceBuffer.numberOfChannels; channel++) {
+        newBuffer.copyToChannel(sourceBuffer.getChannelData(channel), channel);
+      }
+      return newBuffer;
+    }
+    
+    const ratio = sourceRate / targetRate;
+    const targetLength = Math.floor(sourceBuffer.length / ratio);
+    
+    const resampledBuffer = this.recordingContext.createBuffer(
+      sourceBuffer.numberOfChannels,
+      targetLength,
+      targetRate
+    );
+    
+    // Linear interpolation resampling
+    for (let channel = 0; channel < sourceBuffer.numberOfChannels; channel++) {
+      const sourceData = sourceBuffer.getChannelData(channel);
+      const targetData = resampledBuffer.getChannelData(channel);
+      
+      for (let i = 0; i < targetLength; i++) {
+        const srcIndex = i * ratio;
+        const srcIndexFloor = Math.floor(srcIndex);
+        const srcIndexCeil = Math.min(srcIndexFloor + 1, sourceData.length - 1);
+        const fraction = srcIndex - srcIndexFloor;
+        
+        targetData[i] = sourceData[srcIndexFloor] * (1 - fraction) + 
+                       sourceData[srcIndexCeil] * fraction;
+      }
+    }
+    
+    return resampledBuffer;
   }
 
   /**
@@ -656,11 +705,41 @@ export class ProductionAudioManager {
     
     this.currentSource.connect(gainNode);
     
-    // Route TTS audio to both playback destination AND reference destination
-    // Reference destination feeds the echo-aware VAD worklet for comparison
-    gainNode.connect(this.playbackContext.destination); // User hears this
-    if (this.ttsReferenceDestination) {
-      gainNode.connect(this.ttsReferenceDestination); // Worklet compares this with mic
+    // Route TTS audio to playback destination (user hears this)
+    gainNode.connect(this.playbackContext.destination);
+    
+    // Route TTS audio to reference destination for echo-aware VAD
+    // Need to resample from 16kHz (playback context) to 48kHz (recording context)
+    if (this.ttsReferenceDestination && this.recordingContext) {
+      // Resample audio buffer from 16kHz to recording context sample rate
+      const resampledBuffer = this.resampleAudioBuffer(
+        audioBuffer,
+        this.playbackContext.sampleRate,
+        this.recordingContext.sampleRate
+      );
+      
+      if (resampledBuffer) {
+        const resampledSource = this.recordingContext.createBufferSource();
+        resampledSource.buffer = resampledBuffer;
+        const resampledGain = this.recordingContext.createGain();
+        resampledGain.gain.value = 1.5; // Match playback volume
+        
+        resampledSource.connect(resampledGain);
+        resampledGain.connect(this.ttsReferenceDestination);
+        
+        // Start resampled source at the same relative time
+        const recordingCurrentTime = this.recordingContext.currentTime;
+        const playbackCurrentTime = this.playbackContext.currentTime;
+        const timeOffset = startTime - playbackCurrentTime;
+        const resampledStartTime = recordingCurrentTime + timeOffset + 0.01;
+        
+        resampledSource.start(resampledStartTime);
+        
+        // Clean up when done
+        resampledSource.onended = () => {
+          resampledGain.disconnect();
+        };
+      }
     }
     
     // Store gain node for next crossfade
