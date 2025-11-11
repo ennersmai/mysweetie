@@ -44,6 +44,7 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
         this.addReferenceSignal(referenceData);
       } else if (event.data.type === 'reset') {
         // Reset filter (e.g., when TTS stops)
+        // Clear all filter state to prevent stale coefficients from affecting audio quality
         this.filterCoefficients.fill(0);
         this.referenceBuffer.fill(0);
         this.referenceIndex = 0;
@@ -51,6 +52,7 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
         this.referenceQueue = [];
         this.erle = 0;
         this.frameCount = 0;
+        console.log('🔄 Echo cancellation filter reset - all coefficients cleared');
       }
     };
   }
@@ -105,17 +107,21 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
     // Process queued reference signals first (thread-safe)
     this.processReferenceQueue();
     
-    // Check if we have enough reference signal data
-    // If not, just pass through mic input (no echo cancellation yet)
+    // Check if we have reference signal data (TTS is playing)
+    // If no reference signal, bypass echo cancellation to preserve audio quality
     const samplesInBuffer = (this.referenceWriteIndex - this.referenceIndex + this.referenceBuffer.length) % this.referenceBuffer.length;
-    const hasEnoughData = samplesInBuffer >= this.filterLength || this.referenceWriteIndex >= this.filterLength;
+    const hasReferenceSignal = this.referenceWriteIndex >= this.filterLength && samplesInBuffer >= this.filterLength;
     
-    for (let n = 0; n < inputLength; n++) {
-      if (!hasEnoughData) {
-        // Not enough reference data yet - pass through mic input
+    // If no reference signal, bypass echo cancellation (pass through mic input)
+    if (!hasReferenceSignal) {
+      for (let n = 0; n < inputLength; n++) {
         output[n] = micInput[n];
-        continue;
       }
+      return; // Early return - no echo cancellation needed
+    }
+    
+    // Echo cancellation active - process with NLMS filter
+    for (let n = 0; n < inputLength; n++) {
       
       // Get reference signal vector from delay line
       // Use referenceIndex which points to the oldest sample we need (filterLength samples ago)

@@ -400,11 +400,20 @@ export class ProductionAudioManager {
     const outputLength = Math.floor(pcm48k.length / ratio);
     const pcm16k = new Float32Array(outputLength);
     
+    // Linear interpolation downsampling (better quality than simple decimation)
     for (let i = 0; i < outputLength; i++) {
-      pcm16k[i] = pcm48k[Math.floor(i * ratio)];
+      const srcIndex = i * ratio;
+      const srcIndexFloor = Math.floor(srcIndex);
+      const srcIndexCeil = Math.min(srcIndexFloor + 1, pcm48k.length - 1);
+      const fraction = srcIndex - srcIndexFloor;
+      
+      if (srcIndexFloor < pcm48k.length) {
+        pcm16k[i] = pcm48k[srcIndexFloor] * (1 - fraction) + 
+                     pcm48k[srcIndexCeil] * fraction;
+      }
     }
     
-    console.log(`🔄 Downsampled ${pcm48k.length} samples @ ${sampleRate}Hz → ${pcm16k.length} samples @ ${targetRate}Hz`);
+    console.log(`🔄 Downsampled ${pcm48k.length} samples @ ${sampleRate}Hz → ${pcm16k.length} samples @ ${targetRate}Hz (linear interpolation)`);
     
     // Convert float32 (-1 to 1) → int16 (-32768 to 32767)
     const int16Data = new Int16Array(pcm16k.length);
@@ -865,9 +874,10 @@ export class ProductionAudioManager {
     this.pcmCarryByte = null;
     
     // Reset echo cancellation filter when TTS stops
+    // This ensures clean audio when user speaks without TTS playing
     if (this.echoCancellationNode) {
       this.echoCancellationNode.port.postMessage({ type: 'reset' });
-      console.log('🔄 Echo cancellation filter reset');
+      console.log('🔄 Echo cancellation filter reset - bypassing echo cancellation for clean audio');
     }
     
     console.log('🛑 Playback stopped and cleared');
