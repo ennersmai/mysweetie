@@ -271,18 +271,22 @@ export class ProductionAudioManager {
             }
     
     // During TTS playback, use higher threshold to prevent echo detection
-    // But still allow barge-in if user speaks loudly enough
+    // Echo cancellation should remove most echo, but we use a higher threshold as safety
+    // This allows barge-in if user speaks loudly enough, while filtering out residual echo
     if (this.isPlayingTTS) {
-      // Use higher threshold during TTS (already set above)
-      // Add a short grace period after TTS starts to prevent immediate echo
-      const timeSinceTTSStart = now - this.ttsStartTime;
-      const gracePeriodMs = 300; // 300ms grace period to prevent immediate echo
+      // Use much higher threshold during TTS (5x) to filter out any residual echo
+      // Echo cancellation should handle most of it, but this is a safety net
+      this.currentVadThreshold = this.baseVadThreshold * 5.0; // 5x threshold during TTS
+      
+      // Add a short grace period after TTS starts to allow echo cancellation to adapt
+      const timeSinceTTSStart = performance.now() - (this.ttsStartTime || 0);
+      const gracePeriodMs = 500; // 500ms grace period for echo cancellation to adapt
       
       if (timeSinceTTSStart < gracePeriodMs) {
         // Skip VAD during initial grace period to prevent immediate echo
         return;
       }
-      // After grace period, VAD is active with higher threshold (2.5x)
+      // After grace period, VAD is active with higher threshold (5x)
       // This allows barge-in while preventing most echo
     }
     
@@ -305,22 +309,13 @@ export class ProductionAudioManager {
         const timestamp = performance.now();
         console.log(`🎤 VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms (rms=${rms.toFixed(3)}, frames=${this.vadConsecutiveFrames}, threshold=${this.currentVadThreshold.toFixed(3)})`);
         
-        // Check if this is an interrupt
+        // Check if this is an interrupt (user speaking during TTS)
         const isInterrupt = this.isPlayingTTS;
         
         // Initialize utterance buffer WITH ring buffer (captures first word!)
         this.utteranceBuffer = [...this.ringBuffer];
         this.isSendingAudio = true;
         console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll)`);
-        
-        // Debug: Log ring buffer status for interrupts
-        if (isInterrupt) {
-          console.log(`🔍 INTERRUPT DEBUG: Ring buffer has ${this.ringBuffer.length} chunks`);
-          if (this.ringBuffer.length > 0) {
-            const totalSamples = this.ringBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
-            console.log(`🔍 INTERRUPT DEBUG: Total pre-roll samples: ${totalSamples} (~${(totalSamples / 48000 * 1000).toFixed(0)}ms)`);
-          }
-        }
         
         // Handle interrupt
         if (isInterrupt) {
@@ -489,7 +484,7 @@ export class ProductionAudioManager {
     
     // Set TTS playing state ONLY if not already playing
     if (!this.isPlayingTTS) {
-      console.log('🎵 Starting TTS playback session');
+      console.log('🎵 Starting TTS playback session - echo cancellation active, VAD threshold increased');
       this.isPlayingTTS = true;
       this.ttsStartTime = performance.now(); // Track start time for grace period
     }
@@ -816,7 +811,7 @@ export class ProductionAudioManager {
           // Wait a bit to see if more audio arrives before clearing TTS state
           setTimeout(() => {
             if (this.audioQueue.length === 0 && !this.isPlaying && this.isPlayingTTS) {
-              console.log('✅ TTS session complete - no more audio after delay');
+              console.log('✅ TTS session complete - no more audio after delay, re-enabling VAD');
               this.isPlayingTTS = false;
               this.ttsStartTime = 0; // Reset TTS start time
               if (this.onPlaybackComplete) {
@@ -898,7 +893,7 @@ export class ProductionAudioManager {
     }
     
     if (this.isPlayingTTS) {
-      console.log('✅ Marking TTS session as complete');
+      console.log('✅ Marking TTS session as complete, re-enabling VAD');
       this.isPlayingTTS = false;
       this.ttsStartTime = 0; // Reset TTS start time
       
