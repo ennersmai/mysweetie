@@ -111,14 +111,14 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@ennuicastr/webrtcaec3.js'] // Don't pre-bundle, let it load WASM at runtime
   },
+  // Configure worker bundles to use IIFE format
+  // This ensures 'self' is available in worklet context
+  // @ts-ignore - worker.format might not be in TypeScript definitions yet
   worker: {
-    format: 'es' // Use ES modules for workers/worklets
+    format: 'iife'
   },
   assetsInclude: ['**/*.wasm'], // Ensure WASM files are treated as assets
   build: {
-    worker: {
-      format: 'iife' // IIFE format ensures 'self' is available in worklet context
-    },
     rollupOptions: {
       output: {
         // Let Vite handle all file naming - it will compile .ts to .js automatically
