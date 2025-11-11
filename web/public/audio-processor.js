@@ -28,14 +28,11 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.vadHangoverMs = 800; // Silence duration before ending speech
     this.frameCount = 0; // Frame counter for timing (since performance is not available)
     
-    // AI RMS smoothing buffer for latency compensation
-    // At 48kHz, 128 samples per frame ≈ 2.67ms per frame
-    // 30 frames ≈ 80ms buffer (enough to cover acoustic latency)
-    const AI_RMS_BUFFER_SIZE = 30;
-    this.aiRmsBuffer = new Float32Array(AI_RMS_BUFFER_SIZE);
-    this.aiRmsBuffer.fill(0);
-    this.aiRmsBufferIndex = 0;
-    this.bufferResetFlag = false; // Flag to reset buffer when TTS stops
+    // Decaying peak RMS for latency compensation (leaky integrator)
+    // This creates a smooth energy tail that blankets delayed echo during micro-gaps
+    this.peakRmsAI = 0;
+    this.DECAY_FACTOR = 0.95; // Energy decays by 5% each frame (~2.67ms at 48kHz)
+    // This gives ~50% decay in ~13 frames (~35ms), matching acoustic latency
     
     // VAD thresholds
     this.baseVadThreshold = 0.1;
@@ -53,19 +50,11 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Message handler for TTS state updates
     this.port.onmessage = (event) => {
       if (event.data.type === 'tts_state') {
-        const wasSpeaking = this.isTTSSpeaking;
         this.isTTSSpeaking = event.data.isPlaying;
         
-        // Reset buffer when TTS starts (fresh start)
-        if (this.isTTSSpeaking && !wasSpeaking) {
-          this.aiRmsBuffer.fill(0);
-          this.aiRmsBufferIndex = 0;
-          this.bufferResetFlag = false;
-        }
-        
-        // Mark for reset when TTS stops (will reset on next process call)
-        if (!this.isTTSSpeaking && wasSpeaking) {
-          this.bufferResetFlag = true;
+        // Reset decaying peak when TTS stops (ready for next turn)
+        if (!this.isTTSSpeaking) {
+          this.peakRmsAI = 0;
         }
         
         if (this.port) {
@@ -154,30 +143,16 @@ class AudioProcessor extends AudioWorkletProcessor {
     const rmsMic = this.calculateRMS(micChannel);
     const rmsAI = this.calculateRMS(aiChannel);
     
-    // Reset AI RMS buffer when TTS stops (to avoid stale energy values)
-    if (this.bufferResetFlag && !this.isTTSSpeaking) {
-      this.aiRmsBuffer.fill(0);
-      this.aiRmsBufferIndex = 0;
-      this.bufferResetFlag = false;
-    }
-    
-    // Update AI RMS smoothing buffer (for latency compensation)
-    // This creates an "energy tail" that blankets delayed echo
+    // Implement "Decaying Peak" (leaky integrator) for latency compensation
+    // This creates a smooth energy tail that blankets delayed echo during micro-gaps
+    // The peak is either the current AI energy, or the last peak fading away, whichever is higher
+    // This mimics natural sound decay and prevents false triggers during buffer gaps
     if (this.isTTSSpeaking) {
-      this.aiRmsBuffer[this.aiRmsBufferIndex] = rmsAI;
-      this.aiRmsBufferIndex = (this.aiRmsBufferIndex + 1) % this.aiRmsBuffer.length;
+      this.peakRmsAI = Math.max(rmsAI, this.peakRmsAI * this.DECAY_FACTOR);
     }
     
-    // Find peak AI RMS over the buffer window (smoothed reference energy)
-    let peakRmsAI = 0;
-    for (let i = 0; i < this.aiRmsBuffer.length; i++) {
-      if (this.aiRmsBuffer[i] > peakRmsAI) {
-        peakRmsAI = this.aiRmsBuffer[i];
-      }
-    }
-    
-    // Make echo-aware VAD decision using smoothed peak RMS
-    const isSpeech = this.shouldTriggerVAD(rmsMic, peakRmsAI);
+    // Make echo-aware VAD decision using decaying peak RMS
+    const isSpeech = this.shouldTriggerVAD(rmsMic, this.peakRmsAI);
     
     // VAD state machine
     // Use frame count for timing since performance is not available in AudioWorklet
