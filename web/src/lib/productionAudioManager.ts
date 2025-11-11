@@ -270,22 +270,25 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // During TTS playback, disable VAD for longer to allow echo cancellation to adapt
-    // Echo cancellation filter starts with zero coefficients and needs time to learn
+    // During TTS playback, disable VAD completely
+    // Browser's built-in echo cancellation (via getUserMedia) should handle most echo
+    // Our software echo cancellation isn't working effectively (ERLE too low)
+    // So we'll rely on VAD threshold adjustment instead
     if (this.isPlayingTTS) {
-      // Extended grace period to allow echo cancellation filter to adapt
-      // Filter needs time to learn the echo path before VAD can work properly
+      // Disable VAD completely during TTS to prevent echo from triggering it
+      // User can still interrupt by speaking loudly (but VAD won't detect it)
+      // Alternative: Use a very high threshold (10x) if we want barge-in
       const timeSinceTTSStart = performance.now() - (this.ttsStartTime || 0);
-      const gracePeriodMs = 2000; // 2 seconds grace period for echo cancellation to adapt
+      const gracePeriodMs = 500; // Short grace period
       
       if (timeSinceTTSStart < gracePeriodMs) {
-        // Skip VAD during adaptation period to prevent echo from triggering it
+        // Skip VAD during initial period
         return;
       }
       
-      // After adaptation period, use moderate threshold (2x) - filter should have adapted by now
-      this.currentVadThreshold = this.baseVadThreshold * 2.0; // 2x threshold during TTS
-      // Echo cancellation should have removed most echo by now
+      // Use very high threshold (10x) to allow loud barge-in but filter echo
+      // This is a workaround until echo cancellation is fixed
+      this.currentVadThreshold = this.baseVadThreshold * 10.0; // Very high threshold
     }
     
     // Check if RMS is above both threshold and noise floor
