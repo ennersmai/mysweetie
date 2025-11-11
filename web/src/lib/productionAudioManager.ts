@@ -48,7 +48,9 @@ export class ProductionAudioManager {
   // PCM accumulation for TTS playback
   private pcmAccumulator: Int16Array[] = [];
   private pcmAccumulatorTimer: number | null = null;
-  private readonly PCM_ACCUMULATION_TIME = 200;
+  private readonly PCM_ACCUMULATION_TIME = 500; // Increased from 200ms to 500ms to reduce static noise
+  private readonly PCM_MIN_SAMPLES = 8000; // ~500ms at 16kHz, ~333ms at 24kHz - minimum samples before flushing
+  private pcmCarryByte: number | null = null; // Carry byte for odd-length buffers
 
   async initialize(): Promise<boolean> {
     try {
@@ -436,7 +438,30 @@ export class ProductionAudioManager {
     if (!this.playbackContext) return;
     
     try {
-      const samples = new Int16Array(audioData);
+      // Handle odd-length buffers by carrying over the last byte
+      let buffer = new Uint8Array(audioData);
+      
+      // If we have a carry byte from previous chunk, prepend it
+      if (this.pcmCarryByte !== null) {
+        const merged = new Uint8Array(buffer.length + 1);
+        merged[0] = this.pcmCarryByte;
+        merged.set(buffer, 1);
+        buffer = merged;
+        this.pcmCarryByte = null;
+      }
+      
+      // If buffer length is odd, save the last byte for next chunk
+      if (buffer.length % 2 === 1) {
+        this.pcmCarryByte = buffer[buffer.length - 1];
+        buffer = buffer.subarray(0, buffer.length - 1);
+      }
+      
+      // Create Int16Array from aligned buffer (must be multiple of 2)
+      if (buffer.length === 0) {
+        return; // Nothing to process
+      }
+      
+      const samples = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2);
       
       // Add to accumulator
       this.pcmAccumulator.push(samples);
@@ -446,34 +471,54 @@ export class ProductionAudioManager {
         clearTimeout(this.pcmAccumulatorTimer);
       }
       
-      // Set timer to flush accumulator
-      this.pcmAccumulatorTimer = window.setTimeout(() => {
-        this.flushPCMAccumulator();
-      }, this.PCM_ACCUMULATION_TIME);
-      
-      // If accumulator gets too large (>400ms worth), flush immediately
+      // Calculate total samples accumulated
       const totalSamples = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
-      const durationMs = (totalSamples / 24000) * 1000;
       
-      if (durationMs > 400) {
+      // Only flush if we have minimum samples OR if buffer is getting too large
+      const durationMs = (totalSamples / 24000) * 1000;
+      const shouldFlush = totalSamples >= this.PCM_MIN_SAMPLES || durationMs > 800;
+      
+      if (shouldFlush) {
+        // Flush immediately if we have enough samples
         if (this.pcmAccumulatorTimer) {
           clearTimeout(this.pcmAccumulatorTimer);
           this.pcmAccumulatorTimer = null;
         }
         this.flushPCMAccumulator();
+      } else {
+        // Set timer to flush accumulator after accumulation time
+        this.pcmAccumulatorTimer = window.setTimeout(() => {
+          this.flushPCMAccumulator();
+        }, this.PCM_ACCUMULATION_TIME);
       }
       
     } catch (error) {
       console.error('Error accumulating PCM chunk:', error);
+      // Reset carry byte on error
+      this.pcmCarryByte = null;
     }
   }
 
   private flushPCMAccumulator(): void {
-    if (this.pcmAccumulator.length === 0 || !this.playbackContext) return;
+    if (this.pcmAccumulator.length === 0 || !this.playbackContext) {
+      // Clear timer if accumulator is empty
+      if (this.pcmAccumulatorTimer) {
+        clearTimeout(this.pcmAccumulatorTimer);
+        this.pcmAccumulatorTimer = null;
+      }
+      return;
+    }
     
     try {
       // Combine all accumulated chunks
       const totalLength = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
+      
+      // Only flush if we have minimum samples (unless forced)
+      if (totalLength < this.PCM_MIN_SAMPLES) {
+        // Don't flush yet, wait for more samples
+        return;
+      }
+      
       const combinedSamples = new Int16Array(totalLength);
       
       let offset = 0;
@@ -490,7 +535,7 @@ export class ProductionAudioManager {
         channelData[i] = combinedSamples[i] / 32768.0;
       }
       
-      console.log(`📦 Flushed ${this.pcmAccumulator.length} PCM chunks → ${audioBuffer.duration.toFixed(3)}s buffer added to queue (queue length: ${this.audioQueue.length + 1})`);
+      console.log(`📦 Flushed ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer added to queue (queue length: ${this.audioQueue.length + 1})`);
       
       // Clear accumulator
       this.pcmAccumulator = [];
@@ -511,6 +556,7 @@ export class ProductionAudioManager {
       console.error('Error flushing PCM accumulator:', error);
       this.pcmAccumulator = [];
       this.pcmAccumulatorTimer = null;
+      this.pcmCarryByte = null; // Reset carry byte on error
     }
   }
 
@@ -520,7 +566,53 @@ export class ProductionAudioManager {
       clearTimeout(this.pcmAccumulatorTimer);
       this.pcmAccumulatorTimer = null;
     }
-    this.flushPCMAccumulator();
+    
+    // Force flush even if below minimum samples
+    const totalLength = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
+    if (totalLength === 0 || !this.playbackContext) {
+      this.pcmCarryByte = null;
+      return;
+    }
+    
+    try {
+      // Combine all accumulated chunks (force flush regardless of minimum)
+      const combinedSamples = new Int16Array(totalLength);
+      
+      let offset = 0;
+      for (const chunk of this.pcmAccumulator) {
+        combinedSamples.set(chunk, offset);
+        offset += chunk.length;
+      }
+      
+      // Create single smooth audio buffer
+      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 24000);
+      const channelData = audioBuffer.getChannelData(0);
+      
+      for (let i = 0; i < combinedSamples.length; i++) {
+        channelData[i] = combinedSamples[i] / 32768.0;
+      }
+      
+      console.log(`📦 Final flush: ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer`);
+      
+      // Clear accumulator
+      this.pcmAccumulator = [];
+      
+      // Add to playback queue
+      this.audioQueue.push(audioBuffer);
+      
+      // Start playback if not already playing
+      if (!this.isPlaying) {
+        console.log('🎵 Queue was idle, starting playback');
+        this.playNextInQueue();
+      }
+      
+    } catch (error) {
+      console.error('Error flushing remaining PCM:', error);
+      this.pcmAccumulator = [];
+    }
+    
+    // Clear carry byte on final flush
+    this.pcmCarryByte = null;
   }
 
   private isPCMData(data: ArrayBuffer): boolean {
@@ -617,6 +709,7 @@ export class ProductionAudioManager {
       this.pcmAccumulatorTimer = null;
     }
     this.pcmAccumulator = [];
+    this.pcmCarryByte = null;
     
     console.log('🛑 Playback stopped and cleared');
   }
@@ -722,6 +815,7 @@ export class ProductionAudioManager {
       this.pcmAccumulatorTimer = null;
     }
     this.pcmAccumulator = [];
+    this.pcmCarryByte = null;
     
     // Disconnect worklet
     if (this.workletNode) {
