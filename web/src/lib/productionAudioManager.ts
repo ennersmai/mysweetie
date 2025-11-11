@@ -28,6 +28,8 @@ export class ProductionAudioManager {
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
+  private echoCancellationNode: AudioWorkletNode | null = null;
+  private ttsReferenceCaptureNode: ScriptProcessorNode | null = null; // Captures TTS audio for echo cancellation
   private ringBuffer: Float32Array[] = [];
   private readonly RING_BUFFER_SIZE = 350; // ~933ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
@@ -87,30 +89,43 @@ export class ProductionAudioManager {
         console.log('✅ Echo cancellation is ENABLED');
       }
 
-      // Create separate playback context at 24kHz for TTS
-      this.playbackContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      // Create separate playback context at 16kHz to match TTS output (Resemble.ai outputs at 16kHz)
+      // This avoids resampling artifacts and pitch issues
+      this.playbackContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       console.log('ProductionAudioManager: Playback context created at', this.playbackContext.sampleRate, 'Hz');
 
       // Create recording context at browser's native sample rate (usually 48kHz)
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Load AudioWorklet processor
-      await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
-      console.log('✅ AudioWorklet processor loaded');
+      // Load echo cancellation processor (includes audio capture)
+      await this.recordingContext.audioWorklet.addModule('/echo-cancellation-processor.js');
+      console.log('✅ Echo cancellation processor loaded');
 
-      // Create worklet node
-      this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor');
+      // Create echo cancellation worklet node
+      this.echoCancellationNode = new AudioWorkletNode(this.recordingContext, 'echo-cancellation-processor');
 
-      // Connect microphone → worklet → destination (prevents GC)
+      // Connect microphone → echo canceller → destination (prevents GC)
       const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
-      source.connect(this.workletNode);
-      this.workletNode.connect(this.recordingContext.destination);
+      source.connect(this.echoCancellationNode);
+      this.echoCancellationNode.connect(this.recordingContext.destination);
+
+      // Set up TTS reference signal capture for echo cancellation
+      this.setupTTSReferenceCapture();
 
       console.log('✅ Audio pipeline connected: microphone → worklet → destination');
 
-      // Handle incoming PCM data from worklet
-      this.workletNode.port.onmessage = (event) => {
+      // Handle incoming echo-cancelled audio from worklet
+      this.echoCancellationNode.port.onmessage = (event) => {
+        // Handle statistics messages
+        if (event.data.type === 'stats') {
+          if (Math.random() < 0.01) {
+            console.log(`📊 Echo Cancellation Stats: ERLE=${event.data.erle.toFixed(2)}dB, Frames=${event.data.frameCount}`);
+          }
+          return;
+        }
+        
+        // Echo-cancelled PCM data
         const pcmData: Float32Array = event.data;
         
         // Always maintain ring buffer (last ~1200ms of audio)
@@ -152,13 +167,72 @@ export class ProductionAudioManager {
         }
       };
 
-      console.log('✅ AudioWorklet message handler configured');
+      console.log('✅ Echo cancellation message handler configured');
 
       return true;
     } catch (error) {
       console.error('Failed to initialize audio:', error);
       return false;
     }
+  }
+
+  /**
+   * Set up TTS reference signal capture for echo cancellation
+   * Creates a ScriptProcessorNode that captures TTS audio and sends it to echo canceller
+   */
+  private setupTTSReferenceCapture(): void {
+    if (!this.playbackContext || !this.echoCancellationNode || !this.recordingContext) {
+      console.warn('Cannot setup TTS reference capture - contexts not initialized');
+      return;
+    }
+
+    // Create ScriptProcessorNode to capture TTS audio (deprecated but works for this use case)
+    // Buffer size: 2048 samples = ~128ms at 16kHz
+    // Smaller buffer = lower latency for reference signal capture
+    const bufferSize = 2048;
+    this.ttsReferenceCaptureNode = this.playbackContext.createScriptProcessor(bufferSize, 1, 1);
+    
+    // Store sample rate ratio for resampling
+    const playbackSampleRate = this.playbackContext.sampleRate;
+    const recordingSampleRate = this.recordingContext.sampleRate;
+    const sampleRateRatio = recordingSampleRate / playbackSampleRate;
+    
+    this.ttsReferenceCaptureNode.onaudioprocess = (event) => {
+      // Get TTS audio data (reference signal) at playback sample rate
+      const inputData = event.inputBuffer.getChannelData(0);
+      
+      // Send reference signal to echo cancellation processor
+      if (this.echoCancellationNode && this.isPlayingTTS) {
+        // Resample reference signal to match recording context sample rate
+        const resampledLength = Math.floor(inputData.length * sampleRateRatio);
+        const resampledData = new Float32Array(resampledLength);
+        
+        // Linear interpolation resampling
+        for (let i = 0; i < resampledLength; i++) {
+          const srcIndex = i / sampleRateRatio;
+          const srcIndexFloor = Math.floor(srcIndex);
+          const srcIndexCeil = Math.min(srcIndexFloor + 1, inputData.length - 1);
+          const fraction = srcIndex - srcIndexFloor;
+          
+          if (srcIndexFloor < inputData.length) {
+            resampledData[i] = inputData[srcIndexFloor] * (1 - fraction) + 
+                              inputData[srcIndexCeil] * fraction;
+          }
+        }
+        
+        // Send resampled reference signal to echo cancellation processor
+        this.echoCancellationNode.port.postMessage({
+          type: 'reference',
+          data: resampledData
+        });
+      }
+      
+      // Pass through audio unchanged (connect to destination)
+      const outputData = event.outputBuffer.getChannelData(0);
+      outputData.set(inputData);
+    };
+    
+    console.log(`✅ TTS reference capture node created (playback: ${playbackSampleRate}Hz → recording: ${recordingSampleRate}Hz, ratio: ${sampleRateRatio.toFixed(3)})`);
   }
 
   /**
@@ -709,7 +783,15 @@ export class ProductionAudioManager {
     }
     
     this.currentSource.connect(gainNode);
-    gainNode.connect(this.playbackContext.destination);
+    
+    // Route TTS audio through reference capture node for echo cancellation
+    if (this.ttsReferenceCaptureNode) {
+      gainNode.connect(this.ttsReferenceCaptureNode);
+      this.ttsReferenceCaptureNode.connect(this.playbackContext.destination);
+    } else {
+      // Fallback: direct connection if reference capture not available
+      gainNode.connect(this.playbackContext.destination);
+    }
     
     // Store gain node for next crossfade
     this.lastGainNode = gainNode;
@@ -795,6 +877,12 @@ export class ProductionAudioManager {
     this.pcmAccumulator = [];
     this.pcmCarryByte = null;
     
+    // Reset echo cancellation filter when TTS stops
+    if (this.echoCancellationNode) {
+      this.echoCancellationNode.port.postMessage({ type: 'reset' });
+      console.log('🔄 Echo cancellation filter reset');
+    }
+    
     console.log('🛑 Playback stopped and cleared');
   }
 
@@ -823,6 +911,12 @@ export class ProductionAudioManager {
       this.vadLastAboveThreshold = 0;
       this.currentVadThreshold = this.baseVadThreshold; // Reset to normal threshold
       console.log(`🔄 VAD state reset after TTS completion - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
+      
+      // Reset echo cancellation filter when TTS session completes
+      if (this.echoCancellationNode) {
+        this.echoCancellationNode.port.postMessage({ type: 'reset' });
+        console.log('🔄 Echo cancellation filter reset after TTS completion');
+      }
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
