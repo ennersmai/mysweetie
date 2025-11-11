@@ -112,12 +112,14 @@ export class ProductionAudioManager {
       this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor');
 
       // Connect processed microphone stream (with native AEC applied) to worklet
-      if (this.processedMicStream) {
+      // Check if processed stream has tracks (ontrack might not have fired yet)
+      if (this.processedMicStream && this.processedMicStream.getAudioTracks().length > 0) {
         const processedSource = this.recordingContext.createMediaStreamSource(this.processedMicStream);
         processedSource.connect(this.workletNode);
         console.log('✅ Connected processed mic stream (with native AEC) to worklet');
       } else {
-        console.error('❌ Processed mic stream not available - falling back to raw mic');
+        console.warn('⚠️ Processed mic stream not ready - using raw mic stream (AEC may not work)');
+        // Fallback to raw mic stream if processed stream isn't ready
         const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
         source.connect(this.workletNode);
       }
