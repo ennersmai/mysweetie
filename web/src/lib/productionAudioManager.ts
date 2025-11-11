@@ -49,6 +49,11 @@ export class ProductionAudioManager {
   private readonly PCM_MIN_SAMPLES = 8000; // ~500ms at 16kHz, ~333ms at 24kHz - minimum samples before flushing
   private pcmCarryByte: number | null = null; // Carry byte for odd-length buffers
 
+  // Dynamic calibration state for echo-aware VAD
+  private calibrationStarted = false; // Track if calibration has been started for this call
+  private calibrationStopTimer: number | null = null; // Timer for stopping calibration
+  private readonly CALIBRATION_DURATION = 2000; // 2 seconds calibration window
+
   async initialize(): Promise<boolean> {
     try {
       console.log('ProductionAudioManager: Initializing AudioWorklet-based audio system');
@@ -131,6 +136,11 @@ export class ProductionAudioManager {
           // Audio data from worklet (for ring buffer and recording)
           const pcmData: Float32Array = message.data;
           
+          // Log VAD data for debugging and manual tuning
+          if (message.rmsMic !== undefined && message.peakRmsAI !== undefined) {
+            console.log(`VAD Data: Mic=${message.rmsMic.toFixed(4)}, AI Peak=${message.peakRmsAI.toFixed(4)}, TTS Playing=${message.isTTSSpeaking}`);
+          }
+          
           // Always maintain ring buffer (last ~1200ms of audio)
           this.ringBuffer.push(pcmData);
           if (this.ringBuffer.length > this.RING_BUFFER_SIZE) {
@@ -163,6 +173,10 @@ export class ProductionAudioManager {
         } else if (message.type === 'tts_state_ack') {
           // Worklet acknowledged TTS state change
           console.log(`✅ Worklet acknowledged TTS state: ${message.isPlaying ? 'playing' : 'stopped'}`);
+        } else if (message.type === 'calibration_started') {
+          console.log('✅ Echo-aware VAD calibration started');
+        } else if (message.type === 'calibration_complete') {
+          console.log(`✅ Echo-aware VAD calibration complete: learnedEchoRatio=${message.learnedEchoRatio?.toFixed(4)}, samples=${message.samples}`);
         }
       };
 
@@ -416,6 +430,28 @@ export class ProductionAudioManager {
           type: 'tts_state',
           isPlaying: true
         });
+      }
+      
+      // Start dynamic calibration on first TTS chunk of the call
+      if (!this.calibrationStarted && this.workletNode) {
+        console.log('🎯 Starting dynamic echo-aware VAD calibration');
+        this.calibrationStarted = true;
+        
+        // Send start calibration message to worklet
+        this.workletNode.port.postMessage({
+          type: 'start_calibration'
+        });
+        
+        // Schedule stop calibration after calibration duration
+        this.calibrationStopTimer = window.setTimeout(() => {
+          if (this.workletNode) {
+            console.log('🎯 Stopping dynamic echo-aware VAD calibration');
+            this.workletNode.port.postMessage({
+              type: 'stop_calibration'
+            });
+          }
+          this.calibrationStopTimer = null;
+        }, this.CALIBRATION_DURATION);
       }
     }
 
@@ -840,6 +876,12 @@ export class ProductionAudioManager {
     this.pcmAccumulator = [];
     this.pcmCarryByte = null;
     
+    // Clear calibration timer if still running
+    if (this.calibrationStopTimer) {
+      clearTimeout(this.calibrationStopTimer);
+      this.calibrationStopTimer = null;
+    }
+    
     // Note: Echo cancellation is handled by browser's native AEC via WebRTC loopback
     // No need to reset anything - browser handles it automatically
     
@@ -985,6 +1027,13 @@ export class ProductionAudioManager {
     }
     this.pcmAccumulator = [];
     this.pcmCarryByte = null;
+    
+    // Reset calibration state
+    if (this.calibrationStopTimer) {
+      clearTimeout(this.calibrationStopTimer);
+      this.calibrationStopTimer = null;
+    }
+    this.calibrationStarted = false;
     
     // Disconnect worklet
     if (this.workletNode) {

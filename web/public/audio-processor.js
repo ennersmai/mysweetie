@@ -13,6 +13,15 @@
  * - When AI is silent: Normal VAD threshold
  */
 
+// ============================================================================
+// TUNABLE PARAMETERS - Adjust these for manual tuning during debugging
+// ============================================================================
+const DECAY_FACTOR = 0.95; // Energy decays by 5% each frame (~2.67ms at 48kHz)
+// This gives ~50% decay in ~13 frames (~35ms), matching acoustic latency
+
+const BARGE_IN_MULTIPLIER = 1.5; // Mic must be this many times louder than TTS to barge in
+// ============================================================================
+
 class AudioProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -31,13 +40,10 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Decaying peak RMS for latency compensation (leaky integrator)
     // This creates a smooth energy tail that blankets delayed echo during micro-gaps
     this.peakRmsAI = 0;
-    this.DECAY_FACTOR = 0.95; // Energy decays by 5% each frame (~2.67ms at 48kHz)
-    // This gives ~50% decay in ~13 frames (~35ms), matching acoustic latency
     
     // VAD thresholds
     this.baseVadThreshold = 0.1;
     this.currentVadThreshold = 0.1;
-    this.bargeInMultiplier = 1.5; // Mic must be 1.5x louder than TTS to barge in
     
     // Noise floor detection
     this.noiseFloor = 0.005;
@@ -46,6 +52,11 @@ class AudioProcessor extends AudioWorkletProcessor {
     
     // Mic boost factor (to match main thread calculation)
     this.micBoostFactor = 5.0;
+    
+    // Dynamic calibration state for echo-aware VAD
+    this.isCalibrating = false;
+    this.echoRatioHistory = [];
+    this.learnedEchoRatio = 0.2; // Safe default (20% echo ratio)
     
     // Message handler for TTS state updates
     this.port.onmessage = (event) => {
@@ -67,6 +78,44 @@ class AudioProcessor extends AudioWorkletProcessor {
         // Update VAD threshold from calibration
         this.baseVadThreshold = event.data.threshold || 0.1;
         this.currentVadThreshold = this.baseVadThreshold;
+      } else if (event.data.type === 'start_calibration') {
+        // Start calibration mode - collect echo ratio samples
+        this.isCalibrating = true;
+        this.echoRatioHistory = [];
+        if (this.port) {
+          this.port.postMessage({
+            type: 'calibration_started'
+          });
+        }
+      } else if (event.data.type === 'stop_calibration') {
+        // Stop calibration mode - calculate learned echo ratio
+        this.isCalibrating = false;
+        
+        if (this.echoRatioHistory.length > 0) {
+          // Calculate average echo ratio
+          const sum = this.echoRatioHistory.reduce((a, b) => a + b, 0);
+          this.learnedEchoRatio = sum / this.echoRatioHistory.length;
+          
+          // Log the learned ratio
+          if (this.port) {
+            this.port.postMessage({
+              type: 'calibration_complete',
+              learnedEchoRatio: this.learnedEchoRatio,
+              samples: this.echoRatioHistory.length
+            });
+          }
+          console.log(`[AudioProcessor] Calibration complete: learnedEchoRatio=${this.learnedEchoRatio.toFixed(4)} (${this.echoRatioHistory.length} samples)`);
+        } else {
+          // No samples collected, keep default
+          if (this.port) {
+            this.port.postMessage({
+              type: 'calibration_complete',
+              learnedEchoRatio: this.learnedEchoRatio,
+              samples: 0
+            });
+          }
+          console.log(`[AudioProcessor] Calibration complete: no samples collected, using default ratio=${this.learnedEchoRatio.toFixed(4)}`);
+        }
       }
     };
   }
@@ -115,11 +164,13 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Update noise floor
     this.updateNoiseFloor(boostedRMSMic);
     
-    // Echo-aware logic with smoothed reference signal
+    // Echo-aware logic with smoothed reference signal and learned echo ratio
     if (this.isTTSSpeaking && peakRmsAI > 0) {
-      // AI is speaking: mic must be significantly louder than smoothed peak AI audio
-      // Using peakRmsAI instead of instantaneous rmsAI compensates for acoustic latency
-      const aiEnergyThreshold = (peakRmsAI * this.bargeInMultiplier) + this.currentVadThreshold;
+      // AI is speaking: use learned echo ratio to predict expected echo level
+      // Then require mic to be BARGE_IN_MULTIPLIER times louder than expected echo
+      const expectedEcho = peakRmsAI * this.learnedEchoRatio;
+      const bargeInThreshold = expectedEcho * BARGE_IN_MULTIPLIER;
+      const aiEnergyThreshold = bargeInThreshold + this.currentVadThreshold;
       return boostedRMSMic > aiEnergyThreshold && boostedRMSMic > this.noiseFloor;
     } else {
       // AI is silent: normal VAD threshold
@@ -148,7 +199,19 @@ class AudioProcessor extends AudioWorkletProcessor {
     // The peak is either the current AI energy, or the last peak fading away, whichever is higher
     // This mimics natural sound decay and prevents false triggers during buffer gaps
     if (this.isTTSSpeaking) {
-      this.peakRmsAI = Math.max(rmsAI, this.peakRmsAI * this.DECAY_FACTOR);
+      this.peakRmsAI = Math.max(rmsAI, this.peakRmsAI * DECAY_FACTOR);
+      
+      // Collect echo ratio samples during calibration
+      if (this.isCalibrating && this.peakRmsAI > 0.01 && rmsMic > 0.01) {
+        // Calculate current echo ratio (mic energy / AI peak energy)
+        const echoRatio = rmsMic / this.peakRmsAI;
+        this.echoRatioHistory.push(echoRatio);
+        
+        // Limit history size to prevent memory issues
+        if (this.echoRatioHistory.length > 1000) {
+          this.echoRatioHistory.shift();
+        }
+      }
     }
     
     // Make echo-aware VAD decision using decaying peak RMS
@@ -194,8 +257,7 @@ class AudioProcessor extends AudioWorkletProcessor {
       type: 'audio_data',
       data: micChannel,
       rmsMic: rmsMic,
-      rmsAI: rmsAI,
-      isSpeech: isSpeech,
+      peakRmsAI: this.peakRmsAI,
       isTTSSpeaking: this.isTTSSpeaking
     });
     
