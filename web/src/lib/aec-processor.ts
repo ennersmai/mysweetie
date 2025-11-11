@@ -21,9 +21,7 @@ declare const WebRtcAec3: (options?: { wasmBinary?: ArrayBuffer }) => Promise<{
 // AudioWorkletProcessor and registerProcessor are globals in AudioWorklet context
 // In IIFE format, access them via globalThis (available in all JavaScript contexts)
 // Note: TypeScript syntax removed for Blob execution - use plain JavaScript
-// @ts-expect-error - These are runtime globals provided by the browser
 const AudioWorkletProcessorClass = globalThis.AudioWorkletProcessor;
-// @ts-expect-error - These are runtime globals provided by the browser
 const registerProcessorFn = globalThis.registerProcessor;
 
 class AECProcessor extends AudioWorkletProcessorClass {
@@ -44,7 +42,6 @@ class AECProcessor extends AudioWorkletProcessorClass {
           
           // WebRtcAec3 is now in scope (from the combined module script)
           // No need to load or execute library code - it's already available
-          // @ts-expect-error - WebRtcAec3 is available from the library code in the same module
           if (typeof WebRtcAec3 === 'undefined') {
             throw new Error('WebRtcAec3 not found in scope - library code may not have loaded correctly');
           }
@@ -52,7 +49,6 @@ class AECProcessor extends AudioWorkletProcessorClass {
           // Step 1: Call the async factory function with the pre-fetched WASM buffer
           // This prevents network requests from within the Blob worklet
           // The factory accepts wasmBinary parameter to provide the WASM buffer directly
-          // @ts-expect-error - WebRtcAec3 is available from the library code in the same module
           const AEC3Module = await WebRtcAec3({ wasmBinary: wasm });
           
           // Step 4: Use the constructor from the module to create the instance
