@@ -119,12 +119,19 @@ export class ProductionAudioManager {
       // Connect microphone stream to worklet
       // Use processed stream if available (from WebRTC loopback), otherwise use raw mic
       // Browser's built-in AEC (via getUserMedia) should still work on raw mic
-      if (this.processedMicStream && this.processedMicStream.getAudioTracks().length > 0) {
-        const processedSource = this.recordingContext.createMediaStreamSource(this.processedMicStream);
+      const processedTracks = this.processedMicStream?.getAudioTracks() || [];
+      const hasUnmutedProcessedTracks = processedTracks.length > 0 && processedTracks.some(t => !t.muted);
+      
+      if (hasUnmutedProcessedTracks) {
+        const processedSource = this.recordingContext.createMediaStreamSource(this.processedMicStream!);
         processedSource.connect(this.workletNode);
         console.log('✅ Connected processed mic stream (with native AEC) to worklet');
       } else {
-        console.log('ℹ️ Using raw mic stream (browser AEC enabled via getUserMedia)');
+        if (processedTracks.length > 0) {
+          console.warn('⚠️ Processed tracks are muted - WebRTC loopback not working, using raw mic');
+        } else {
+          console.log('ℹ️ Using raw mic stream (browser AEC enabled via getUserMedia)');
+        }
         // Use raw mic stream - browser's AEC is already enabled via getUserMedia constraints
         const source = this.recordingContext.createMediaStreamSource(this.mediaStream);
         source.connect(this.workletNode);
@@ -280,13 +287,26 @@ export class ProductionAudioManager {
       receivers.forEach((receiver, idx) => {
         if (receiver.track && receiver.track.kind === 'audio') {
           console.log(`🔍 Receiver ${idx}: track enabled=${receiver.track.enabled}, muted=${receiver.track.muted}, readyState=${receiver.track.readyState}`);
+          // Try to unmute the track (browser may have muted it to prevent feedback)
+          if (receiver.track.muted) {
+            console.log(`🔧 Attempting to unmute track ${receiver.track.id}`);
+            // Note: We can't directly unmute, but we can try to use it anyway
+            // The muted state might be browser-enforced for loopback prevention
+          }
           if (!this.processedMicStream!.getAudioTracks().some(t => t.id === receiver.track.id)) {
             this.processedMicStream!.addTrack(receiver.track);
             trackReceived = true;
-            console.log('✅ Added track from receiver');
+            console.log('✅ Added track from receiver (may be muted by browser)');
           }
         }
       });
+    }
+    
+    // Check if all tracks are muted - if so, WebRTC loopback won't work
+    const allTracksMuted = this.processedMicStream.getAudioTracks().every(track => track.muted);
+    if (allTracksMuted && this.processedMicStream.getAudioTracks().length > 0) {
+      console.warn('⚠️ All processed tracks are muted - WebRTC loopback not working, will use raw mic');
+      trackReceived = false; // Force fallback to raw mic
     }
     
     console.log('✅ WebRTC loopback established - native AEC active', {
