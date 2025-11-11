@@ -28,6 +28,15 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.vadHangoverMs = 800; // Silence duration before ending speech
     this.frameCount = 0; // Frame counter for timing (since performance is not available)
     
+    // AI RMS smoothing buffer for latency compensation
+    // At 48kHz, 128 samples per frame ≈ 2.67ms per frame
+    // 30 frames ≈ 80ms buffer (enough to cover acoustic latency)
+    const AI_RMS_BUFFER_SIZE = 30;
+    this.aiRmsBuffer = new Float32Array(AI_RMS_BUFFER_SIZE);
+    this.aiRmsBuffer.fill(0);
+    this.aiRmsBufferIndex = 0;
+    this.bufferResetFlag = false; // Flag to reset buffer when TTS stops
+    
     // VAD thresholds
     this.baseVadThreshold = 0.1;
     this.currentVadThreshold = 0.1;
@@ -44,7 +53,21 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Message handler for TTS state updates
     this.port.onmessage = (event) => {
       if (event.data.type === 'tts_state') {
+        const wasSpeaking = this.isTTSSpeaking;
         this.isTTSSpeaking = event.data.isPlaying;
+        
+        // Reset buffer when TTS starts (fresh start)
+        if (this.isTTSSpeaking && !wasSpeaking) {
+          this.aiRmsBuffer.fill(0);
+          this.aiRmsBufferIndex = 0;
+          this.bufferResetFlag = false;
+        }
+        
+        // Mark for reset when TTS stops (will reset on next process call)
+        if (!this.isTTSSpeaking && wasSpeaking) {
+          this.bufferResetFlag = true;
+        }
+        
         if (this.port) {
           this.port.postMessage({
             type: 'tts_state_ack',
@@ -93,18 +116,21 @@ class AudioProcessor extends AudioWorkletProcessor {
   
   /**
    * Echo-aware VAD decision
+   * @param {number} rmsMic - Microphone RMS energy
+   * @param {number} peakRmsAI - Peak AI RMS energy over smoothing buffer (for latency compensation)
    */
-  shouldTriggerVAD(rmsMic, rmsAI) {
+  shouldTriggerVAD(rmsMic, peakRmsAI) {
     // Apply mic boost factor
     const boostedRMSMic = rmsMic * this.micBoostFactor;
     
     // Update noise floor
     this.updateNoiseFloor(boostedRMSMic);
     
-    // Echo-aware logic
-    if (this.isTTSSpeaking && rmsAI > 0) {
-      // AI is speaking: mic must be significantly louder than AI audio
-      const aiEnergyThreshold = (rmsAI * this.bargeInMultiplier) + this.currentVadThreshold;
+    // Echo-aware logic with smoothed reference signal
+    if (this.isTTSSpeaking && peakRmsAI > 0) {
+      // AI is speaking: mic must be significantly louder than smoothed peak AI audio
+      // Using peakRmsAI instead of instantaneous rmsAI compensates for acoustic latency
+      const aiEnergyThreshold = (peakRmsAI * this.bargeInMultiplier) + this.currentVadThreshold;
       return boostedRMSMic > aiEnergyThreshold && boostedRMSMic > this.noiseFloor;
     } else {
       // AI is silent: normal VAD threshold
@@ -128,8 +154,30 @@ class AudioProcessor extends AudioWorkletProcessor {
     const rmsMic = this.calculateRMS(micChannel);
     const rmsAI = this.calculateRMS(aiChannel);
     
-    // Make echo-aware VAD decision
-    const isSpeech = this.shouldTriggerVAD(rmsMic, rmsAI);
+    // Reset AI RMS buffer when TTS stops (to avoid stale energy values)
+    if (this.bufferResetFlag && !this.isTTSSpeaking) {
+      this.aiRmsBuffer.fill(0);
+      this.aiRmsBufferIndex = 0;
+      this.bufferResetFlag = false;
+    }
+    
+    // Update AI RMS smoothing buffer (for latency compensation)
+    // This creates an "energy tail" that blankets delayed echo
+    if (this.isTTSSpeaking) {
+      this.aiRmsBuffer[this.aiRmsBufferIndex] = rmsAI;
+      this.aiRmsBufferIndex = (this.aiRmsBufferIndex + 1) % this.aiRmsBuffer.length;
+    }
+    
+    // Find peak AI RMS over the buffer window (smoothed reference energy)
+    let peakRmsAI = 0;
+    for (let i = 0; i < this.aiRmsBuffer.length; i++) {
+      if (this.aiRmsBuffer[i] > peakRmsAI) {
+        peakRmsAI = this.aiRmsBuffer[i];
+      }
+    }
+    
+    // Make echo-aware VAD decision using smoothed peak RMS
+    const isSpeech = this.shouldTriggerVAD(rmsMic, peakRmsAI);
     
     // VAD state machine
     // Use frame count for timing since performance is not available in AudioWorklet
