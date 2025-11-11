@@ -28,8 +28,6 @@ export class ProductionAudioManager {
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
-  private echoCancellationNode: AudioWorkletNode | null = null;
-  private ttsReferenceCaptureNode: ScriptProcessorNode | null = null; // Captures TTS audio for echo cancellation
   
   // WebRTC loopback for native echo cancellation
   private loopbackPeerConnection: RTCPeerConnection | null = null;
@@ -232,65 +230,6 @@ export class ProductionAudioManager {
     console.log('✅ WebRTC loopback established - native AEC active');
   }
 
-  /**
-   * Set up TTS reference signal capture for echo cancellation (DEPRECATED - using WebRTC loopback instead)
-   * Creates a ScriptProcessorNode that captures TTS audio and sends it to echo canceller
-   */
-  private setupTTSReferenceCapture(): void {
-    if (!this.playbackContext || !this.echoCancellationNode || !this.recordingContext) {
-      console.warn('Cannot setup TTS reference capture - contexts not initialized');
-      return;
-    }
-
-    // Create ScriptProcessorNode to capture TTS audio (deprecated but works for this use case)
-    // Buffer size: 2048 samples = ~128ms at 16kHz
-    // Smaller buffer = lower latency for reference signal capture
-    const bufferSize = 2048;
-    this.ttsReferenceCaptureNode = this.playbackContext.createScriptProcessor(bufferSize, 1, 1);
-    
-    // Store sample rate ratio for resampling
-    const playbackSampleRate = this.playbackContext.sampleRate;
-    const recordingSampleRate = this.recordingContext.sampleRate;
-    const sampleRateRatio = recordingSampleRate / playbackSampleRate;
-    
-    this.ttsReferenceCaptureNode.onaudioprocess = (event) => {
-      // Get TTS audio data (reference signal) at playback sample rate
-      const inputData = event.inputBuffer.getChannelData(0);
-      
-      // ALWAYS send reference signal to echo cancellation processor when TTS audio is playing
-      // Don't check isPlayingTTS flag - if audio is coming through, send it
-      if (this.echoCancellationNode) {
-        // Resample reference signal to match recording context sample rate
-        const resampledLength = Math.floor(inputData.length * sampleRateRatio);
-        const resampledData = new Float32Array(resampledLength);
-        
-        // Linear interpolation resampling
-        for (let i = 0; i < resampledLength; i++) {
-          const srcIndex = i / sampleRateRatio;
-          const srcIndexFloor = Math.floor(srcIndex);
-          const srcIndexCeil = Math.min(srcIndexFloor + 1, inputData.length - 1);
-          const fraction = srcIndex - srcIndexFloor;
-          
-          if (srcIndexFloor < inputData.length) {
-            resampledData[i] = inputData[srcIndexFloor] * (1 - fraction) + 
-                              inputData[srcIndexCeil] * fraction;
-          }
-        }
-        
-        // Send resampled reference signal to echo cancellation processor
-        this.echoCancellationNode.port.postMessage({
-          type: 'reference',
-          data: resampledData
-        });
-      }
-      
-      // Pass through audio unchanged (connect to destination)
-      const outputData = event.outputBuffer.getChannelData(0);
-      outputData.set(inputData);
-    };
-    
-    console.log(`✅ TTS reference capture node created (playback: ${playbackSampleRate}Hz → recording: ${recordingSampleRate}Hz, ratio: ${sampleRateRatio.toFixed(3)})`);
-  }
 
   /**
    * VAD analysis on raw PCM data
