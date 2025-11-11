@@ -29,11 +29,18 @@ const CALIBRATION_ENERGY_FLOOR = 0.001; // Minimum energy for calibration data c
 // ============================================================================
 
 class AudioProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [{
+      name: 'isTTSSpeaking',
+      defaultValue: 0,
+      minValue: 0,
+      maxValue: 1,
+      automationRate: 'a-rate' // Sample-accurate
+    }];
+  }
+
   constructor(options) {
     super();
-    
-    // TTS state (updated via messages from main thread)
-    this.isTTSSpeaking = false;
     
     // VAD state machine
     this.vadSpeaking = false;
@@ -64,23 +71,9 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.echoRatioHistory = [];
     this.learnedEchoRatio = 0.7; // Safe default - "hot mic" fallback (70% echo ratio)
     
-    // Message handler for TTS state updates
+    // Message handler (no longer handles tts_state - now uses synchronous parameter)
     this.port.onmessage = (event) => {
-      if (event.data.type === 'tts_state') {
-        this.isTTSSpeaking = event.data.isPlaying;
-        
-        // Reset decaying peak when TTS stops (ready for next turn)
-        if (!this.isTTSSpeaking) {
-          this.peakRmsAI = 0;
-        }
-        
-        if (this.port) {
-          this.port.postMessage({
-            type: 'tts_state_ack',
-            isPlaying: this.isTTSSpeaking
-          });
-        }
-      } else if (event.data.type === 'vad_threshold') {
+      if (event.data.type === 'vad_threshold') {
         // Update VAD threshold from calibration
         this.baseVadThreshold = event.data.threshold || 0.1;
         this.currentVadThreshold = this.baseVadThreshold;
@@ -174,8 +167,9 @@ class AudioProcessor extends AudioWorkletProcessor {
    * Echo-aware VAD decision
    * @param {number} rmsMic - Microphone RMS energy
    * @param {number} peakRmsAI - Peak AI RMS energy over smoothing buffer (for latency compensation)
+   * @param {boolean} isTTSSpeaking - Whether TTS is currently playing (from synchronous parameter)
    */
-  shouldTriggerVAD(rmsMic, peakRmsAI) {
+  shouldTriggerVAD(rmsMic, peakRmsAI, isTTSSpeaking) {
     // Apply mic boost factor
     const boostedRMSMic = rmsMic * this.micBoostFactor;
     
@@ -183,7 +177,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.updateNoiseFloor(boostedRMSMic);
     
     // Echo-aware logic with smoothed reference signal and learned echo ratio
-    if (this.isTTSSpeaking) {
+    if (isTTSSpeaking) {
       // ONLY apply barge-in logic if the AI's voice is loud enough to be a reliable reference
       if (peakRmsAI > AI_ENERGY_FLOOR) {
         // AI is speaking: use learned echo ratio to predict expected echo level
@@ -212,6 +206,10 @@ class AudioProcessor extends AudioWorkletProcessor {
       return true; // Keep processor alive
     }
     
+    // Read TTS state from synchronous parameter (guaranteed to be available for this frame)
+    const isTTSSpeakingParam = parameters.isTTSSpeaking;
+    const isTTSSpeaking = isTTSSpeakingParam[0] > 0.5; // It's an array, check the first value
+    
     const micChannel = micInput[0];
     const aiChannel = aiInput && aiInput[0] ? aiInput[0] : null;
     
@@ -223,7 +221,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // This creates a smooth energy tail that blankets delayed echo during micro-gaps
     // The peak is either the current AI energy, or the last peak fading away, whichever is higher
     // This mimics natural sound decay and prevents false triggers during buffer gaps
-    if (this.isTTSSpeaking) {
+    if (isTTSSpeaking) {
       this.peakRmsAI = Math.max(rmsAI, this.peakRmsAI * DECAY_FACTOR);
       
       // Collect echo ratio samples during calibration
@@ -247,7 +245,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     }
     
     // Make echo-aware VAD decision using decaying peak RMS
-    const isSpeech = this.shouldTriggerVAD(rmsMic, this.peakRmsAI);
+    const isSpeech = this.shouldTriggerVAD(rmsMic, this.peakRmsAI, isTTSSpeaking);
     
     // VAD state machine
     // Use frame count for timing since performance is not available in AudioWorklet
@@ -283,6 +281,11 @@ class AudioProcessor extends AudioWorkletProcessor {
       }
     }
     
+    // Reset decaying peak when TTS stops (ready for next turn)
+    if (!isTTSSpeaking && this.peakRmsAI > 0) {
+      this.peakRmsAI = 0;
+    }
+    
     // Always forward microphone audio to main thread for STT processing
     // (when speech is detected, the main thread will use this data)
     this.port.postMessage({
@@ -290,7 +293,7 @@ class AudioProcessor extends AudioWorkletProcessor {
       data: micChannel,
       rmsMic: rmsMic,
       peakRmsAI: this.peakRmsAI,
-      isTTSSpeaking: this.isTTSSpeaking
+      isTTSSpeaking: isTTSSpeaking
     });
     
     // Return true to keep the processor alive

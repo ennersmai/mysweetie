@@ -29,6 +29,7 @@ export class ProductionAudioManager {
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
+  private isTTSSpeakingParam: AudioParam | null = null; // Synchronous parameter for TTS state
   
   // Echo-aware VAD: TTS reference signal for comparison
   private ttsReferenceDestination: MediaStreamAudioDestinationNode | null = null;
@@ -116,6 +117,16 @@ export class ProductionAudioManager {
         numberOfInputs: 2,
         numberOfOutputs: 0 // No audio output, only messages
       });
+      
+      // Get reference to synchronous parameter for TTS state (eliminates race condition)
+      const param = this.workletNode.parameters.get('isTTSSpeaking');
+      if (!param) {
+        console.error('⚠️ Failed to get isTTSSpeaking parameter - race condition fix not available');
+        this.isTTSSpeakingParam = null;
+      } else {
+        this.isTTSSpeakingParam = param;
+        console.log('✅ Synchronous TTS state parameter acquired - race condition eliminated');
+      }
 
       // Connect microphone stream to worklet input 0
       const micSource = this.recordingContext.createMediaStreamSource(this.mediaStream);
@@ -180,9 +191,6 @@ export class ProductionAudioManager {
           if (this.isSendingAudio) {
             this.utteranceBuffer.push(pcmData);
           }
-        } else if (message.type === 'tts_state_ack') {
-          // Worklet acknowledged TTS state change
-          console.log(`✅ Worklet acknowledged TTS state: ${message.isPlaying ? 'playing' : 'stopped'}`);
         } else if (message.type === 'calibration_started') {
           console.log('✅ Echo-aware VAD calibration started');
         } else if (message.type === 'calibration_complete') {
@@ -434,12 +442,10 @@ export class ProductionAudioManager {
       console.log('🎵 Starting TTS playback session - echo-aware VAD active');
       this.isPlayingTTS = true;
       
-      // Notify worklet that TTS is starting
-      if (this.workletNode) {
-        this.workletNode.port.postMessage({
-          type: 'tts_state',
-          isPlaying: true
-        });
+      // SYNC LOCK: Set TTS state synchronously via parameter (eliminates race condition)
+      if (this.isTTSSpeakingParam && this.recordingContext) {
+        console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 1.0');
+        this.isTTSSpeakingParam.setValueAtTime(1.0, this.recordingContext.currentTime);
       }
       
       // Start dynamic calibration on first TTS chunk of the call
@@ -861,12 +867,10 @@ export class ProductionAudioManager {
               this.isPlayingTTS = false;
               this.isFirstBuffer = true; // Reset for next TTS session
               
-              // Notify worklet that TTS stopped
-              if (this.workletNode) {
-                this.workletNode.port.postMessage({
-                  type: 'tts_state',
-                  isPlaying: false
-                });
+              // SYNC LOCK: Set TTS state synchronously via parameter
+              if (this.isTTSSpeakingParam && this.recordingContext) {
+                console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
+                this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
               }
               
               if (this.onPlaybackComplete) {
@@ -905,13 +909,13 @@ export class ProductionAudioManager {
     this.audioQueue = [];
     this.isPlaying = false;
     
-    // Notify worklet that TTS stopped
-    if (this.isPlayingTTS && this.workletNode) {
+    // SYNC LOCK: Set TTS state synchronously via parameter
+    if (this.isPlayingTTS) {
       this.isPlayingTTS = false;
-      this.workletNode.port.postMessage({
-        type: 'tts_state',
-        isPlaying: false
-      });
+      if (this.isTTSSpeakingParam && this.recordingContext) {
+        console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
+        this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
+      }
     }
     
     this.playbackPlayhead = 0; // Reset playhead
@@ -960,12 +964,10 @@ export class ProductionAudioManager {
         console.log('✅ Marking TTS session as complete, re-enabling VAD');
         this.isPlayingTTS = false;
         
-        // Notify worklet that TTS stopped
-        if (this.workletNode) {
-          this.workletNode.port.postMessage({
-            type: 'tts_state',
-            isPlaying: false
-          });
+        // SYNC LOCK: Set TTS state synchronously via parameter
+        if (this.isTTSSpeakingParam && this.recordingContext) {
+          console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
+          this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
         }
       
       // Reset VAD state to ensure clean detection after TTS
