@@ -10,6 +10,10 @@
 // The ?worker&url suffix tells Vite to process it and return the final asset URL
 import aecWorkletUrl from './aec-processor.ts?worker&url';
 
+// The webrtcaec3 JS file is in public/ and copied by our Vite plugin
+// The library will find its WASM file relative to where the JS file is loaded from
+const JS_URL = '/webrtcaec3-0.3.0.js';
+
 export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;
   private playbackContext: AudioContext | null = null;
@@ -120,6 +124,7 @@ export class ProductionAudioManager {
       console.log('✅ AEC worklet node created');
 
       // Initialize AEC via message
+      // The library will fetch its own WASM file relative to where the JS file is loaded from
       const aecInitPromise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('AEC initialization timeout'));
@@ -137,10 +142,12 @@ export class ProductionAudioManager {
         };
       });
 
-      // Send init message to AEC worklet
+      // Send init message to AEC worklet with JS URL
+      // The library will handle fetching its own WASM file
       this.aecNode.port.postMessage({
         type: 'init',
-        sampleRate: this.recordingContext.sampleRate
+        sampleRate: this.recordingContext.sampleRate,
+        jsUrl: JS_URL // Pass the URL to the JS library file
       });
 
       // Wait for AEC initialization

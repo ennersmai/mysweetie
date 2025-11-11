@@ -19,10 +19,8 @@ const registerProcessorFn = (globalThis as any).registerProcessor;
 
 class AECProcessor extends AudioWorkletProcessorClass {
   private aec: any = null;
-  private aecModule: any = null; // The WebRtcAec3 module instance
+  private outBuf: Float32Array[] | null = null; // Pre-allocated buffer for clean output
   private sampleRate: number = 48000; // Default sample rate
-  private renderNumChannels: number = 1; // Mono render/output (TTS) - what's being played
-  private captureNumChannels: number = 1; // Mono capture/input (mic) - what's being recorded
   
   constructor() {
     super();
@@ -31,38 +29,43 @@ class AECProcessor extends AudioWorkletProcessorClass {
     this.port.onmessage = async (ev: MessageEvent) => {
       if (ev.data.type === 'init') {
         try {
-          this.sampleRate = ev.data.sampleRate || 48000;
+          const { sampleRate, jsUrl } = ev.data;
+          this.sampleRate = sampleRate || 48000;
           
-          // Step 1: Dynamically import the library from public directory
-          // Loading from public URL prevents Vite from bundling it and breaking WASM loading code
-          // The library expects to load WASM from /webrtcaec3-0.3.0.wasm (from public directory)
-          // @vite-ignore tells Vite to treat this as a runtime URL, not a bundled module
-          // Using a variable prevents TypeScript from resolving it as a module path at compile time
-          const libPath: string = '/webrtcaec3-0.3.0.js';
-          const mod = await import(/* @vite-ignore */ libPath);
+          // Step 1: Load the plain JS library using importScripts
+          // AudioWorklets support importScripts() but not dynamic imports
+          // This loads the library and makes it available as a global
+          // The library will find its WASM file relative to where the JS file is loaded from
+          console.log('Loading webrtcaec3 JS library from:', jsUrl);
+          importScripts(jsUrl);
           
-          // Temporary: Log mod shape for debugging export structure
-          console.log('webrtcaec3 module shape:', Object.keys(mod), 'default:', !!mod.default, 'WebRtcAec3:', !!(mod as any).WebRtcAec3);
+          // Step 2: Get the WebRtcAec3 factory function (now available as global)
+          // The library should be available as a global after importScripts
+          // @ts-ignore - WebRtcAec3 is a global after importScripts
+          const WebRtcAec3 = (globalThis as any).WebRtcAec3;
           
-          const WebRtcAec3 = (mod as any).default ?? (mod as any).WebRtcAec3;
+          if (!WebRtcAec3) {
+            throw new Error('WebRtcAec3 not found after loading library');
+          }
           
-          // Step 2: Get the WebRtcAec3 module instance
-          // WebRtcAec3() is a function that returns a promise for the module
-          // The library will automatically find the WASM file if it's accessible
-          // WASM should be at /webrtcaec3-0.3.0.wasm (from public directory)
-          this.aecModule = await WebRtcAec3();
+          // Step 3: Call the async factory function to get the module
+          // API: await WebRtcAec3() - takes no parameters, fetches WASM itself
+          // The library will fetch its WASM file relative to where the JS file was loaded from
+          const AEC3Module = await WebRtcAec3();
           
-          // Step 2: Create AEC3 instance with constructor
-          // Constructor: (sampleRate, renderNumChannels, captureNumChannels)
-          // renderNumChannels = number of TTS/render channels (mono = 1)
-          // captureNumChannels = number of mic/capture channels (mono = 1)
-          this.aec = new this.aecModule.AEC3(
-            this.sampleRate,
-            this.renderNumChannels,
-            this.captureNumChannels
-          );
+          // Step 4: Use the constructor from the module to create the instance
+          // API: new AEC3(sampleRate, outputChannels, inputChannels)
+          // outputChannels = 1 (TTS/render), inputChannels = 1 (mic/capture)
+          this.aec = new AEC3Module.AEC3(this.sampleRate, 1, 1);
           
-          console.log(`✅ AEC initialized at ${this.sampleRate}Hz (${this.renderNumChannels} render, ${this.captureNumChannels} capture channels)`);
+          // Step 5: Pre-allocate output buffer according to library's required size
+          // API: const bufSz = aec.processSize(inputData)
+          // A standard worklet frame is 128 samples
+          const tempInput = [new Float32Array(128)]; // Dummy input to get the size
+          const bufSz = this.aec.processSize(tempInput);
+          this.outBuf = [new Float32Array(bufSz)]; // Library expects array of Float32Arrays
+          
+          console.log(`✅ AEC initialized at ${this.sampleRate}Hz (1 render, 1 capture channel), buffer size: ${bufSz}`);
           
           // Notify main thread that initialization is complete
           this.port.postMessage({ type: 'init-done' });
@@ -70,7 +73,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
           console.error('❌ Failed to initialize AEC:', error);
           this.port.postMessage({ 
             type: 'init-error', 
-            error: error.message 
+            error: error.message || String(error)
           });
         }
       }
@@ -78,8 +81,8 @@ class AECProcessor extends AudioWorkletProcessorClass {
   }
   
   process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
-    // Guard: If AEC is not initialized, output silence
-    if (!this.aec) {
+    // Guard: If AEC is not initialized or output buffer not ready, output silence
+    if (!this.aec || !this.outBuf) {
       const output = outputs[0];
       if (output && output[0]) {
         output[0].fill(0); // Fill with silence
@@ -88,6 +91,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
     }
     
     // Get inputs: mic on input 0, TTS on input 1
+    // API expects arrays of Float32Arrays (array of channels)
     const micInput = inputs[0];
     const ttsInput = inputs[1];
     const cleanOutput = outputs[0];
@@ -97,50 +101,44 @@ class AECProcessor extends AudioWorkletProcessorClass {
       return true; // Keep processor alive
     }
     
-    const micChannel = micInput[0];
-    const ttsChannel = ttsInput && ttsInput[0] ? ttsInput[0] : null;
-    const outputChannel = cleanOutput[0];
+    // API expects arrays of Float32Arrays
+    const micChannels = micInput; // Already in correct format
+    const ttsChannels = ttsInput || [new Float32Array(0)]; // Provide empty array if no TTS
     
     try {
-      // Analyze playback: Feed TTS audio to AEC's analyze method
-      // analyze expects Float32Array[] (array of channels)
-      // This tells the AEC what audio is being played so it can cancel echoes
-      if (ttsChannel && ttsChannel.length > 0) {
-        this.aec.analyze([ttsChannel]); // Wrap in array for channel format
+      // Step 1: Analyze the playback/render stream (TTS)
+      // API: aec.analyze(ttsInput) where ttsInput is Float32Array[]
+      if (ttsChannels[0] && ttsChannels[0].length > 0) {
+        this.aec.analyze(ttsChannels);
       }
       
-      // Process microphone: Process mic input against analyzed playback
-      // process expects (outputBuffer, inputData) where:
-      // - outputBuffer is Float32Array[] (array of channels) that will be modified in place
-      // - inputData is Float32Array[] (array of channels)
+      // Step 2: Process the capture stream (Mic), writing to our pre-allocated buffer
+      // API: aec.process(outBuf, micInput) where both are Float32Array[]
+      // This modifies outBuf in place
+      this.aec.process(this.outBuf, micChannels);
       
-      // First, get the required output buffer size
-      const bufSz = this.aec.processSize([micChannel]);
+      // Step 3: Copy the result from our pre-allocated buffer to the worklet output
+      const cleanOutputChannel = cleanOutput[0];
+      const processedChannel = this.outBuf[0];
       
-      // Create output buffer (array of Float32Arrays, one per channel)
-      const outBuf = [new Float32Array(bufSz)];
-      
-      // Process: this modifies outBuf in place
-      this.aec.process(outBuf, [micChannel]); // Wrap both in arrays for channel format
-      
-      // Copy processed audio to worklet output buffer
-      const processedChannel = outBuf[0];
       if (processedChannel && processedChannel.length > 0) {
         // Copy what we can (may be different size due to AEC processing)
-        const copyLength = Math.min(processedChannel.length, outputChannel.length);
-        outputChannel.set(processedChannel.subarray(0, copyLength));
+        const copyLength = Math.min(processedChannel.length, cleanOutputChannel.length);
+        cleanOutputChannel.set(processedChannel.subarray(0, copyLength));
         // Fill remainder with silence if needed
-        if (copyLength < outputChannel.length) {
-          outputChannel.fill(0, copyLength);
+        if (copyLength < cleanOutputChannel.length) {
+          cleanOutputChannel.fill(0, copyLength);
         }
       } else {
         // Fallback: output silence if processing failed
-        outputChannel.fill(0);
+        cleanOutputChannel.fill(0);
       }
     } catch (error) {
       // On error, output silence to prevent audio artifacts
       console.error('AEC processing error:', error);
-      outputChannel.fill(0);
+      if (cleanOutput && cleanOutput[0]) {
+        cleanOutput[0].fill(0);
+      }
     }
     
     // Return true to keep the processor alive
