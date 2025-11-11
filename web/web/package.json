@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@ennuicastr/webrtcaec3.js": "^0.3.0"
+  }
+}

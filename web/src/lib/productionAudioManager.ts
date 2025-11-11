@@ -93,8 +93,8 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Load AEC worklet first
-      await this.recordingContext.audioWorklet.addModule('/aec-processor.js');
+      // Load AEC worklet first (imported as module, processed by Vite)
+      await this.recordingContext.audioWorklet.addModule(new URL('./aec-processor.ts', import.meta.url));
       console.log('✅ AEC processor loaded');
       
       // Load audio worklet for simple VAD

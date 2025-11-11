@@ -5,17 +5,17 @@
  * Processes microphone input against TTS playback to produce echo-free audio.
  */
 
-// Load the webrtcaec3.js library via importScripts (AudioWorklets don't support ES6 imports)
-importScripts('/webrtcaec3-0.3.0.js');
+import WebRtcAec3 from '@ennuicastr/webrtcaec3.js';
 
 class AECProcessor extends AudioWorkletProcessor {
+  private aec: any = null;
+  private aecModule: any = null; // The WebRtcAec3 module instance
+  private sampleRate: number = 48000; // Default sample rate
+  private renderNumChannels: number = 1; // Mono render/output (TTS) - what's being played
+  private captureNumChannels: number = 1; // Mono capture/input (mic) - what's being recorded
+  
   constructor() {
     super();
-    this.aec = null;
-    this.aecModule = null; // The WebRtcAec3 module instance
-    this.sampleRate = 48000; // Default sample rate
-    this.renderNumChannels = 1; // Mono render/output (TTS) - what's being played
-    this.captureNumChannels = 1; // Mono capture/input (mic) - what's being recorded
     
     // Message handler for initialization
     this.port.onmessage = async (ev) => {
@@ -41,7 +41,7 @@ class AECProcessor extends AudioWorkletProcessor {
           
           // Notify main thread that initialization is complete
           this.port.postMessage({ type: 'init-done' });
-        } catch (error) {
+        } catch (error: any) {
           console.error('❌ Failed to initialize AEC:', error);
           this.port.postMessage({ 
             type: 'init-error', 
@@ -52,7 +52,7 @@ class AECProcessor extends AudioWorkletProcessor {
     };
   }
   
-  process(inputs, outputs) {
+  process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     // Guard: If AEC is not initialized, output silence
     if (!this.aec) {
       const output = outputs[0];
