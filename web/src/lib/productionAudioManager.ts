@@ -154,7 +154,8 @@ export class ProductionAudioManager {
         // Match : followed by type (anything except =, ;, /, *) until we hit = or ;
         .replace(/:\s*[^=;\/\*]+(?=\s*[=;])/g, '') // Remove type annotations before = or ;
         // Remove function parameter type annotations (exclude / and * to avoid comments)
-        .replace(/:\s*[^,)\/\*]+(?=\s*[,)])/g, '') // Remove parameter type annotations
+        // Be careful not to break async arrow functions - match only before => or ,
+        .replace(/:\s*[^,)\/\*=]+(?=\s*[,)])/g, '') // Remove parameter type annotations (exclude = to avoid breaking =>)
         // Also handle return type annotations like `): boolean {`
         .replace(/\)\s*:\s*\w+\s*\{/g, ') {') // Remove return type annotations
         // Remove remaining simple type annotations (fallback, exclude comment chars)
@@ -181,6 +182,8 @@ export class ProductionAudioManager {
       ].join('\n');
       
       // Create a Blob URL from the combined script
+      // Use 'application/javascript' or 'text/javascript' - both should work for ES modules
+      // AudioWorklets require ES module format, which supports top-level await
       const blob = new Blob([finalWorkletScript], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       console.log('✅ AEC worklet module constructed, blob URL created');
