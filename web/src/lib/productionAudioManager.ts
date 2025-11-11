@@ -24,6 +24,8 @@ export class ProductionAudioManager {
   private playbackPlayhead = 0; // Scheduled playback time for seamless transitions
   private lastGainNode: GainNode | null = null; // For crossfading
   private readonly CROSSFADE_DURATION = 0.01; // 10ms crossfade between buffers
+  private readonly FADE_IN_DURATION = 0.01; // 10ms fade-in for first buffer to prevent crack/pop
+  private isFirstBuffer = true; // Track if this is the first buffer of TTS session (for fade-in)
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
@@ -474,6 +476,14 @@ export class ProductionAudioManager {
         console.log(`ProductionAudioManager: Decoding encoded audio ${audioData.byteLength} bytes`);
         const audioBuffer = await this.playbackContext.decodeAudioData(audioData.slice(0));
         console.log(`ProductionAudioManager: Decoded audio buffer ${audioBuffer.duration.toFixed(2)}s`);
+        
+        // Apply fade-in to first buffer if this is the start of playback
+        // This prevents the crack/pop artifact from sudden audio start
+        if (this.isFirstBuffer) {
+          this.applyFadeIn(audioBuffer, this.FADE_IN_DURATION);
+          this.isFirstBuffer = false;
+        }
+        
         this.audioQueue.push(audioBuffer);
         
         if (!this.isPlaying) {
@@ -588,6 +598,13 @@ export class ProductionAudioManager {
         channelData[i] = combinedSamples[i] / 32768.0;
       }
       
+      // Apply fade-in to first buffer if this is the start of playback
+      // This prevents the crack/pop artifact from sudden audio start
+      if (this.isFirstBuffer) {
+        this.applyFadeIn(audioBuffer, this.FADE_IN_DURATION);
+        this.isFirstBuffer = false;
+      }
+      
       console.log(`📦 Flushed ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer added to queue (queue length: ${this.audioQueue.length + 1})`);
       
       // Clear accumulator
@@ -646,6 +663,13 @@ export class ProductionAudioManager {
         channelData[i] = combinedSamples[i] / 32768.0;
       }
       
+      // Apply fade-in to first buffer if this is the start of playback
+      // This prevents the crack/pop artifact from sudden audio start
+      if (this.isFirstBuffer) {
+        this.applyFadeIn(audioBuffer, this.FADE_IN_DURATION);
+        this.isFirstBuffer = false;
+      }
+      
       console.log(`📦 Final flush: ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer`);
       
       // Clear accumulator
@@ -667,6 +691,26 @@ export class ProductionAudioManager {
     
     // Clear carry byte on final flush
     this.pcmCarryByte = null;
+  }
+
+  /**
+   * Apply fade-in to audio buffer to prevent crack/pop artifacts
+   * @param audioBuffer - The audio buffer to fade in
+   * @param fadeDuration - Duration of fade-in in seconds
+   */
+  private applyFadeIn(audioBuffer: AudioBuffer, fadeDuration: number): void {
+    const sampleRate = audioBuffer.sampleRate;
+    const fadeSamples = Math.floor(fadeDuration * sampleRate);
+    const channelData = audioBuffer.getChannelData(0);
+    const fadeLength = Math.min(fadeSamples, channelData.length);
+    
+    // Apply linear fade-in envelope
+    for (let i = 0; i < fadeLength; i++) {
+      const fadeGain = i / fadeLength;
+      channelData[i] *= fadeGain;
+    }
+    
+    console.log(`🔇 Applied ${fadeDuration * 1000}ms fade-in to first buffer (${fadeLength} samples)`);
   }
 
   private isPCMData(data: ArrayBuffer): boolean {
@@ -815,6 +859,7 @@ export class ProductionAudioManager {
             if (this.audioQueue.length === 0 && !this.isPlaying && this.isPlayingTTS) {
               console.log('✅ TTS session complete - no more audio after delay, re-enabling VAD');
               this.isPlayingTTS = false;
+              this.isFirstBuffer = true; // Reset for next TTS session
               
               // Notify worklet that TTS stopped
               if (this.workletNode) {
@@ -871,6 +916,7 @@ export class ProductionAudioManager {
     
     this.playbackPlayhead = 0; // Reset playhead
     this.lastGainNode = null; // Clear gain node reference
+    this.isFirstBuffer = true; // Reset for next TTS session
     
     // Reset VAD state when playback stops
     this.vadSpeaking = false;
@@ -925,6 +971,7 @@ export class ProductionAudioManager {
       // Reset VAD state to ensure clean detection after TTS
       this.vadSpeaking = false;
       this.currentVadThreshold = this.baseVadThreshold; // Reset to normal threshold
+      this.isFirstBuffer = true; // Reset for next TTS session
       console.log(`🔄 VAD state reset after TTS completion - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
       
       if (!this.isPlaying && this.onPlaybackComplete) {
