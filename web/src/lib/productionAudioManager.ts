@@ -890,11 +890,8 @@ export class ProductionAudioManager {
       this.currentVadThreshold = this.baseVadThreshold; // Reset to normal threshold
       console.log(`🔄 VAD state reset after TTS completion - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
       
-      // Reset echo cancellation filter when TTS session completes
-      if (this.echoCancellationNode) {
-        this.echoCancellationNode.port.postMessage({ type: 'reset' });
-        console.log('🔄 Echo cancellation filter reset after TTS completion');
-      }
+      // Note: Echo cancellation is handled by browser's native AEC via WebRTC loopback
+      // No need to reset anything - browser handles it automatically
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
