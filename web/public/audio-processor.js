@@ -19,7 +19,7 @@
 const DECAY_FACTOR = 0.95; // Energy decays by 5% each frame (~2.67ms at 48kHz)
 // This gives ~50% decay in ~13 frames (~35ms), matching acoustic latency
 
-const BARGE_IN_MULTIPLIER = 2.5; // Mic must be this many times louder than TTS to barge in (increased for hot mic environments)
+const BARGE_IN_MULTIPLIER = 3.5; // Mic must be this many times louder than TTS to barge in (aggressive tuning for hot mic stability)
 
 const AI_ENERGY_FLOOR = 0.005; // AI must be louder than this to enable barge-in
 // Prevents false triggers from startup artifacts when AI audio level is too low
@@ -69,7 +69,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Dynamic calibration state for echo-aware VAD
     this.isCalibrating = false;
     this.echoRatioHistory = [];
-    this.learnedEchoRatio = 0.7; // Safe default - "hot mic" fallback (70% echo ratio)
+    this.learnedEchoRatio = 0.9; // Aggressive default - "hot mic" assumption (90% echo ratio)
     
     // Message handler (no longer handles tts_state - now uses synchronous parameter)
     this.port.onmessage = (event) => {
@@ -97,11 +97,12 @@ class AudioProcessor extends AudioWorkletProcessor {
           
           // THE FINAL SAFEGUARD: Ensure result is a sane number
           if (!isNaN(averageRatio) && averageRatio > 0) {
-            this.learnedEchoRatio = averageRatio;
+            // M A N U A L   O V E R R I D E - Force aggressive ratio for stability testing
+            this.learnedEchoRatio = 0.9; // Force a high ratio for this test
           } else {
             // If calibration failed (e.g., total silence), fallback to a safe, aggressive default
             console.warn("⚠️ Echo calibration failed to gather data. Falling back to default ratio.");
-            this.learnedEchoRatio = 0.7; // The "hot mic" default
+            this.learnedEchoRatio = 0.9; // The "hot mic" default
           }
           
           // Log the learned ratio
@@ -112,11 +113,12 @@ class AudioProcessor extends AudioWorkletProcessor {
               samples: this.echoRatioHistory.length
             });
           }
-          console.log(`✅ Calibration complete. Learned echo ratio: ${this.learnedEchoRatio.toFixed(4)}`);
+          console.log("🔧 M A N U A L   O V E R R I D E");
+          console.log(`✅ Calibration complete. FORCED echo ratio: ${this.learnedEchoRatio.toFixed(4)}`);
         } else {
           // No samples collected, fallback to safe default
           console.warn("⚠️ Echo calibration failed to gather data. Falling back to default ratio.");
-          this.learnedEchoRatio = 0.7; // The "hot mic" default
+          this.learnedEchoRatio = 0.9; // The "hot mic" default
           
           if (this.port) {
             this.port.postMessage({
@@ -125,7 +127,8 @@ class AudioProcessor extends AudioWorkletProcessor {
               samples: 0
             });
           }
-          console.log(`✅ Calibration complete. Learned echo ratio: ${this.learnedEchoRatio.toFixed(4)} (fallback)`);
+          console.log("🔧 M A N U A L   O V E R R I D E");
+          console.log(`✅ Calibration complete. FORCED echo ratio: ${this.learnedEchoRatio.toFixed(4)} (fallback)`);
         }
       }
     };
