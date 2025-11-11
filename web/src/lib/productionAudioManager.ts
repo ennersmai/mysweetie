@@ -201,8 +201,9 @@ export class ProductionAudioManager {
       // Get TTS audio data (reference signal) at playback sample rate
       const inputData = event.inputBuffer.getChannelData(0);
       
-      // Send reference signal to echo cancellation processor
-      if (this.echoCancellationNode && this.isPlayingTTS) {
+      // ALWAYS send reference signal to echo cancellation processor when TTS audio is playing
+      // Don't check isPlayingTTS flag - if audio is coming through, send it
+      if (this.echoCancellationNode) {
         // Resample reference signal to match recording context sample rate
         const resampledLength = Math.floor(inputData.length * sampleRateRatio);
         const resampledData = new Float32Array(resampledLength);
@@ -263,31 +264,23 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-            // Conservative threshold during TTS to prevent false triggers from background noise
-            if (this.isPlayingTTS) {
-              this.currentVadThreshold = this.baseVadThreshold * 2.5; // 2.5x during TTS for noise resistance
-            } else {
-              this.currentVadThreshold = this.baseVadThreshold;
-            }
-    
-    // During TTS playback, use higher threshold to prevent echo detection
-    // Echo cancellation should remove most echo, but we use a higher threshold as safety
-    // This allows barge-in if user speaks loudly enough, while filtering out residual echo
+    // During TTS playback, use slightly higher threshold to prevent echo detection
+    // Echo cancellation should remove most echo, so we only need a small safety margin
     if (this.isPlayingTTS) {
-      // Use much higher threshold during TTS (5x) to filter out any residual echo
-      // Echo cancellation should handle most of it, but this is a safety net
-      this.currentVadThreshold = this.baseVadThreshold * 5.0; // 5x threshold during TTS
+      // Use moderate threshold during TTS (2x) - echo cancellation should handle most echo
+      // This allows normal barge-in while filtering out residual echo
+      this.currentVadThreshold = this.baseVadThreshold * 2.0; // 2x threshold during TTS
       
       // Add a short grace period after TTS starts to allow echo cancellation to adapt
       const timeSinceTTSStart = performance.now() - (this.ttsStartTime || 0);
-      const gracePeriodMs = 500; // 500ms grace period for echo cancellation to adapt
+      const gracePeriodMs = 300; // 300ms grace period for echo cancellation to adapt
       
       if (timeSinceTTSStart < gracePeriodMs) {
         // Skip VAD during initial grace period to prevent immediate echo
         return;
       }
-      // After grace period, VAD is active with higher threshold (5x)
-      // This allows barge-in while preventing most echo
+      // After grace period, VAD is active with moderate threshold (2x)
+      // Echo cancellation should have removed most echo by now
     }
     
     // Check if RMS is above both threshold and noise floor

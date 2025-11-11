@@ -16,8 +16,12 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
     // Filter length: 2048 samples at 48kHz = ~42.7ms echo path (covers most room acoustics)
     // Typical echo paths: 10-50ms for close speakers, up to 200ms for large rooms
     this.filterLength = 2048; // Increased from 512 for better echo cancellation
-    this.mu = 0.2; // Step size (learning rate) - increased for faster adaptation
+    this.mu = 0.8; // Step size (learning rate) - increased for faster adaptation (was 0.5)
+    // Higher mu = faster adaptation but less stable. 0.8 is aggressive but should work for echo cancellation
     this.epsilon = 1e-6; // Small constant to prevent division by zero
+    
+    // Minimum samples needed before starting echo cancellation (reduced for faster startup)
+    this.minSamplesForEchoCancel = 256; // Start after 256 samples (~5ms at 48kHz) for very fast startup
     
     // Adaptive filter coefficients (initially zero)
     this.filterCoefficients = new Float32Array(this.filterLength);
@@ -76,23 +80,35 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
   
   /**
    * Process queued reference signals (called from audio thread)
+   * Handles chunked TTS audio - processes all queued chunks and adds to delay line
    */
   processReferenceQueue() {
-    // Process all queued reference signals
+    // Process all queued reference signal chunks
+    // TTS audio arrives in chunks, so we process them all here
+    let totalSamplesAdded = 0;
     while (this.referenceQueue.length > 0) {
       const data = this.referenceQueue.shift();
-      // Add reference samples to delay line
+      // Add reference samples to delay line (circular buffer)
       for (let i = 0; i < data.length; i++) {
         this.referenceBuffer[this.referenceWriteIndex] = data[i];
         this.referenceWriteIndex = (this.referenceWriteIndex + 1) % this.referenceBuffer.length;
       }
-      
-      // Update read index to follow write index (with filter length delay for echo path)
-      // This ensures we're always reading from filterLength samples ago
-      // Only update if we have enough samples in buffer
-      if (this.referenceWriteIndex >= this.filterLength) {
-        this.referenceIndex = (this.referenceWriteIndex - this.filterLength + this.referenceBuffer.length) % this.referenceBuffer.length;
-      }
+      totalSamplesAdded += data.length;
+    }
+    
+    // Update read index to follow write index (with filter length delay for echo path)
+    // Start echo cancellation as soon as we have minimum samples (faster adaptation)
+    if (this.referenceWriteIndex >= this.minSamplesForEchoCancel) {
+      // Set referenceIndex to point to samples that are filterLength ago
+      // But if we don't have that many yet, point to the start of the buffer
+      const delaySamples = Math.min(this.filterLength, this.referenceWriteIndex);
+      this.referenceIndex = (this.referenceWriteIndex - delaySamples + this.referenceBuffer.length) % this.referenceBuffer.length;
+    }
+    
+    // Debug: Log when reference signal chunks are processed
+    if (totalSamplesAdded > 0 && this.frameCount % 200 === 0) {
+      const samplesInBuffer = (this.referenceWriteIndex - this.referenceIndex + this.referenceBuffer.length) % this.referenceBuffer.length;
+      console.log(`🔊 Echo cancel: Processed ${totalSamplesAdded} ref samples, buffer has ${samplesInBuffer} samples, writeIdx=${this.referenceWriteIndex}, readIdx=${this.referenceIndex}`);
     }
   }
   
@@ -108,9 +124,8 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
     this.processReferenceQueue();
     
     // Check if we have reference signal data (TTS is playing)
-    // If no reference signal, bypass echo cancellation to preserve audio quality
-    const samplesInBuffer = (this.referenceWriteIndex - this.referenceIndex + this.referenceBuffer.length) % this.referenceBuffer.length;
-    const hasReferenceSignal = this.referenceWriteIndex >= this.filterLength && samplesInBuffer >= this.filterLength;
+    // Start echo cancellation as soon as we have minimum samples (don't wait for full buffer)
+    const hasReferenceSignal = this.referenceWriteIndex >= this.minSamplesForEchoCancel;
     
     // If no reference signal, bypass echo cancellation (pass through mic input)
     if (!hasReferenceSignal) {
@@ -124,14 +139,21 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
     for (let n = 0; n < inputLength; n++) {
       
       // Get reference signal vector from delay line
-      // Use referenceIndex which points to the oldest sample we need (filterLength samples ago)
+      // Use referenceIndex which points to the oldest sample we need
+      // Always use full filterLength (pad with zeros if needed)
       const refVector = new Float32Array(this.filterLength);
       let refIdx = this.referenceIndex;
       
       // Build reference vector (oldest to newest)
+      // If we don't have enough samples yet, pad with zeros
+      const availableLength = Math.min(this.filterLength, this.referenceWriteIndex);
       for (let i = 0; i < this.filterLength; i++) {
-        refVector[i] = this.referenceBuffer[refIdx];
-        refIdx = (refIdx + 1) % this.referenceBuffer.length;
+        if (i < availableLength) {
+          refVector[i] = this.referenceBuffer[refIdx];
+          refIdx = (refIdx + 1) % this.referenceBuffer.length;
+        } else {
+          refVector[i] = 0; // Pad with zeros
+        }
       }
       
       // Advance reference index for next sample
@@ -154,9 +176,12 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
       }
       
       // NLMS update: w(n+1) = w(n) + mu * e(n) * x(n) / (||x(n)||^2 + epsilon)
-      const stepSize = this.mu / refPower;
-      for (let i = 0; i < this.filterLength; i++) {
-        this.filterCoefficients[i] += stepSize * error * refVector[i];
+      // Only update filter if reference signal has sufficient power (avoid updating on silence)
+      if (refPower > this.epsilon * 10) { // Only update if reference signal is not silent
+        const stepSize = this.mu / refPower;
+        for (let i = 0; i < this.filterLength; i++) {
+          this.filterCoefficients[i] += stepSize * error * refVector[i];
+        }
       }
     }
     
