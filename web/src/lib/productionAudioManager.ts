@@ -29,8 +29,9 @@ export class ProductionAudioManager {
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
   
-  // WebRTC loopback for native echo cancellation
-  private loopbackPeerConnection: RTCPeerConnection | null = null;
+  // WebRTC two-peer-connection loopback for native echo cancellation
+  private pc1: RTCPeerConnection | null = null; // Sender
+  private pc2: RTCPeerConnection | null = null; // Receiver
   private webrtcDestination: MediaStreamAudioDestinationNode | null = null;
   private processedMicStream: MediaStream | null = null;
   private ringBuffer: Float32Array[] = [];
@@ -202,7 +203,8 @@ export class ProductionAudioManager {
   }
 
   /**
-   * Set up WebRTC loopback for native echo cancellation
+   * Set up WebRTC two-peer-connection loopback for native echo cancellation
+   * Uses two peer connections (PC1 sender, PC2 receiver) to avoid browser muting tracks
    * This leverages the browser's built-in, hardware-accelerated AEC
    */
   private async setupWebRTCLoopback(): Promise<void> {
@@ -210,108 +212,110 @@ export class ProductionAudioManager {
       throw new Error('Cannot setup WebRTC loopback - contexts not initialized');
     }
 
-    console.log('🔄 Setting up WebRTC loopback for native echo cancellation...');
+    console.log('🔄 Setting up WebRTC two-peer-connection loopback for native echo cancellation...');
 
     // Create MediaStreamDestination node for TTS audio output
     // This will be used as the reference signal for echo cancellation
     this.webrtcDestination = this.playbackContext.createMediaStreamDestination();
     console.log('✅ Created WebRTC destination for TTS audio');
 
-    // Create loopback RTCPeerConnection
-    this.loopbackPeerConnection = new RTCPeerConnection({
-      iceServers: [] // No ICE servers needed for loopback
-    });
+    // Create two peer connections (PC1 = sender, PC2 = receiver)
+    this.pc1 = new RTCPeerConnection({ iceServers: [] });
+    this.pc2 = new RTCPeerConnection({ iceServers: [] });
 
-    // Add TTS audio track (reference signal) to peer connection
-    const ttsTracks = this.webrtcDestination.stream.getAudioTracks();
-    ttsTracks.forEach(track => {
-      this.loopbackPeerConnection!.addTrack(track, this.webrtcDestination!.stream);
-      console.log('✅ Added TTS audio track to peer connection');
-    });
+    // Set up ICE candidate exchange between PC1 and PC2
+    this.pc1.onicecandidate = (e) => {
+      if (e.candidate && this.pc2) {
+        this.pc2.addIceCandidate(e.candidate);
+      }
+    };
+    this.pc2.onicecandidate = (e) => {
+      if (e.candidate && this.pc1) {
+        this.pc1.addIceCandidate(e.candidate);
+      }
+    };
 
-    // Add microphone track (with AEC enabled) to peer connection
-    const micTracks = this.mediaStream.getAudioTracks();
-    micTracks.forEach(track => {
-      this.loopbackPeerConnection!.addTrack(track, this.mediaStream!);
-      console.log('✅ Added microphone track to peer connection');
-    });
+    // Get track IDs for identification
+    const aiVoiceStream = this.webrtcDestination.stream;
+    const aiVoiceTrackId = aiVoiceStream.getAudioTracks()[0]?.id;
+    const micTrackId = this.mediaStream.getAudioTracks()[0]?.id;
 
     // Set up handler for processed audio stream (with native AEC applied)
     this.processedMicStream = new MediaStream();
     
-    // Promise to wait for the processed track
-    let trackReceived = false;
+    // Promise to wait for the processed mic track
+    let micTrackReceived = false;
     const trackPromise = new Promise<void>((resolve) => {
-      this.loopbackPeerConnection!.ontrack = (event) => {
-        // The ontrack event fires for remote tracks
-        // In our loopback, this is the microphone audio AFTER native AEC processing
-        if (event.track.kind === 'audio' && !trackReceived) {
-          // Check if track is actually enabled and not muted
-          if (event.track.enabled && !event.track.muted) {
-            this.processedMicStream!.addTrack(event.track);
-            trackReceived = true;
-            console.log('✅ Received processed microphone track (with native AEC)', {
-              enabled: event.track.enabled,
-              muted: event.track.muted,
-              readyState: event.track.readyState,
-              id: event.track.id
-            });
-            resolve();
-          } else {
-            console.warn('⚠️ Received track but it is disabled or muted', {
-              enabled: event.track.enabled,
-              muted: event.track.muted
-            });
+      this.pc2!.ontrack = (event) => {
+        const incomingTrack = event.track;
+        
+        // Identify which track is the microphone (not the AI voice reference)
+        // The mic track will have a different ID than the AI voice track
+        if (incomingTrack.kind === 'audio') {
+          const isMicTrack = incomingTrack.id !== aiVoiceTrackId && incomingTrack.id !== micTrackId;
+          
+          if (isMicTrack && !micTrackReceived) {
+            // This should be the processed microphone track
+            if (incomingTrack.enabled && !incomingTrack.muted) {
+              this.processedMicStream!.addTrack(incomingTrack);
+              micTrackReceived = true;
+              console.log('✅ Received processed microphone track (with native AEC)', {
+                enabled: incomingTrack.enabled,
+                muted: incomingTrack.muted,
+                readyState: incomingTrack.readyState,
+                id: incomingTrack.id
+              });
+              resolve();
+            } else {
+              console.warn('⚠️ Received mic track but it is disabled or muted', {
+                enabled: incomingTrack.enabled,
+                muted: incomingTrack.muted
+              });
+            }
+          } else if (!isMicTrack) {
+            console.log('📢 Received AI voice reference track (for AEC)');
           }
         }
       };
     });
 
-    // Complete the loopback by creating offer/answer
-    // We loop back to ourselves, so we use the same offer as both local and remote
-    const offer = await this.loopbackPeerConnection.createOffer();
-    await this.loopbackPeerConnection.setLocalDescription(offer);
-    await this.loopbackPeerConnection.setRemoteDescription(offer);
-    
-    // Wait for the processed track to be received (with timeout)
+    // Add tracks to PC1 (the sender)
+    // Add AI voice track (reference signal)
+    aiVoiceStream.getAudioTracks().forEach(track => {
+      this.pc1!.addTrack(track, aiVoiceStream);
+      console.log('✅ Added TTS audio track to PC1 (sender)');
+    });
+
+    // Add microphone track (with AEC enabled)
+    this.mediaStream.getAudioTracks().forEach(track => {
+      this.pc1!.addTrack(track, this.mediaStream!);
+      console.log('✅ Added microphone track to PC1 (sender)');
+    });
+
+    // Perform offer/answer dance to connect PC1 and PC2
+    const offer = await this.pc1.createOffer();
+    await this.pc1.setLocalDescription(offer);
+    await this.pc2.setRemoteDescription(offer);
+
+    const answer = await this.pc2.createAnswer();
+    await this.pc2.setLocalDescription(answer);
+    await this.pc1.setRemoteDescription(answer);
+
+    console.log('✅ Peer connections established (PC1 ↔ PC2)');
+
+    // Wait for the processed mic track to be received (with timeout)
     await Promise.race([
       trackPromise,
-      new Promise<void>((resolve) => setTimeout(resolve, 2000)) // 2 second timeout
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)) // 3 second timeout
     ]);
     
-    if (!trackReceived) {
+    if (!micTrackReceived) {
       console.warn('⚠️ Processed mic track not received - will use raw mic stream');
-      // Try to get receivers as fallback
-      const receivers = this.loopbackPeerConnection.getReceivers();
-      console.log(`🔍 Found ${receivers.length} receivers in peer connection`);
-      receivers.forEach((receiver, idx) => {
-        if (receiver.track && receiver.track.kind === 'audio') {
-          console.log(`🔍 Receiver ${idx}: track enabled=${receiver.track.enabled}, muted=${receiver.track.muted}, readyState=${receiver.track.readyState}`);
-          // Try to unmute the track (browser may have muted it to prevent feedback)
-          if (receiver.track.muted) {
-            console.log(`🔧 Attempting to unmute track ${receiver.track.id}`);
-            // Note: We can't directly unmute, but we can try to use it anyway
-            // The muted state might be browser-enforced for loopback prevention
-          }
-          if (!this.processedMicStream!.getAudioTracks().some(t => t.id === receiver.track.id)) {
-            this.processedMicStream!.addTrack(receiver.track);
-            trackReceived = true;
-            console.log('✅ Added track from receiver (may be muted by browser)');
-          }
-        }
-      });
     }
     
-    // Check if all tracks are muted - if so, WebRTC loopback won't work
-    const allTracksMuted = this.processedMicStream.getAudioTracks().every(track => track.muted);
-    if (allTracksMuted && this.processedMicStream.getAudioTracks().length > 0) {
-      console.warn('⚠️ All processed tracks are muted - WebRTC loopback not working, will use raw mic');
-      trackReceived = false; // Force fallback to raw mic
-    }
-    
-    console.log('✅ WebRTC loopback established - native AEC active', {
+    console.log('✅ WebRTC two-peer-connection loopback established - native AEC active', {
       processedStreamTracks: this.processedMicStream.getAudioTracks().length,
-      trackReceived
+      micTrackReceived
     });
   }
 
@@ -1054,11 +1058,17 @@ export class ProductionAudioManager {
     this.stopRecording();
     this.stopPlayback();
     
-    // Close WebRTC loopback connection
-    if (this.loopbackPeerConnection) {
-      this.loopbackPeerConnection.close();
-      this.loopbackPeerConnection = null;
-      console.log('✅ Closed WebRTC loopback connection');
+    // Close WebRTC peer connections
+    if (this.pc1) {
+      this.pc1.close();
+      this.pc1 = null;
+    }
+    if (this.pc2) {
+      this.pc2.close();
+      this.pc2 = null;
+    }
+    if (this.pc1 || this.pc2) {
+      console.log('✅ Closed WebRTC peer connections');
     }
     
     this.vadSpeaking = false;
