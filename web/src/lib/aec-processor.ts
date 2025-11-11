@@ -5,8 +5,6 @@
  * Processes microphone input against TTS playback to produce echo-free audio.
  */
 
-import WebRtcAec3 from '@ennuicastr/webrtcaec3.js';
-
 class AECProcessor extends AudioWorkletProcessor {
   private aec: any = null;
   private aecModule: any = null; // The WebRtcAec3 module instance
@@ -23,7 +21,14 @@ class AECProcessor extends AudioWorkletProcessor {
         try {
           this.sampleRate = ev.data.sampleRate || 48000;
           
-          // Step 1: Get the WebRtcAec3 module instance
+          // Step 1: Dynamically import the library from public directory
+          // Loading from public URL prevents Vite from bundling it and breaking WASM loading code
+          // The library expects to load WASM from /webrtcaec3-0.3.0.wasm (from public directory)
+          // @ts-ignore - dynamic import from URL
+          const WebRtcAec3Module = await import('/webrtcaec3-0.3.0.js');
+          const WebRtcAec3 = WebRtcAec3Module.default || WebRtcAec3Module;
+          
+          // Step 2: Get the WebRtcAec3 module instance
           // WebRtcAec3() is a function that returns a promise for the module
           // The library will automatically find the WASM file if it's accessible
           // WASM should be at /webrtcaec3-0.3.0.wasm (from public directory)

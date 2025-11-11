@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import svgr from 'vite-plugin-svgr'
-import { copyFileSync, existsSync, mkdirSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
+
 
 // Plugin to copy WASM file to public directory so it's accessible at runtime
 const copyWasmPlugin = () => {
@@ -26,25 +27,76 @@ const copyWasmPlugin = () => {
       } else {
         console.warn('⚠️ WASM file not found at:', wasmSource)
       }
+      
+      // Copy and patch the library's JS file to public/
+      // Patch: Add 'var WebRtcAec3Wasm;' declaration to make it module-safe
+      const jsSource = join(distPath, 'webrtcaec3-0.3.0.js')
+      const jsDest = join(publicPath, 'webrtcaec3-0.3.0.js')
+      
+      if (existsSync(jsSource)) {
+        try {
+          // Read the original file
+          let jsContent = readFileSync(jsSource, 'utf-8')
+          
+          // Patch: Add WebRtcAec3Wasm declaration at the top if not already present
+          // This prevents "assignment to undeclared variable" errors in module context
+          if (!jsContent.includes('var WebRtcAec3Wasm') && !jsContent.includes('let WebRtcAec3Wasm') && !jsContent.includes('const WebRtcAec3Wasm')) {
+            jsContent = 'var WebRtcAec3Wasm;\n' + jsContent
+            console.log('✅ Patched webrtcaec3 JS file (added WebRtcAec3Wasm declaration)')
+          }
+          
+          // Write the patched file
+          writeFileSync(jsDest, jsContent, 'utf-8')
+          console.log('✅ Copied and patched webrtcaec3 JS file to public/')
+        } catch (error) {
+          console.warn('⚠️ Failed to copy/patch JS file:', error)
+        }
+      } else {
+        console.warn('⚠️ JS file not found at:', jsSource)
+      }
     },
     generateBundle() {
-      // Also copy WASM to dist during build so it's available in production
+      // Also copy WASM and JS to dist during build so it's available in production
       const distPath = join(process.cwd(), 'node_modules/@ennuicastr/webrtcaec3.js/dist')
       const buildPath = join(process.cwd(), 'dist')
       
+      if (!existsSync(buildPath)) {
+        mkdirSync(buildPath, { recursive: true })
+      }
+      
+      // Copy WASM file
       const wasmSource = join(distPath, 'webrtcaec3-0.3.0.wasm')
       const wasmDest = join(buildPath, 'webrtcaec3-0.3.0.wasm')
       
       if (existsSync(wasmSource)) {
         try {
-          // Ensure dist directory exists
-          if (!existsSync(buildPath)) {
-            mkdirSync(buildPath, { recursive: true })
-          }
           copyFileSync(wasmSource, wasmDest)
           console.log('✅ Copied webrtcaec3 WASM file to dist/')
         } catch (error) {
           console.warn('⚠️ Failed to copy WASM file to dist:', error)
+        }
+      }
+      
+      // Copy and patch JS file
+      const jsSource = join(distPath, 'webrtcaec3-0.3.0.js')
+      const jsDest = join(buildPath, 'webrtcaec3-0.3.0.js')
+      
+      if (existsSync(jsSource)) {
+        try {
+          // Read the original file
+          let jsContent = readFileSync(jsSource, 'utf-8')
+          
+          // Patch: Add WebRtcAec3Wasm declaration at the top if not already present
+          if (!jsContent.includes('var WebRtcAec3Wasm') && !jsContent.includes('let WebRtcAec3Wasm') && !jsContent.includes('const WebRtcAec3Wasm')) {
+            jsContent = 'var WebRtcAec3Wasm;\n' + jsContent
+            console.log('✅ Patched webrtcaec3 JS file (added WebRtcAec3Wasm declaration)')
+          }
+          
+          // Write the patched file
+          writeFileSync(jsDest, jsContent, 'utf-8')
+          console.log('✅ Copied and patched webrtcaec3 JS file to dist/')
+        } catch (error) {
+          console.warn('⚠️ Failed to copy/patch JS file to dist:', error)
         }
       }
     }
