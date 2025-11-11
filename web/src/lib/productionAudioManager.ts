@@ -150,6 +150,15 @@ export class ProductionAudioManager {
         .replace(/^\/\/\s*Declare WebRtcAec3.*$/gm, '')
         // Fallback: remove any remaining declare statements (single line)
         .replace(/^declare\s+const\s+WebRtcAec3.*$/gm, '')
+        // Remove type annotations - handle union types and complex types by matching until = or ;
+        // This handles cases like `: Float32Array[] | null =` or `: any =`
+        // Match : followed by type (anything except = or ;) until we hit = or ;
+        .replace(/:\s*[^=;]+(?=\s*[=;])/g, '') // Remove type annotations before = or ;
+        // Remove function parameter type annotations (before comma or closing paren)
+        .replace(/:\s*[^,)]+(?=\s*[,)])/g, '') // Remove parameter type annotations
+        // Also handle return type annotations like `): boolean {`
+        .replace(/\)\s*:\s*\w+\s*\{/g, ') {') // Remove return type annotations
+        // Remove remaining simple type annotations (fallback)
         .replace(/:\s*MessageEvent/g, '') // Remove MessageEvent type annotation
         .replace(/:\s*any\s*/g, ' ') // Remove :any type annotations
         .replace(/:\s*Float32Array\[\]\[\]\s*/g, ' ') // Remove Float32Array[][] type annotations
