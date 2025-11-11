@@ -17,6 +17,10 @@ const AudioWorkletProcessorClass = (globalThis as any).AudioWorkletProcessor;
 // @ts-ignore
 const registerProcessorFn = (globalThis as any).registerProcessor;
 
+// importScripts is available in AudioWorklet context
+// @ts-ignore - importScripts is a runtime global in AudioWorklet/Worker contexts
+declare function importScripts(...urls: string[]): void;
+
 class AECProcessor extends AudioWorkletProcessorClass {
   private aec: any = null;
   private outBuf: Float32Array[] | null = null; // Pre-allocated buffer for clean output
