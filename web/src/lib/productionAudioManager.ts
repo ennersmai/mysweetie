@@ -233,10 +233,23 @@ export class ProductionAudioManager {
         // The ontrack event fires for remote tracks
         // In our loopback, this is the microphone audio AFTER native AEC processing
         if (event.track.kind === 'audio' && !trackReceived) {
-          this.processedMicStream!.addTrack(event.track);
-          trackReceived = true;
-          console.log('✅ Received processed microphone track (with native AEC)');
-          resolve();
+          // Check if track is actually enabled and not muted
+          if (event.track.enabled && !event.track.muted) {
+            this.processedMicStream!.addTrack(event.track);
+            trackReceived = true;
+            console.log('✅ Received processed microphone track (with native AEC)', {
+              enabled: event.track.enabled,
+              muted: event.track.muted,
+              readyState: event.track.readyState,
+              id: event.track.id
+            });
+            resolve();
+          } else {
+            console.warn('⚠️ Received track but it is disabled or muted', {
+              enabled: event.track.enabled,
+              muted: event.track.muted
+            });
+          }
         }
       };
     });
@@ -255,9 +268,25 @@ export class ProductionAudioManager {
     
     if (!trackReceived) {
       console.warn('⚠️ Processed mic track not received - will use raw mic stream');
+      // Try to get receivers as fallback
+      const receivers = this.loopbackPeerConnection.getReceivers();
+      console.log(`🔍 Found ${receivers.length} receivers in peer connection`);
+      receivers.forEach((receiver, idx) => {
+        if (receiver.track && receiver.track.kind === 'audio') {
+          console.log(`🔍 Receiver ${idx}: track enabled=${receiver.track.enabled}, muted=${receiver.track.muted}, readyState=${receiver.track.readyState}`);
+          if (!this.processedMicStream!.getAudioTracks().some(t => t.id === receiver.track.id)) {
+            this.processedMicStream!.addTrack(receiver.track);
+            trackReceived = true;
+            console.log('✅ Added track from receiver');
+          }
+        }
+      });
     }
     
-    console.log('✅ WebRTC loopback established - native AEC active');
+    console.log('✅ WebRTC loopback established - native AEC active', {
+      processedStreamTracks: this.processedMicStream.getAudioTracks().length,
+      trackReceived
+    });
   }
 
 
