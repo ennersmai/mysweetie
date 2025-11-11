@@ -24,9 +24,11 @@ class AECProcessor extends AudioWorkletProcessor {
           // Step 1: Dynamically import the library from public directory
           // Loading from public URL prevents Vite from bundling it and breaking WASM loading code
           // The library expects to load WASM from /webrtcaec3-0.3.0.wasm (from public directory)
-          // @ts-ignore - dynamic import from URL
-          const WebRtcAec3Module = await import('/webrtcaec3-0.3.0.js');
-          const WebRtcAec3 = WebRtcAec3Module.default || WebRtcAec3Module;
+          // @vite-ignore tells Vite to treat this as a runtime URL, not a bundled module
+          const mod = await import(
+            /* @vite-ignore */ '/webrtcaec3-0.3.0.js'
+          );
+          const WebRtcAec3 = (mod as any).default ?? (mod as any).WebRtcAec3;
           
           // Step 2: Get the WebRtcAec3 module instance
           // WebRtcAec3() is a function that returns a promise for the module
