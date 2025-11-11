@@ -142,8 +142,14 @@ export class ProductionAudioManager {
       const modifiedProcessorCode = aecProcessorCode
         .replace(/^import\s+.*$/gm, '') // Remove import statements
         .replace(/^export\s+.*$/gm, '') // Remove export statements
-        // Remove multi-line WebRtcAec3 type declaration (matches from declare to semicolon)
-        .replace(/^declare\s+const\s+WebRtcAec3:[\s\S]*?;$/gm, '')
+        // Remove multi-line WebRtcAec3 type declaration
+        // The declaration ends with `}>;` (closing Promise type and declaration)
+        // Use greedy match to ensure we match until the FINAL `}>;` pattern
+        .replace(/^declare\s+const\s+WebRtcAec3\s*:[\s\S]*\}>;\s*$/gm, '')
+        // Also remove the comment line before the declare
+        .replace(/^\/\/\s*Declare WebRtcAec3.*$/gm, '')
+        // Fallback: remove any remaining declare statements (single line)
+        .replace(/^declare\s+const\s+WebRtcAec3.*$/gm, '')
         .replace(/:\s*MessageEvent/g, '') // Remove MessageEvent type annotation
         .replace(/:\s*any\s*/g, ' ') // Remove :any type annotations
         .replace(/:\s*Float32Array\[\]\[\]\s*/g, ' ') // Remove Float32Array[][] type annotations
@@ -191,8 +197,14 @@ export class ProductionAudioManager {
         // Also log where the processor code starts (might be where the error is)
         const processorStartIndex = finalWorkletScript.indexOf('// --- Start of aec-processor.js code ---');
         if (processorStartIndex >= 0) {
-          const processorPreview = finalWorkletScript.substring(processorStartIndex, processorStartIndex + 500);
-          console.error('Processor code preview (first 500 chars):', processorPreview);
+          const processorPreview = finalWorkletScript.substring(processorStartIndex, processorStartIndex + 1000);
+          console.error('Processor code preview (first 1000 chars):', processorPreview);
+          // Try to find the declare statement if it still exists
+          const declareIndex = finalWorkletScript.indexOf('declare const WebRtcAec3');
+          if (declareIndex >= 0) {
+            const declarePreview = finalWorkletScript.substring(declareIndex, declareIndex + 200);
+            console.error('⚠️ Found remaining declare statement at index', declareIndex, ':', declarePreview);
+          }
         }
         throw e;
       }
