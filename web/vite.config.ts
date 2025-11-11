@@ -45,6 +45,7 @@ const copyWasmPlugin = () => {
   }
 }
 
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), svgr(), copyWasmPlugin()],

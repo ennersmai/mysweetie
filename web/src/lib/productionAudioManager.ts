@@ -96,9 +96,9 @@ export class ProductionAudioManager {
       // Load AEC worklet first (imported as module, processed by Vite)
       // Use new URL() pattern - Vite will rewrite this at build time to the .js asset
       // Never hard-code the hashed asset path or .ts extension
-      await this.recordingContext.audioWorklet.addModule(
-        new URL('./aec-processor.ts', import.meta.url)
-      );
+      // IMPORTANT: Use relative path from this file's location
+      const aecProcessorModuleUrl = new URL('./aec-processor.ts', import.meta.url);
+      await this.recordingContext.audioWorklet.addModule(aecProcessorModuleUrl);
       console.log('✅ AEC processor loaded');
       
       // Load audio worklet for simple VAD
