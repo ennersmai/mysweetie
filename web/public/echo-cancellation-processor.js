@@ -167,7 +167,8 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
       
       // Compute error (echo-cancelled signal)
       const error = micInput[n] - predictedEcho;
-      output[n] = error;
+      // Clamp output to prevent distortion (safety measure)
+      output[n] = Math.max(-1, Math.min(1, error));
       
       // Compute reference signal power for normalization
       let refPower = this.epsilon;
@@ -179,15 +180,20 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
       // Only update filter if reference signal has sufficient power (avoid updating on silence)
       if (refPower > this.epsilon * 10) { // Only update if reference signal is not silent
         const stepSize = this.mu / refPower;
+        
+        // Adaptive step size - use larger step when error is large (faster initial adaptation)
+        const errorMagnitude = Math.abs(error);
+        const adaptiveMu = errorMagnitude > 0.01 ? this.mu * 2.0 : this.mu; // 2x step size for large errors
+        
         for (let i = 0; i < this.filterLength; i++) {
-          this.filterCoefficients[i] += stepSize * error * refVector[i];
+          this.filterCoefficients[i] += (adaptiveMu / refPower) * error * refVector[i];
         }
       }
     }
     
     // Update statistics occasionally
     this.frameCount++;
-    if (this.frameCount % 100 === 0) {
+    if (this.frameCount % 50 === 0) { // More frequent stats for debugging
       // Calculate ERLE (Echo Return Loss Enhancement)
       let inputPower = 0;
       let outputPower = 0;
@@ -198,14 +204,17 @@ class EchoCancellationProcessor extends AudioWorkletProcessor {
       
       if (inputPower > 1e-10 && outputPower > 1e-10) {
         this.erle = 10 * Math.log10(inputPower / outputPower);
+        
+        // Send statistics to main thread with more detail
+        this.port.postMessage({
+          type: 'stats',
+          erle: this.erle,
+          frameCount: this.frameCount,
+          inputPower: inputPower,
+          outputPower: outputPower,
+          hasReference: this.referenceWriteIndex >= this.minSamplesForEchoCancel
+        });
       }
-      
-      // Send statistics to main thread
-      this.port.postMessage({
-        type: 'stats',
-        erle: this.erle,
-        frameCount: this.frameCount
-      });
     }
   }
   

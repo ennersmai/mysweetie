@@ -119,9 +119,8 @@ export class ProductionAudioManager {
       this.echoCancellationNode.port.onmessage = (event) => {
         // Handle statistics messages
         if (event.data.type === 'stats') {
-          if (Math.random() < 0.01) {
-            console.log(`📊 Echo Cancellation Stats: ERLE=${event.data.erle.toFixed(2)}dB, Frames=${event.data.frameCount}`);
-          }
+          // Log stats more frequently to debug echo cancellation
+          console.log(`📊 Echo Cancel: ERLE=${event.data.erle.toFixed(2)}dB, InputPower=${event.data.inputPower?.toFixed(6) || 'N/A'}, OutputPower=${event.data.outputPower?.toFixed(6) || 'N/A'}, HasRef=${event.data.hasReference || false}`);
           return;
         }
         
@@ -264,22 +263,21 @@ export class ProductionAudioManager {
     
     const now = performance.now();
     
-    // During TTS playback, use slightly higher threshold to prevent echo detection
-    // Echo cancellation should remove most echo, so we only need a small safety margin
+    // During TTS playback, disable VAD for longer to allow echo cancellation to adapt
+    // Echo cancellation filter starts with zero coefficients and needs time to learn
     if (this.isPlayingTTS) {
-      // Use moderate threshold during TTS (2x) - echo cancellation should handle most echo
-      // This allows normal barge-in while filtering out residual echo
-      this.currentVadThreshold = this.baseVadThreshold * 2.0; // 2x threshold during TTS
-      
-      // Add a short grace period after TTS starts to allow echo cancellation to adapt
+      // Extended grace period to allow echo cancellation filter to adapt
+      // Filter needs time to learn the echo path before VAD can work properly
       const timeSinceTTSStart = performance.now() - (this.ttsStartTime || 0);
-      const gracePeriodMs = 300; // 300ms grace period for echo cancellation to adapt
+      const gracePeriodMs = 2000; // 2 seconds grace period for echo cancellation to adapt
       
       if (timeSinceTTSStart < gracePeriodMs) {
-        // Skip VAD during initial grace period to prevent immediate echo
+        // Skip VAD during adaptation period to prevent echo from triggering it
         return;
       }
-      // After grace period, VAD is active with moderate threshold (2x)
+      
+      // After adaptation period, use moderate threshold (2x) - filter should have adapted by now
+      this.currentVadThreshold = this.baseVadThreshold * 2.0; // 2x threshold during TTS
       // Echo cancellation should have removed most echo by now
     }
     
