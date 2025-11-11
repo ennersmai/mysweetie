@@ -5,9 +5,10 @@
  * Outputs 16kHz WAV files optimized for Groq STT.
  */
 
-// NOTE: Do NOT import aec-processor.ts here!
-// The worklet must ONLY be loaded via audioWorklet.addModule() to run in the correct context.
-// Importing it here would cause it to execute in the main thread, throwing "AudioWorkletProcessor is not defined"
+// Import the worklet URL using Vite's special syntax
+// This gives us the URL to the compiled .js file without executing the worklet code
+// The ?worker&url suffix tells Vite to process it and return the final asset URL
+import aecWorkletUrl from './aec-processor.ts?worker&url';
 
 export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;
@@ -97,12 +98,14 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Load AEC worklet - MUST use new URL() pattern WITHOUT ?url
-      // Vite will compile .ts to .js and rewrite the URL at build time
-      // The file MUST be in src/ (not public/) so Vite can process it
-      await this.recordingContext.audioWorklet.addModule(
-        new URL('../lib/aec-processor.ts', import.meta.url)
-      );
+      // Load AEC worklet using the compiled URL from Vite
+      // The ?worker&url import gives us the correct path to the compiled .js file
+      try {
+        await this.recordingContext.audioWorklet.addModule(aecWorkletUrl);
+      } catch (e) {
+        console.error('Failed to load AEC worklet module:', e);
+        throw e;
+      }
       console.log('✅ AEC processor loaded');
       
       // Load audio worklet for simple VAD
