@@ -49,23 +49,12 @@ const copyWasmPlugin = () => {
 export default defineConfig({
   plugins: [react(), svgr(), copyWasmPlugin()],
   publicDir: 'public',
-  server: {
-    headers: {
-      // Ensure AudioWorklet modules are served with correct MIME type
-      'Content-Type': 'application/javascript',
-    },
-  },
   build: {
     rollupOptions: {
       output: {
-        // Ensure AudioWorklet files are handled correctly
-        entryFileNames: 'assets/[name].js',
-        chunkFileNames: 'assets/[name].js',
+        // Let Vite handle all file naming - it will compile .ts to .js automatically
         assetFileNames: (assetInfo) => {
-          // Handle AudioWorklet files
-          if (assetInfo.name?.endsWith('-processor.ts') || assetInfo.name?.endsWith('-processor.js')) {
-            return 'assets/[name][extname]'
-          }
+          // Only special handling for WASM files
           if (assetInfo.name?.endsWith('.wasm')) {
             return 'assets/[name][extname]'
           }
