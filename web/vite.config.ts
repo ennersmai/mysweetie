@@ -116,6 +116,9 @@ export default defineConfig({
   },
   assetsInclude: ['**/*.wasm'], // Ensure WASM files are treated as assets
   build: {
+    worker: {
+      format: 'iife' // IIFE format ensures 'self' is available in worklet context
+    },
     rollupOptions: {
       output: {
         // Let Vite handle all file naming - it will compile .ts to .js automatically
