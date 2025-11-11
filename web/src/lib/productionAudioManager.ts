@@ -22,6 +22,7 @@ export class ProductionAudioManager {
   private isSendingAudio = false;
   private manuallyStoppedPlayback = false;
   private ttsStartTime = 0; // Track when TTS started for grace period
+  private isBargeInGated = false; // Gate to prevent false triggers during TTS startup
   private playbackPlayhead = 0; // Scheduled playback time for seamless transitions
   private lastGainNode: GainNode | null = null; // For crossfading
   private readonly CROSSFADE_DURATION = 0.01; // 10ms crossfade between buffers
@@ -235,53 +236,63 @@ export class ProductionAudioManager {
       }
     };
 
-    // Get AI voice stream
+    // Get AI voice stream and original mic track ID for identification
     const aiVoiceStream = this.webrtcDestination.stream;
+    const originalMicTrack = this.mediaStream.getAudioTracks()[0];
+    const originalMicTrackId = originalMicTrack.id;
+    const aiVoiceTrackId = aiVoiceStream.getAudioTracks()[0]?.id;
 
     // Set up handler for processed audio stream (with native AEC applied)
     this.processedMicStream = new MediaStream();
     
-    // Track which tracks we've received (first is AI voice, second is mic)
-    let tracksReceived: MediaStreamTrack[] = [];
-    
     // Promise to wait for the processed mic track
+    let processedMicTrack: MediaStreamTrack | null = null;
     let micTrackReceived = false;
     const trackPromise = new Promise<void>((resolve) => {
       this.pc2!.ontrack = (event) => {
         const incomingTrack = event.track;
         
         if (incomingTrack.kind === 'audio') {
-          tracksReceived.push(incomingTrack);
+          // The crucial logic: The processed track is an AUDIO track that is NOT the original mic track ID
+          // Browsers often reuse the ID for the reference track, but create a new one for the processed mic track
+          const isNotOriginalMic = incomingTrack.id !== originalMicTrackId;
+          const isNotAiVoice = incomingTrack.id !== aiVoiceTrackId;
           
-          // The first audio track is the AI voice (reference signal)
-          // The second audio track is the processed microphone (with AEC applied)
-          // We identify it by being the second track, or by checking if it's not muted
-          const isSecondTrack = tracksReceived.length === 2;
-          const isUnmutedTrack = incomingTrack.enabled && !incomingTrack.muted;
-          
-          if (isSecondTrack && isUnmutedTrack && !micTrackReceived) {
-            // This should be the processed microphone track
-            this.processedMicStream!.addTrack(incomingTrack);
+          // Check if it's the processed mic track (different ID from original)
+          if (isNotOriginalMic && isNotAiVoice && !micTrackReceived) {
+            // Check if it's muted. If it is, something is still wrong with the loopback.
+            if (incomingTrack.muted) {
+              console.error('🔥 Received processed mic track, but it is MUTED. Loopback failed.', {
+                enabled: incomingTrack.enabled,
+                muted: incomingTrack.muted,
+                readyState: incomingTrack.readyState,
+                id: incomingTrack.id,
+                originalMicId: originalMicTrackId,
+                aiVoiceId: aiVoiceTrackId
+              });
+              return; // Don't use muted track
+            }
+            
+            // This is the processed microphone track!
+            processedMicTrack = incomingTrack;
+            this.processedMicStream!.addTrack(processedMicTrack);
             micTrackReceived = true;
-            console.log('✅ Received processed microphone track (with native AEC)', {
+            console.log('✅ Received PROCESSED microphone track (with native AEC)', {
               enabled: incomingTrack.enabled,
               muted: incomingTrack.muted,
               readyState: incomingTrack.readyState,
               id: incomingTrack.id,
-              trackNumber: tracksReceived.length
+              originalMicId: originalMicTrackId
             });
             resolve();
-          } else if (tracksReceived.length === 1) {
-            console.log('📢 Received AI voice reference track (for AEC)', {
+          } else {
+            // This is either the AI voice reference track or the original mic track
+            console.log('📢 Received REFERENCE track (AI voice or original mic)', {
               enabled: incomingTrack.enabled,
               muted: incomingTrack.muted,
-              id: incomingTrack.id
-            });
-          } else if (!isUnmutedTrack) {
-            console.warn('⚠️ Received track but it is disabled or muted', {
-              enabled: incomingTrack.enabled,
-              muted: incomingTrack.muted,
-              trackNumber: tracksReceived.length
+              id: incomingTrack.id,
+              isOriginalMic: incomingTrack.id === originalMicTrackId,
+              isAiVoice: incomingTrack.id === aiVoiceTrackId
             });
           }
         }
@@ -318,13 +329,18 @@ export class ProductionAudioManager {
       new Promise<void>((resolve) => setTimeout(resolve, 3000)) // 3 second timeout
     ]);
     
-    if (!micTrackReceived) {
-      console.warn('⚠️ Processed mic track not received - will use raw mic stream');
+    if (!processedMicTrack) {
+      console.error('⚠️ WebRTC Loopback FAILED. Could not get a processed mic track. Falling back to raw mic.');
+      // Clear the processed stream since it's not usable
+      this.processedMicStream = new MediaStream();
+    } else {
+      console.log('✅ WebRTC Loopback successfully established. Using processed mic stream for VAD.');
     }
     
-    console.log('✅ WebRTC two-peer-connection loopback established - native AEC active', {
+    console.log('✅ WebRTC two-peer-connection loopback established', {
       processedStreamTracks: this.processedMicStream.getAudioTracks().length,
-      micTrackReceived
+      micTrackReceived: !!processedMicTrack,
+      hasProcessedTrack: !!processedMicTrack
     });
   }
 
@@ -360,7 +376,14 @@ export class ProductionAudioManager {
     // During TTS playback, use native AEC (via WebRTC loopback) for echo cancellation
     // Browser's native AEC should handle most echo, so we can use a moderate threshold
     if (this.isPlayingTTS) {
-      // Short grace period to allow native AEC to adapt
+      // Barge-in gate: ignore VAD triggers during first 200ms of TTS
+      // This prevents false triggers from initial audio burst before AEC adapts
+      if (this.isBargeInGated) {
+        // Skip VAD during barge-in gate period
+        return;
+      }
+      
+      // Short grace period to allow native AEC to adapt (after gate period)
       const timeSinceTTSStart = performance.now() - (this.ttsStartTime || 0);
       const gracePeriodMs = 300; // 300ms grace period for native AEC to adapt
       
@@ -571,6 +594,15 @@ export class ProductionAudioManager {
       console.log('🎵 Starting TTS playback session - echo cancellation active, VAD threshold increased');
       this.isPlayingTTS = true;
       this.ttsStartTime = performance.now(); // Track start time for grace period
+      
+      // Enable barge-in gate to prevent false triggers during TTS startup
+      this.isBargeInGated = true;
+      console.log('🛡️ Barge-in gate is ON for 200ms');
+      
+      setTimeout(() => {
+        this.isBargeInGated = false;
+        console.log('🛡️ Barge-in gate is OFF. Ready for user interrupt.');
+      }, 200); // 200ms gate duration
     }
 
     try {
