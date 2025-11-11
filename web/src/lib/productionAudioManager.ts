@@ -33,21 +33,13 @@ export class ProductionAudioManager {
 
   // AudioWorklet components
   private workletNode: AudioWorkletNode | null = null;
-  private isTTSSpeakingParam: AudioParam | null = null; // Synchronous parameter for TTS state
-  
-  // Echo-aware VAD: TTS reference signal for comparison
-  private ttsReferenceDestination: MediaStreamAudioDestinationNode | null = null;
-  private ttsReferenceSource: MediaStreamAudioSourceNode | null = null;
   private ringBuffer: Float32Array[] = [];
   private readonly RING_BUFFER_SIZE = 350; // ~933ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
   private utteranceBuffer: Float32Array[] = [];
   private finalAudioBlob: Blob | null = null;
 
-  // VAD state (managed by echo-aware VAD worklet, but we track speaking state here)
+  // VAD state (managed by worklet)
   private vadSpeaking = false;
-  private baseVadThreshold = 0.1; // Base threshold (for logging/debugging)
-  private currentVadThreshold = 0.1; // Current threshold (for logging/debugging)
-  private readonly micBoostFactor = 5.0; // Mic boost factor (for threshold conversion)
 
   // PCM accumulation for TTS playback
   private pcmAccumulator: Int16Array[] = [];
@@ -56,14 +48,6 @@ export class ProductionAudioManager {
   private readonly PCM_MIN_SAMPLES = 8000; // ~500ms at 16kHz, ~333ms at 24kHz - minimum samples before flushing
   private pcmCarryByte: number | null = null; // Carry byte for odd-length buffers
 
-  // Dynamic calibration state for echo-aware VAD
-  private calibrationStarted = false; // Track if calibration has been started for this call
-  private calibrationStopTimer: number | null = null; // Timer for stopping calibration
-  private readonly CALIBRATION_DURATION = 4000; // 4 seconds calibration window (widened for better learning)
-
-  // VAD logging throttling
-  private lastVADLogTime = 0; // Timestamp of last VAD data log
-  private readonly VAD_LOG_INTERVAL = 1000; // Log VAD data once per second
 
   async initialize(): Promise<boolean> {
     try {
@@ -106,65 +90,34 @@ export class ProductionAudioManager {
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
-      // Create TTS reference destination in RECORDING context (same sample rate as mic)
-      // This captures TTS audio so the worklet can compare it with mic audio
-      // Must be in same context as worklet to avoid sample rate mismatch
-      this.ttsReferenceDestination = this.recordingContext.createMediaStreamDestination();
-      console.log('✅ Created TTS reference destination for echo-aware VAD (in recording context)');
-
-      // Load audio worklet for echo-aware VAD
+      // Load audio worklet for simple VAD
       await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
       console.log('✅ Audio processor loaded');
 
-      // Create audio worklet node with 2 inputs (mic and TTS reference)
+      // Create audio worklet node with single input (microphone only)
       this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor', {
-        numberOfInputs: 2,
-        numberOfOutputs: 0 // No audio output, only messages
+        numberOfInputs: 1,
+        numberOfOutputs: 1 // Pass-through output
       });
-      
-      // Get reference to synchronous parameter for TTS state (eliminates race condition)
-      const param = this.workletNode.parameters.get('isTTSSpeaking');
-      if (!param) {
-        console.error('⚠️ Failed to get isTTSSpeaking parameter - race condition fix not available');
-        this.isTTSSpeakingParam = null;
-      } else {
-        this.isTTSSpeakingParam = param;
-        console.log('✅ Synchronous TTS state parameter acquired - race condition eliminated');
-      }
 
-      // Connect microphone stream to worklet input 0
+      // Connect microphone stream to worklet
       const micSource = this.recordingContext.createMediaStreamSource(this.mediaStream);
-      micSource.connect(this.workletNode, 0, 0);
-      console.log('✅ Connected microphone to worklet input 0');
+      micSource.connect(this.workletNode);
+      console.log('✅ Connected microphone to worklet');
 
-      // Connect TTS reference stream to worklet input 1
-      // The reference destination is in the recording context, so no sample rate mismatch
-      this.ttsReferenceSource = this.recordingContext.createMediaStreamSource(this.ttsReferenceDestination.stream);
-      this.ttsReferenceSource.connect(this.workletNode, 0, 1);
-      console.log('✅ Connected TTS reference to worklet input 1 (same sample rate as mic)');
-
-      // Handle messages from echo-aware VAD worklet
+      // Handle messages from VAD worklet
       this.workletNode.port.onmessage = (event) => {
         const message = event.data;
         
         if (message.type === 'speech_start') {
-          // Echo-aware VAD detected speech
+          // VAD detected speech
           this.handleSpeechStart();
         } else if (message.type === 'speech_end') {
-          // Echo-aware VAD detected speech end
+          // VAD detected speech end
           this.handleSpeechEnd();
         } else if (message.type === 'audio_data') {
           // Audio data from worklet (for ring buffer and recording)
           const pcmData: Float32Array = message.data;
-          
-          // Log VAD data for debugging and manual tuning (throttled to once per second)
-          if (message.rmsMic !== undefined && message.peakRmsAI !== undefined) {
-            const now = Date.now();
-            if (now - this.lastVADLogTime >= this.VAD_LOG_INTERVAL) {
-              console.log(`VAD Data: Mic=${message.rmsMic.toFixed(4)}, AI Peak=${message.peakRmsAI.toFixed(4)}, TTS Playing=${message.isTTSSpeaking}`);
-              this.lastVADLogTime = now;
-            }
-          }
           
           // Always maintain ring buffer (last ~1200ms of audio)
           this.ringBuffer.push(pcmData);
@@ -195,10 +148,6 @@ export class ProductionAudioManager {
           if (this.isSendingAudio) {
             this.utteranceBuffer.push(pcmData);
           }
-        } else if (message.type === 'calibration_started') {
-          console.log('✅ Echo-aware VAD calibration started');
-        } else if (message.type === 'calibration_complete') {
-          console.log(`✅ Echo-aware VAD calibration complete: learnedEchoRatio=${message.learnedEchoRatio?.toFixed(4)}, samples=${message.samples}`);
         }
       };
 
@@ -295,53 +244,6 @@ export class ProductionAudioManager {
     if (this.onSpeechEnd) {
       this.onSpeechEnd();
     }
-  }
-
-  /**
-   * Resample audio buffer from one sample rate to another using linear interpolation
-   */
-  private resampleAudioBuffer(sourceBuffer: AudioBuffer, sourceRate: number, targetRate: number): AudioBuffer | null {
-    if (!this.recordingContext) return null;
-    
-    if (sourceRate === targetRate) {
-      // No resampling needed - create new buffer with same data
-      const newBuffer = this.recordingContext.createBuffer(
-        sourceBuffer.numberOfChannels,
-        sourceBuffer.length,
-        targetRate
-      );
-      for (let channel = 0; channel < sourceBuffer.numberOfChannels; channel++) {
-        newBuffer.copyToChannel(sourceBuffer.getChannelData(channel), channel);
-      }
-      return newBuffer;
-    }
-    
-    const ratio = sourceRate / targetRate;
-    const targetLength = Math.floor(sourceBuffer.length / ratio);
-    
-    const resampledBuffer = this.recordingContext.createBuffer(
-      sourceBuffer.numberOfChannels,
-      targetLength,
-      targetRate
-    );
-    
-    // Linear interpolation resampling
-    for (let channel = 0; channel < sourceBuffer.numberOfChannels; channel++) {
-      const sourceData = sourceBuffer.getChannelData(channel);
-      const targetData = resampledBuffer.getChannelData(channel);
-      
-      for (let i = 0; i < targetLength; i++) {
-        const srcIndex = i * ratio;
-        const srcIndexFloor = Math.floor(srcIndex);
-        const srcIndexCeil = Math.min(srcIndexFloor + 1, sourceData.length - 1);
-        const fraction = srcIndex - srcIndexFloor;
-        
-        targetData[i] = sourceData[srcIndexFloor] * (1 - fraction) + 
-                       sourceData[srcIndexCeil] * fraction;
-      }
-    }
-    
-    return resampledBuffer;
   }
 
   /**
@@ -443,36 +345,8 @@ export class ProductionAudioManager {
     
     // Set TTS playing state ONLY if not already playing
     if (!this.isPlayingTTS) {
-      console.log('🎵 Starting TTS playback session - echo-aware VAD active');
+      console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
-      
-      // SYNC LOCK: Set TTS state synchronously via parameter (eliminates race condition)
-      if (this.isTTSSpeakingParam && this.recordingContext) {
-        console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 1.0');
-        this.isTTSSpeakingParam.setValueAtTime(1.0, this.recordingContext.currentTime);
-      }
-      
-      // Start dynamic calibration on first TTS chunk of the call
-      if (!this.calibrationStarted && this.workletNode) {
-        console.log('🎯 Starting dynamic echo-aware VAD calibration');
-        this.calibrationStarted = true;
-        
-        // Send start calibration message to worklet
-        this.workletNode.port.postMessage({
-          type: 'start_calibration'
-        });
-        
-        // Schedule stop calibration after calibration duration
-        this.calibrationStopTimer = window.setTimeout(() => {
-          if (this.workletNode) {
-            console.log('🎯 Stopping dynamic echo-aware VAD calibration');
-            this.workletNode.port.postMessage({
-              type: 'stop_calibration'
-            });
-          }
-          this.calibrationStopTimer = null;
-        }, this.CALIBRATION_DURATION);
-      }
     }
 
     try {
@@ -777,11 +651,6 @@ export class ProductionAudioManager {
             this.isPlayingTTS = false;
             this.isFirstBuffer = true;
             
-            if (this.isTTSSpeakingParam && this.recordingContext) {
-              console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
-              this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
-            }
-            
             if (this.onPlaybackComplete) {
               this.onPlaybackComplete();
             }
@@ -831,36 +700,6 @@ export class ProductionAudioManager {
       
       source.connect(gainNode);
       gainNode.connect(this.playbackContext.destination);
-      
-      // Route to TTS reference for echo-aware VAD
-      if (this.ttsReferenceDestination && this.recordingContext) {
-        const resampledBuffer = this.resampleAudioBuffer(
-          audioBuffer,
-          this.playbackContext.sampleRate,
-          this.recordingContext.sampleRate
-        );
-        
-        if (resampledBuffer) {
-          const resampledSource = this.recordingContext.createBufferSource();
-          resampledSource.buffer = resampledBuffer;
-          const resampledGain = this.recordingContext.createGain();
-          resampledGain.gain.value = 1.5;
-          
-          resampledSource.connect(resampledGain);
-          resampledGain.connect(this.ttsReferenceDestination);
-          
-          const recordingCurrentTime = this.recordingContext.currentTime;
-          const playbackCurrentTime = this.playbackContext.currentTime;
-          const timeOffset = startTime - playbackCurrentTime;
-          const resampledStartTime = recordingCurrentTime + timeOffset + 0.01;
-          
-          resampledSource.start(resampledStartTime);
-          
-          resampledSource.onended = () => {
-            resampledGain.disconnect();
-          };
-        }
-      }
       
       source.start(startTime);
       
@@ -958,40 +797,6 @@ export class ProductionAudioManager {
     // Route TTS audio to playback destination (user hears this)
     gainNode.connect(this.playbackContext.destination);
     
-    // Route TTS audio to reference destination for echo-aware VAD
-    // Need to resample from 16kHz (playback context) to 48kHz (recording context)
-    if (this.ttsReferenceDestination && this.recordingContext) {
-      // Resample audio buffer from 16kHz to recording context sample rate
-      const resampledBuffer = this.resampleAudioBuffer(
-        audioBuffer,
-        this.playbackContext.sampleRate,
-        this.recordingContext.sampleRate
-      );
-      
-      if (resampledBuffer) {
-        const resampledSource = this.recordingContext.createBufferSource();
-        resampledSource.buffer = resampledBuffer;
-        const resampledGain = this.recordingContext.createGain();
-        resampledGain.gain.value = 1.5; // Match playback volume
-        
-        resampledSource.connect(resampledGain);
-        resampledGain.connect(this.ttsReferenceDestination);
-        
-        // Start resampled source at the same relative time
-        const recordingCurrentTime = this.recordingContext.currentTime;
-        const playbackCurrentTime = this.playbackContext.currentTime;
-        const timeOffset = startTime - playbackCurrentTime;
-        const resampledStartTime = recordingCurrentTime + timeOffset + 0.01;
-        
-        resampledSource.start(resampledStartTime);
-        
-        // Clean up when done
-        resampledSource.onended = () => {
-          resampledGain.disconnect();
-        };
-      }
-    }
-    
     // Store gain node for next crossfade
     this.lastGainNode = gainNode;
     
@@ -1022,12 +827,6 @@ export class ProductionAudioManager {
               console.log('✅ TTS session complete - no more audio after delay, re-enabling VAD');
               this.isPlayingTTS = false;
               this.isFirstBuffer = true; // Reset for next TTS session
-              
-              // SYNC LOCK: Set TTS state synchronously via parameter
-              if (this.isTTSSpeakingParam && this.recordingContext) {
-                console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
-                this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
-              }
               
               if (this.onPlaybackComplete) {
                 this.onPlaybackComplete();
@@ -1082,13 +881,8 @@ export class ProductionAudioManager {
     this.scheduledBuffers = [];
     this.isPlaying = false;
     
-    // SYNC LOCK: Set TTS state synchronously via parameter
     if (this.isPlayingTTS) {
       this.isPlayingTTS = false;
-      if (this.isTTSSpeakingParam && this.recordingContext) {
-        console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
-        this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
-      }
     }
     
     this.playbackPlayhead = 0; // Reset playhead
@@ -1097,8 +891,6 @@ export class ProductionAudioManager {
     
     // Reset VAD state when playback stops
     this.vadSpeaking = false;
-    this.currentVadThreshold = this.baseVadThreshold;
-    console.log(`🔄 VAD state reset in stopPlayback - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
     
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
@@ -1107,14 +899,6 @@ export class ProductionAudioManager {
     this.pcmAccumulator = [];
     this.pcmCarryByte = null;
     
-    // Clear calibration timer if still running
-    if (this.calibrationStopTimer) {
-      clearTimeout(this.calibrationStopTimer);
-      this.calibrationStopTimer = null;
-    }
-    
-    // Note: Echo cancellation is handled by browser's native AEC via WebRTC loopback
-    // No need to reset anything - browser handles it automatically
     
     console.log('🛑 Playback stopped and cleared');
   }
@@ -1137,17 +921,9 @@ export class ProductionAudioManager {
         console.log('✅ Marking TTS session as complete, re-enabling VAD');
         this.isPlayingTTS = false;
         
-        // SYNC LOCK: Set TTS state synchronously via parameter
-        if (this.isTTSSpeakingParam && this.recordingContext) {
-          console.log('🔒 SYNC LOCK: Setting isTTSSpeaking to 0.0');
-          this.isTTSSpeakingParam.setValueAtTime(0.0, this.recordingContext.currentTime);
-        }
-      
       // Reset VAD state to ensure clean detection after TTS
       this.vadSpeaking = false;
-      this.currentVadThreshold = this.baseVadThreshold; // Reset to normal threshold
       this.isFirstBuffer = true; // Reset for next TTS session
-      console.log(`🔄 VAD state reset after TTS completion - threshold: ${this.currentVadThreshold.toFixed(4)} (base: ${this.baseVadThreshold.toFixed(4)})`);
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');
@@ -1195,21 +971,10 @@ export class ProductionAudioManager {
 
   /**
    * Set VAD threshold (from backend calibration)
-   * The backend threshold is in raw RMS energy units
-   * Client-side multiplies RMS by micBoostFactor before comparison
-   * So we need to multiply the backend threshold by micBoostFactor to match
+   * Simple pass-through to worklet
    */
   setVADThreshold(backendThreshold: number): void {
-    // Backend threshold is in raw RMS energy (0-1 range typically)
-    // Client-side calculates: rms = rawRMS * micBoostFactor
-    // So client threshold should be: backendThreshold * micBoostFactor
-    const clientThreshold = backendThreshold * this.micBoostFactor;
-    
-    // Set as base threshold (will be used for normal listening)
-    this.baseVadThreshold = Math.max(0.001, Math.min(0.5, clientThreshold)); // Clamp to reasonable range
-    this.currentVadThreshold = this.baseVadThreshold;
-    
-    // Send threshold to worklet (worklet uses raw RMS, so send backend threshold directly)
+    // Send threshold to worklet
     if (this.workletNode) {
       this.workletNode.port.postMessage({
         type: 'vad_threshold',
@@ -1217,7 +982,7 @@ export class ProductionAudioManager {
       });
     }
     
-    console.log(`🎯 VAD threshold updated from backend calibration: backend=${backendThreshold.toFixed(6)}, client=${this.baseVadThreshold.toFixed(4)} (multiplied by ${this.micBoostFactor}x)`);
+    console.log(`🎯 VAD threshold updated from backend calibration: ${backendThreshold.toFixed(6)}`);
   }
 
   getAssembledAudio(): Blob | null {
@@ -1237,12 +1002,6 @@ export class ProductionAudioManager {
     this.stopRecording();
     this.stopPlayback();
     
-    // Disconnect TTS reference source
-    if (this.ttsReferenceSource) {
-      this.ttsReferenceSource.disconnect();
-      this.ttsReferenceSource = null;
-    }
-    
     this.vadSpeaking = false;
     this.isSendingAudio = false;
     
@@ -1257,13 +1016,6 @@ export class ProductionAudioManager {
     }
     this.pcmAccumulator = [];
     this.pcmCarryByte = null;
-    
-    // Reset calibration state
-    if (this.calibrationStopTimer) {
-      clearTimeout(this.calibrationStopTimer);
-      this.calibrationStopTimer = null;
-    }
-    this.calibrationStarted = false;
     
     // Stop queue manager
     if (this.queueManagerTimer) {
