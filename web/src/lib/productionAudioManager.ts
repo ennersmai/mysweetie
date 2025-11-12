@@ -150,14 +150,18 @@ export class ProductionAudioManager {
         .replace(/^\/\/\s*Declare WebRtcAec3.*$/gm, '')
         // Fallback: remove any remaining declare statements (single line)
         .replace(/^declare\s+const\s+WebRtcAec3.*$/gm, '')
-        // Remove type annotations - exclude / and * to avoid matching inside comments
-        // Match : followed by type (anything except =, ;, /, *) until we hit = or ;
-        .replace(/:\s*[^=;\/\*]+(?=\s*[=;])/g, '') // Remove type annotations before = or ;
-        // Remove function parameter type annotations (exclude / and * to avoid comments)
-        // Be careful not to break async arrow functions - match only before => or ,
-        .replace(/:\s*[^,)\/\*=]+(?=\s*[,)])/g, '') // Remove parameter type annotations (exclude = to avoid breaking =>)
-        // Also handle return type annotations like `): boolean {`
-        .replace(/\)\s*:\s*\w+\s*\{/g, ') {') // Remove return type annotations
+        // Remove type annotations more carefully to avoid breaking syntax
+        // Handle arrow function parameters FIRST: `async (ev: MessageEvent) =>` -> `async (ev) =>`
+        // Match parameter name, colon, type, closing paren, then arrow
+        .replace(/\((\w+)\s*:\s*[^)]+\)\s*=>/g, '($1) =>') // Remove parameter types in arrow functions
+        // Handle regular function parameters: `(param: Type)` -> `(param)` (but not arrow functions)
+        .replace(/\((\w+)\s*:\s*[^)]+\)(?!\s*=>)/g, '($1)') // Remove parameter types (not arrow functions)
+        // Handle property types: `prop: Type =` -> `prop =` (but be careful with object properties)
+        // Don't match object property values like `{ wasmBinary: wasm }` - only match type annotations
+        .replace(/(\w+)\s*:\s*([A-Z][a-zA-Z0-9_\[\]\s\|]*)\s*=/g, '$1 =') // Remove property type annotations before =
+        .replace(/:\s*[^=;\/\*]+(?=\s*[=;])/g, '') // Remove remaining type annotations before = or ;
+        // Handle return type annotations: `): Type {` -> `) {`
+        .replace(/\)\s*:\s*\w+\s*\{/g, ') {')
         // Remove remaining simple type annotations (fallback, exclude comment chars)
         .replace(/:\s*MessageEvent(?![^\/]*\/\/)/g, '') // Remove MessageEvent type annotation
         .replace(/:\s*any\s*(?![^\/]*\/\/)/g, ' ') // Remove :any type annotations
