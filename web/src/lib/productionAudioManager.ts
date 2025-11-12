@@ -149,55 +149,68 @@ export class ProductionAudioManager {
       // Remove any import/export statements from processor code
       // Also strip TypeScript syntax since this will be executed as plain JavaScript
       // The processor code should only contain the class definition and registration
-      const modifiedProcessorCode = aecProcessorCode
-        .replace(/^import\s+.*$/gm, '') // Remove import statements
-        .replace(/^export\s+.*$/gm, '') // Remove export statements
-        // Remove multi-line WebRtcAec3 type declaration
-        // The declaration ends with `}>;` (closing Promise type and declaration)
-        // Use greedy match to ensure we match until the FINAL `}>;` pattern
-        .replace(/^declare\s+const\s+WebRtcAec3\s*:[\s\S]*\}>;\s*$/gm, '')
-        // Also remove the comment line before the declare
-        .replace(/^\/\/\s*Declare WebRtcAec3.*$/gm, '')
-        // Fallback: remove any remaining declare statements (single line)
-        .replace(/^declare\s+const\s+WebRtcAec3.*$/gm, '')
-        // Remove type annotations more carefully to avoid breaking syntax
-        // Handle arrow function parameters FIRST: `async (ev: MessageEvent) =>` -> `async (ev) =>`
-        // Match parameter name, colon, type, closing paren, then arrow
-        .replace(/\((\w+)\s*:\s*[^)]+\)\s*=>/g, '($1) =>') // Remove parameter types in arrow functions
-        // Handle regular function parameters: `(param: Type)` -> `(param)` (but not arrow functions)
-        // Handle multiple parameters: `(inputs: Type, outputs: Type)` -> `(inputs, outputs)`
-        // This must preserve parameter names correctly
-        .replace(/\(([^)]+)\)(?!\s*=>)/g, (_match, params) => {
-          // Remove type annotations from each parameter, preserving parameter names
-          // Match: paramName: Type -> paramName
+      // IMPORTANT: Process line by line to avoid breaking comments
+      const lines = aecProcessorCode.split('\n');
+      const processedLines = lines.map((line: string) => {
+        // Skip comment lines - don't modify them (single-line // comments, multi-line /* */ comments)
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('//') || trimmedLine.startsWith('*') || trimmedLine.startsWith('/*')) {
+          return line;
+        }
+        
+        // Process non-comment lines
+        let processedLine = line;
+        
+        // Remove import/export/declare statements (only at start of line)
+        if (/^\s*import\s+/.test(processedLine)) {
+          return ''; // Remove import lines
+        }
+        if (/^\s*export\s+/.test(processedLine)) {
+          return ''; // Remove export lines
+        }
+        if (/^\s*declare\s+const\s+WebRtcAec3/.test(processedLine)) {
+          return ''; // Remove declare lines
+        }
+        if (/^\s*\/\/\s*Declare WebRtcAec3/.test(processedLine)) {
+          return ''; // Remove declare comment lines
+        }
+        
+        // Remove type annotations from arrow function parameters
+        processedLine = processedLine.replace(/\((\w+)\s*:\s*[^)]+\)\s*=>/g, '($1) =>');
+        
+        // Remove type annotations from regular function parameters
+        processedLine = processedLine.replace(/\(([^)]+)\)(?!\s*=>)/g, (_match: string, params: string) => {
           const cleanedParams = params.split(',').map((param: string) => {
             const trimmed = param.trim();
-            // Extract parameter name (everything before the colon)
             const paramMatch = trimmed.match(/^(\w+)\s*:/);
             return paramMatch ? paramMatch[1] : trimmed;
           }).join(', ');
           return '(' + cleanedParams + ')';
-        })
-        // Handle property types: `prop: Type =` -> `prop =` (but be careful with object properties)
-        // Match class property declarations (must be at start of line or after whitespace, before = or ;)
-        // Handle union types like `Float32Array[] | null` by matching until = or ;
-        // Exclude object literals by ensuring we're not inside braces
-        .replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*[=;])/gm, '$1$2') // Remove property type annotations (class properties at line start)
-        .replace(/(\s+)(\w+)\s*:\s*[^=;]+(?=\s*[=;])/g, '$1$2') // Remove property type annotations (class properties after whitespace)
-        // Handle return type annotations: `): Type {` -> `) {`
-        .replace(/\)\s*:\s*\w+\s*\{/g, ') {')
-        // Remove remaining simple type annotations (fallback, exclude comment chars)
-        .replace(/:\s*MessageEvent(?![^\/]*\/\/)/g, '') // Remove MessageEvent type annotation
-        .replace(/:\s*any\s*(?![^\/]*\/\/)/g, ' ') // Remove :any type annotations
-        .replace(/:\s*Float32Array\[\]\[\]\s*(?![^\/]*\/\/)/g, ' ') // Remove Float32Array[][] type annotations
-        .replace(/:\s*number\s*(?![^\/]*\/\/)/g, ' ') // Remove :number type annotations
-        .replace(/:\s*boolean\s*(?![^\/]*\/\/)/g, ' ') // Remove :boolean type annotations
-        .replace(/private\s+(?![^\/]*\/\/)/g, '') // Remove private keyword
-        // Remove TypeScript 'as' type assertions: `value as Type` -> `value`
-        .replace(/\s+as\s+[A-Z][a-zA-Z0-9_\[\]\s\|]*/g, '') // Remove 'as Type' assertions
-        .replace(/@ts-expect-error\s*/g, '') // Remove @ts-expect-error comments
-        .replace(/\/\/\s*@ts-expect-error.*$/gm, '') // Remove @ts-expect-error comment lines
-        .replace(/\/\/\s*@ts-ignore.*$/gm, ''); // Remove @ts-ignore comment lines
+        });
+        
+        // Remove property type annotations (class properties only)
+        // Match: whitespace + propName + : + type + = or ;
+        // Replace with: whitespace + propName + = (preserve the =)
+        processedLine = processedLine.replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*=)/gm, '$1$2 =');
+        processedLine = processedLine.replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*;)/gm, '$1$2');
+        
+        // Remove return type annotations
+        processedLine = processedLine.replace(/\)\s*:\s*\w+\s*\{/g, ') {');
+        
+        // Remove 'as' type assertions
+        processedLine = processedLine.replace(/\s+as\s+[A-Z][a-zA-Z0-9_\[\]\s\|]*/g, '');
+        
+        // Remove private keyword
+        processedLine = processedLine.replace(/private\s+/g, '');
+        
+        return processedLine;
+      });
+      
+      const modifiedProcessorCode = processedLines.join('\n')
+        // Remove TypeScript comment directives (safe to do on full text)
+        .replace(/@ts-expect-error\s*/g, '')
+        .replace(/\/\/\s*@ts-expect-error.*$/gm, '')
+        .replace(/\/\/\s*@ts-ignore.*$/gm, '');
       
       // Construct the final module script
       // Use array join instead of template literal to avoid syntax errors from backticks/${} in code
