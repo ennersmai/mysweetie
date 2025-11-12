@@ -208,6 +208,19 @@ class AECProcessor extends AudioWorkletProcessorClass {
       // Passthrough: copy current mic input directly to output
       // This ensures continuous audio flow while accumulating frames for AEC processing
       cleanOutputChannel.set(micInput[0]);
+      
+      // Debug: verify passthrough is working
+      if (!this.debugFrameCount || this.debugFrameCount % 100 === 0) {
+        let micSum = 0;
+        let outSum = 0;
+        for (let i = 0; i < micInput[0].length; i++) {
+          micSum += micInput[0][i] * micInput[0][i];
+          outSum += cleanOutputChannel[i] * cleanOutputChannel[i];
+        }
+        const micRMS = Math.sqrt(micSum / micInput[0].length);
+        const outRMS = Math.sqrt(outSum / cleanOutputChannel.length);
+        console.log(`[AEC] Passthrough mode - Mic RMS: ${micRMS.toFixed(6)}, Output RMS: ${outRMS.toFixed(6)}, micBuffer: ${this.micBuffer.length}`);
+      }
     } else if (outputOffset < frameSize) {
       // We processed some frames but didn't fill the entire output buffer
       // Fill the remainder with silence (shouldn't happen often)
@@ -217,8 +230,8 @@ class AECProcessor extends AudioWorkletProcessorClass {
     // Debug logging: log RMS of output every 100 frames
     if (!this.debugFrameCount) this.debugFrameCount = 0;
     this.debugFrameCount++;
-    if (this.debugFrameCount % 100 === 0) {
-      // Calculate RMS of output to see if audio is flowing
+    if (this.debugFrameCount % 100 === 0 && processedAnyFrames) {
+      // Calculate RMS of output to see if audio is flowing (only log when we processed frames)
       let sum = 0;
       for (let i = 0; i < cleanOutputChannel.length; i++) {
         sum += cleanOutputChannel[i] * cleanOutputChannel[i];
