@@ -131,10 +131,20 @@ export class ProductionAudioManager {
       
       // Remove export statements from library code so we can use it directly
       // The library exports WebRtcAec3, we need to make it available in our scope
+      // Also patch the library to declare WebRtcAec3Wasm variable (prevents ReferenceError)
       // No need to patch WASM URLs since we're passing the buffer directly to the factory
-      const modifiedLibraryCode = aecLibraryCode
+      let modifiedLibraryCode = aecLibraryCode
         .replace(/export\s*{\s*WebRtcAec3\s*};?/g, '') // Remove export statement
         .replace(/export\s+default\s+WebRtcAec3;?/g, ''); // Remove default export if present
+      
+      // Patch: Add WebRtcAec3Wasm declaration at the beginning if not already present
+      // This prevents "assignment to undeclared variable" errors in module context
+      if (!modifiedLibraryCode.includes('var WebRtcAec3Wasm') && 
+          !modifiedLibraryCode.includes('let WebRtcAec3Wasm') && 
+          !modifiedLibraryCode.includes('const WebRtcAec3Wasm')) {
+        modifiedLibraryCode = 'var WebRtcAec3Wasm;\n' + modifiedLibraryCode;
+        console.log('✅ Patched library code: added WebRtcAec3Wasm declaration');
+      }
       
       // Remove any import/export statements from processor code
       // Also strip TypeScript syntax since this will be executed as plain JavaScript
