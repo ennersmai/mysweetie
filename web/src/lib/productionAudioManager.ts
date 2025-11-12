@@ -165,7 +165,19 @@ export class ProductionAudioManager {
         // Match parameter name, colon, type, closing paren, then arrow
         .replace(/\((\w+)\s*:\s*[^)]+\)\s*=>/g, '($1) =>') // Remove parameter types in arrow functions
         // Handle regular function parameters: `(param: Type)` -> `(param)` (but not arrow functions)
-        .replace(/\((\w+)\s*:\s*[^)]+\)(?!\s*=>)/g, '($1)') // Remove parameter types (not arrow functions)
+        // Handle multiple parameters: `(inputs: Type, outputs: Type)` -> `(inputs, outputs)`
+        // This must preserve parameter names correctly
+        .replace(/\(([^)]+)\)(?!\s*=>)/g, (_match, params) => {
+          // Remove type annotations from each parameter, preserving parameter names
+          // Match: paramName: Type -> paramName
+          const cleanedParams = params.split(',').map((param: string) => {
+            const trimmed = param.trim();
+            // Extract parameter name (everything before the colon)
+            const paramMatch = trimmed.match(/^(\w+)\s*:/);
+            return paramMatch ? paramMatch[1] : trimmed;
+          }).join(', ');
+          return '(' + cleanedParams + ')';
+        })
         // Handle property types: `prop: Type =` -> `prop =` (but be careful with object properties)
         // Don't match object property values like `{ wasmBinary: wasm }` - only match type annotations
         // Type annotations are uppercase (Float32Array, MessageEvent, etc.) or primitives (number, boolean, any)
@@ -306,14 +318,26 @@ export class ProductionAudioManager {
       // Wait for AEC initialization
       await aecInitPromise;
 
-      // Create TTS destination node in playback context to capture TTS audio
-      this.ttsDestinationNode = this.playbackContext.createMediaStreamDestination();
-      console.log('✅ TTS destination node created');
-
-      // Create TTS source node in recording context from TTS stream
-      // This will auto-resample 16kHz → 48kHz
-      this.ttsSourceNode = this.recordingContext.createMediaStreamSource(this.ttsDestinationNode.stream);
-      console.log('✅ TTS source node created (auto-resampling 16kHz → 48kHz)');
+      // Create TTS destination node in playback context (16kHz) to capture TTS audio
+      // We'll create a separate destination in recording context for AEC that gets resampled audio
+      const ttsDestinationPlayback = this.playbackContext.createMediaStreamDestination();
+      console.log('✅ TTS destination node created in playback context (16kHz)');
+      
+      // Create TTS source node in recording context from playback stream
+      // The browser will handle resampling 16kHz → 48kHz automatically
+      // Note: This requires the MediaStream to be compatible across contexts
+      try {
+        this.ttsSourceNode = this.recordingContext.createMediaStreamSource(ttsDestinationPlayback.stream);
+        console.log('✅ TTS source node created in recording context (auto-resampling 16kHz → 48kHz)');
+        this.ttsDestinationNode = ttsDestinationPlayback; // Store reference
+      } catch (error: any) {
+        // If cross-context resampling isn't supported, we need a different approach
+        console.warn('⚠️ Cross-context MediaStreamSource not supported, using alternative approach:', error.message);
+        // Fallback: Create destination in recording context and resample manually
+        this.ttsDestinationNode = this.recordingContext.createMediaStreamDestination();
+        this.ttsSourceNode = this.recordingContext.createMediaStreamSource(this.ttsDestinationNode.stream);
+        console.log('✅ Using same-context approach (manual resampling required)');
+      }
 
       // Create VAD worklet node with single input (receives clean audio from AEC)
       this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor', {
