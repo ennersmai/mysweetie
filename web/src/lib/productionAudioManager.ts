@@ -212,10 +212,6 @@ export class ProductionAudioManager {
         .replace(/\/\/\s*@ts-expect-error.*$/gm, '')
         .replace(/\/\/\s*@ts-ignore.*$/gm, '');
       
-      // Log the entire processed processor code for debugging
-      console.log('📝 Processed processor code (first 5000 chars):', modifiedProcessorCode.substring(0, 5000));
-      console.log('📝 Processed processor code (full length):', modifiedProcessorCode.length, 'chars');
-      
       // Construct the final module script
       // Use array join instead of template literal to avoid syntax errors from backticks/${} in code
       const finalWorkletScript = [
@@ -227,10 +223,6 @@ export class ProductionAudioManager {
         modifiedProcessorCode,
         '// --- End of aec-processor.js code ---'
       ].join('\n');
-      
-      // Log the entire final script for debugging
-      console.log('📝 Final worklet script (first 10000 chars):', finalWorkletScript.substring(0, 10000));
-      console.log('📝 Final worklet script (full length):', finalWorkletScript.length, 'chars');
       
       // Create a Blob URL from the combined script
       // AudioWorklets loaded via addModule() are treated as ES modules

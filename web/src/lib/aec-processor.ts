@@ -29,6 +29,9 @@ class AECProcessor extends AudioWorkletProcessorClass {
   aec: any = null;
   outBuf: Float32Array[] | null = null; // Pre-allocated buffer for clean output
   sampleRate: number = 48000; // Default sample rate
+  aecFrameSize: number = 0; // Required frame size for AEC processing
+  micBuffer: Float32Array = new Float32Array(0); // Accumulated mic input buffer
+  ttsBuffer: Float32Array = new Float32Array(0); // Accumulated TTS input buffer
   
   constructor() {
     super();
@@ -56,14 +59,14 @@ class AECProcessor extends AudioWorkletProcessorClass {
           // outputChannels = 1 (TTS/render), inputChannels = 1 (mic/capture)
           this.aec = new AEC3Module.AEC3(this.sampleRate, 1, 1);
           
-          // Step 5: Pre-allocate output buffer according to library's required size
+          // Step 5: Determine the required frame size for AEC processing
           // API: const bufSz = aec.processSize(inputData)
           // A standard worklet frame is 128 samples
           const tempInput = [new Float32Array(128)]; // Dummy input to get the size
-          const bufSz = this.aec.processSize(tempInput);
-          this.outBuf = [new Float32Array(bufSz)] as Float32Array[]; // Library expects array of Float32Arrays
+          this.aecFrameSize = this.aec.processSize(tempInput);
+          this.outBuf = [new Float32Array(this.aecFrameSize)] as Float32Array[]; // Library expects array of Float32Arrays
           
-          console.log(`✅ AEC initialized at ${this.sampleRate}Hz (1 render, 1 capture channel), buffer size: ${bufSz}`);
+          console.log(`✅ AEC initialized at ${this.sampleRate}Hz (1 render, 1 capture channel), frame size: ${this.aecFrameSize}`);
           
           // Notify main thread that initialization is complete
           this.port.postMessage({ type: 'init-done' });
@@ -83,7 +86,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
   
   process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     // Guard: If AEC is not initialized or output buffer not ready, output silence
-    if (!this.aec || !this.outBuf) {
+    if (!this.aec || !this.outBuf || this.aecFrameSize === 0) {
       const output = outputs[0];
       if (output && output[0]) {
         output[0].fill(0); // Fill with silence
@@ -92,7 +95,6 @@ class AECProcessor extends AudioWorkletProcessorClass {
     }
     
     // Get inputs: mic on input 0, TTS on input 1
-    // API expects arrays of Float32Arrays (array of channels)
     const micInput = inputs[0];
     const ttsInput = inputs[1];
     const cleanOutput = outputs[0];
@@ -102,44 +104,78 @@ class AECProcessor extends AudioWorkletProcessorClass {
       return true; // Keep processor alive
     }
     
-    // API expects arrays of Float32Arrays
-    const micChannels = micInput; // Already in correct format
-    const ttsChannels = ttsInput || [new Float32Array(0)]; // Provide empty array if no TTS
+    const frameSize = micInput[0].length; // Standard worklet frame size (128 samples)
     
-    try {
-      // Step 1: Analyze the playback/render stream (TTS)
-      // API: aec.analyze(ttsInput) where ttsInput is Float32Array[]
-      if (ttsChannels[0] && ttsChannels[0].length > 0) {
+    // Accumulate mic input into buffer
+    const newMicLength = this.micBuffer.length + frameSize;
+    const newMicBuffer = new Float32Array(newMicLength);
+    newMicBuffer.set(this.micBuffer, 0);
+    newMicBuffer.set(micInput[0], this.micBuffer.length);
+    this.micBuffer = newMicBuffer;
+    
+    // Accumulate TTS input into buffer (if present)
+    if (ttsInput && ttsInput[0] && ttsInput[0].length > 0) {
+      const newTtsLength = this.ttsBuffer.length + frameSize;
+      const newTtsBuffer = new Float32Array(newTtsLength);
+      newTtsBuffer.set(this.ttsBuffer, 0);
+      newTtsBuffer.set(ttsInput[0], this.ttsBuffer.length);
+      this.ttsBuffer = newTtsBuffer;
+    } else {
+      // Pad TTS buffer with zeros if no TTS input
+      const newTtsLength = this.ttsBuffer.length + frameSize;
+      const newTtsBuffer = new Float32Array(newTtsLength);
+      newTtsBuffer.set(this.ttsBuffer, 0);
+      newTtsBuffer.fill(0, this.ttsBuffer.length);
+      this.ttsBuffer = newTtsBuffer;
+    }
+    
+    // Process accumulated frames when we have enough data
+    const cleanOutputChannel = cleanOutput[0];
+    let outputOffset = 0;
+    
+    while (this.micBuffer.length >= this.aecFrameSize && outputOffset < frameSize) {
+      try {
+        // Extract frame-sized chunks from buffers
+        const micFrame = this.micBuffer.subarray(0, this.aecFrameSize);
+        const ttsFrame = this.ttsBuffer.subarray(0, this.aecFrameSize);
+        
+        // Prepare inputs in the format AEC expects (array of Float32Arrays)
+        const micChannels = [micFrame];
+        const ttsChannels = [ttsFrame];
+        
+        // Step 1: Analyze the playback/render stream (TTS)
+        // API: aec.analyze(ttsInput) where ttsInput is Float32Array[]
         this.aec.analyze(ttsChannels);
+        
+        // Step 2: Process the capture stream (Mic), writing to our pre-allocated buffer
+        // API: aec.process(outBuf, micInput) where both are Float32Array[]
+        // This modifies outBuf in place
+        this.aec.process(this.outBuf, micChannels);
+        
+        // Step 3: Copy the result from our pre-allocated buffer to the worklet output
+        const processedChannel = this.outBuf[0];
+        const remainingOutputSpace = frameSize - outputOffset;
+        const copyLength = Math.min(processedChannel.length, remainingOutputSpace);
+        
+        cleanOutputChannel.set(processedChannel.subarray(0, copyLength), outputOffset);
+        outputOffset += copyLength;
+        
+        // Remove processed samples from buffers
+        this.micBuffer = this.micBuffer.subarray(this.aecFrameSize);
+        this.ttsBuffer = this.ttsBuffer.subarray(this.aecFrameSize);
+      } catch (error) {
+        // On error, output silence and clear buffers
+        console.error('AEC processing error:', error);
+        cleanOutputChannel.fill(0, outputOffset);
+        this.micBuffer = new Float32Array(0);
+        this.ttsBuffer = new Float32Array(0);
+        return true;
       }
-      
-      // Step 2: Process the capture stream (Mic), writing to our pre-allocated buffer
-      // API: aec.process(outBuf, micInput) where both are Float32Array[]
-      // This modifies outBuf in place
-      this.aec.process(this.outBuf, micChannels);
-      
-      // Step 3: Copy the result from our pre-allocated buffer to the worklet output
-      const cleanOutputChannel = cleanOutput[0];
-      const processedChannel = this.outBuf[0];
-      
-      if (processedChannel && processedChannel.length > 0) {
-        // Copy what we can (may be different size due to AEC processing)
-        const copyLength = Math.min(processedChannel.length, cleanOutputChannel.length);
-        cleanOutputChannel.set(processedChannel.subarray(0, copyLength));
-        // Fill remainder with silence if needed
-        if (copyLength < cleanOutputChannel.length) {
-          cleanOutputChannel.fill(0, copyLength);
-        }
-      } else {
-        // Fallback: output silence if processing failed
-        cleanOutputChannel.fill(0);
-      }
-    } catch (error) {
-      // On error, output silence to prevent audio artifacts
-      console.error('AEC processing error:', error);
-      if (cleanOutput && cleanOutput[0]) {
-        cleanOutput[0].fill(0);
-      }
+    }
+    
+    // Fill remaining output with silence if we didn't have enough accumulated data
+    if (outputOffset < frameSize) {
+      cleanOutputChannel.fill(0, outputOffset);
     }
     
     // Return true to keep the processor alive
