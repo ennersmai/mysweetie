@@ -149,8 +149,19 @@ export class ProductionAudioManager {
       // Remove any import/export statements from processor code
       // Also strip TypeScript syntax since this will be executed as plain JavaScript
       // The processor code should only contain the class definition and registration
-      // IMPORTANT: Process line by line to avoid breaking comments
-      const lines = aecProcessorCode.split('\n');
+      
+      // First, remove multi-line declare statement (must be done on full text, not line by line)
+      let modifiedProcessorCode = aecProcessorCode
+        // Remove multi-line WebRtcAec3 type declaration (spans multiple lines)
+        .replace(/\/\/\s*Declare WebRtcAec3[\s\S]*?declare\s+const\s+WebRtcAec3\s*:[\s\S]*?\}>;\s*/g, '')
+        // Remove standalone declare statements
+        .replace(/^\s*declare\s+const\s+WebRtcAec3[\s\S]*?\}>;\s*$/gm, '')
+        // Remove import/export statements
+        .replace(/^\s*import\s+.*$/gm, '')
+        .replace(/^\s*export\s+.*$/gm, '');
+      
+      // Now process line by line to avoid breaking comments
+      const lines = modifiedProcessorCode.split('\n');
       const processedLines = lines.map((line: string) => {
         // Skip comment lines - don't modify them (single-line // comments, multi-line /* */ comments)
         const trimmedLine = line.trim();
@@ -160,20 +171,6 @@ export class ProductionAudioManager {
         
         // Process non-comment lines
         let processedLine = line;
-        
-        // Remove import/export/declare statements (only at start of line)
-        if (/^\s*import\s+/.test(processedLine)) {
-          return ''; // Remove import lines
-        }
-        if (/^\s*export\s+/.test(processedLine)) {
-          return ''; // Remove export lines
-        }
-        if (/^\s*declare\s+const\s+WebRtcAec3/.test(processedLine)) {
-          return ''; // Remove declare lines
-        }
-        if (/^\s*\/\/\s*Declare WebRtcAec3/.test(processedLine)) {
-          return ''; // Remove declare comment lines
-        }
         
         // Remove type annotations from arrow function parameters
         processedLine = processedLine.replace(/\((\w+)\s*:\s*[^)]+\)\s*=>/g, '($1) =>');
@@ -190,8 +187,11 @@ export class ProductionAudioManager {
         
         // Remove property type annotations (class properties only)
         // Match: whitespace + propName + : + type + = or ;
-        // Replace with: whitespace + propName + = (preserve the =)
-        processedLine = processedLine.replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*=)/gm, '$1$2 =');
+        // Replace with: whitespace + propName (preserve the = or ; that follows)
+        // Handle properties with = assignment: "prop: Type = value" -> "prop = value"
+        // The lookahead (?=\s*=) ensures we don't consume the =, so we just remove ": Type"
+        processedLine = processedLine.replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*=)/gm, '$1$2');
+        // Handle properties with ; termination: "prop: Type;" -> "prop;"
         processedLine = processedLine.replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*;)/gm, '$1$2');
         
         // Remove return type annotations
@@ -206,11 +206,15 @@ export class ProductionAudioManager {
         return processedLine;
       });
       
-      const modifiedProcessorCode = processedLines.join('\n')
+      modifiedProcessorCode = processedLines.join('\n')
         // Remove TypeScript comment directives (safe to do on full text)
         .replace(/@ts-expect-error\s*/g, '')
         .replace(/\/\/\s*@ts-expect-error.*$/gm, '')
         .replace(/\/\/\s*@ts-ignore.*$/gm, '');
+      
+      // Log the entire processed processor code for debugging
+      console.log('📝 Processed processor code (first 5000 chars):', modifiedProcessorCode.substring(0, 5000));
+      console.log('📝 Processed processor code (full length):', modifiedProcessorCode.length, 'chars');
       
       // Construct the final module script
       // Use array join instead of template literal to avoid syntax errors from backticks/${} in code
@@ -223,6 +227,10 @@ export class ProductionAudioManager {
         modifiedProcessorCode,
         '// --- End of aec-processor.js code ---'
       ].join('\n');
+      
+      // Log the entire final script for debugging
+      console.log('📝 Final worklet script (first 10000 chars):', finalWorkletScript.substring(0, 10000));
+      console.log('📝 Final worklet script (full length):', finalWorkletScript.length, 'chars');
       
       // Create a Blob URL from the combined script
       // AudioWorklets loaded via addModule() are treated as ES modules
