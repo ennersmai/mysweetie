@@ -33,6 +33,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
   micBuffer: Float32Array = new Float32Array(0); // Accumulated mic input buffer
   ttsBuffer: Float32Array = new Float32Array(0); // Accumulated TTS input buffer
   debugFrameCount: number = 0; // Debug counter for logging
+  micInputFrameCount: number = 0; // Debug counter for mic input logging
   
   constructor() {
     super();
@@ -118,6 +119,18 @@ class AECProcessor extends AudioWorkletProcessorClass {
     }
     
     const frameSize = micInput[0].length; // Standard worklet frame size (128 samples)
+    
+    // Debug: log mic input RMS occasionally
+    if (!this.micInputFrameCount) this.micInputFrameCount = 0;
+    this.micInputFrameCount++;
+    if (this.micInputFrameCount % 100 === 0) {
+      let micSum = 0;
+      for (let i = 0; i < micInput[0].length; i++) {
+        micSum += micInput[0][i] * micInput[0][i];
+      }
+      const micRMS = Math.sqrt(micSum / micInput[0].length);
+      console.log(`[AEC] Mic input RMS: ${micRMS.toFixed(6)}, micBuffer: ${this.micBuffer.length}`);
+    }
     
     // Accumulate mic input into buffer
     const newMicLength = this.micBuffer.length + frameSize;
