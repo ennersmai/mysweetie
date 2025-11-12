@@ -19,7 +19,6 @@ const JS_URL = '/webrtcaec3-0.3.0.js';
 
 export class ProductionAudioManager {
   private recordingContext: AudioContext | null = null;
-  private playbackContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private audioQueue: AudioBuffer[] = []; // Master queue of all audio buffers
   private scheduledBuffers: Array<{ source: AudioBufferSourceNode; endTime: number }> = []; // Currently scheduled buffers
@@ -62,6 +61,36 @@ export class ProductionAudioManager {
   private readonly PCM_ACCUMULATION_TIME = 500; // Increased from 200ms to 500ms to reduce static noise
   private readonly PCM_MIN_SAMPLES = 8000; // ~500ms at 16kHz, ~333ms at 24kHz - minimum samples before flushing
   private pcmCarryByte: number | null = null; // Carry byte for odd-length buffers
+  
+  /**
+   * Resample audio from 16kHz to 48kHz using linear interpolation
+   * @param input16k Int16Array of 16kHz PCM samples
+   * @returns Float32Array of 48kHz samples (normalized to [-1, 1])
+   */
+  private resample16kTo48k(input16k: Int16Array): Float32Array {
+    const inputLength = input16k.length;
+    const outputLength = inputLength * 3; // 48kHz = 3x 16kHz
+    const output = new Float32Array(outputLength);
+    
+    for (let i = 0; i < outputLength; i++) {
+      // Calculate position in input array (0 to inputLength-1)
+      const inputPos = i / 3;
+      const inputIndex = Math.floor(inputPos);
+      const fraction = inputPos - inputIndex;
+      
+      if (inputIndex < inputLength - 1) {
+        // Linear interpolation between two samples
+        const sample1 = input16k[inputIndex] / 32768.0;
+        const sample2 = input16k[inputIndex + 1] / 32768.0;
+        output[i] = sample1 + (sample2 - sample1) * fraction;
+      } else {
+        // Last sample (or beyond) - just use the last sample
+        output[i] = input16k[inputLength - 1] / 32768.0;
+      }
+    }
+    
+    return output;
+  }
 
 
   async initialize(): Promise<boolean> {
@@ -96,12 +125,8 @@ export class ProductionAudioManager {
         console.log('✅ Echo cancellation is ENABLED');
       }
 
-      // Create separate playback context at 16kHz to match TTS output (Resemble.ai outputs at 16kHz)
-      // This avoids resampling artifacts and pitch issues
-      this.playbackContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      console.log('ProductionAudioManager: Playback context created at', this.playbackContext.sampleRate, 'Hz');
-
       // Create recording context at browser's native sample rate (usually 48kHz)
+      // We'll resample TTS audio from 16kHz to 48kHz manually
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
 
@@ -330,26 +355,11 @@ export class ProductionAudioManager {
       // Wait for AEC initialization
       await aecInitPromise;
 
-      // Create TTS destination node in playback context (16kHz) to capture TTS audio
-      // We'll create a separate destination in recording context for AEC that gets resampled audio
-      const ttsDestinationPlayback = this.playbackContext.createMediaStreamDestination();
-      console.log('✅ TTS destination node created in playback context (16kHz)');
-      
-      // Create TTS source node in recording context from playback stream
-      // The browser will handle resampling 16kHz → 48kHz automatically
-      // Note: This requires the MediaStream to be compatible across contexts
-      try {
-        this.ttsSourceNode = this.recordingContext.createMediaStreamSource(ttsDestinationPlayback.stream);
-        console.log('✅ TTS source node created in recording context (auto-resampling 16kHz → 48kHz)');
-        this.ttsDestinationNode = ttsDestinationPlayback; // Store reference
-      } catch (error: any) {
-        // If cross-context resampling isn't supported, we need a different approach
-        console.warn('⚠️ Cross-context MediaStreamSource not supported, using alternative approach:', error.message);
-        // Fallback: Create destination in recording context and resample manually
-        this.ttsDestinationNode = this.recordingContext.createMediaStreamDestination();
-        this.ttsSourceNode = this.recordingContext.createMediaStreamSource(this.ttsDestinationNode.stream);
-        console.log('✅ Using same-context approach (manual resampling required)');
-      }
+      // Create TTS destination node in recording context (48kHz) to capture TTS audio for AEC
+      // TTS audio will be resampled from 16kHz to 48kHz before being added to the audio graph
+      this.ttsDestinationNode = this.recordingContext.createMediaStreamDestination();
+      this.ttsSourceNode = this.recordingContext.createMediaStreamSource(this.ttsDestinationNode.stream);
+      console.log('✅ TTS destination and source nodes created in recording context (48kHz)');
 
       // Create VAD worklet node with single input (receives clean audio from AEC)
       this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor', {
@@ -595,8 +605,8 @@ export class ProductionAudioManager {
    * Play audio data (handles both PCM and encoded formats)
    */
   async playAudio(audioData: ArrayBuffer): Promise<void> {
-    if (!this.playbackContext) {
-      console.error('Playback context not initialized');
+    if (!this.recordingContext) {
+      console.error('Recording context not initialized');
       return;
     }
     
@@ -621,7 +631,7 @@ export class ProductionAudioManager {
         this.playPCMChunkImmediately(audioData);
       } else {
         console.log(`ProductionAudioManager: Decoding encoded audio ${audioData.byteLength} bytes`);
-        const audioBuffer = await this.playbackContext.decodeAudioData(audioData.slice(0));
+        const audioBuffer = await this.recordingContext.decodeAudioData(audioData.slice(0));
         console.log(`ProductionAudioManager: Decoded audio buffer ${audioBuffer.duration.toFixed(2)}s`);
         
         // Apply fade-in to first buffer if this is the start of playback
@@ -646,7 +656,7 @@ export class ProductionAudioManager {
   }
 
   private playPCMChunkImmediately(audioData: ArrayBuffer): void {
-    if (!this.playbackContext) return;
+    if (!this.recordingContext) return;
     
     try {
       // Handle odd-length buffers by carrying over the last byte
@@ -712,7 +722,7 @@ export class ProductionAudioManager {
   }
 
   private flushPCMAccumulator(): void {
-    if (this.pcmAccumulator.length === 0 || !this.playbackContext) {
+    if (this.pcmAccumulator.length === 0 || !this.recordingContext) {
       // Clear timer if accumulator is empty
       if (this.pcmAccumulatorTimer) {
         clearTimeout(this.pcmAccumulatorTimer);
@@ -739,14 +749,15 @@ export class ProductionAudioManager {
         offset += chunk.length;
       }
       
-      // Create single smooth audio buffer
-      // TTS outputs at 16kHz, so we need to use 16kHz sample rate to avoid pitch issues
-      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 16000);
+      // Resample from 16kHz to 48kHz
+      const resampledSamples = this.resample16kTo48k(combinedSamples);
+      
+      // Create audio buffer at 48kHz (recording context sample rate)
+      const audioBuffer = this.recordingContext.createBuffer(1, resampledSamples.length, this.recordingContext.sampleRate);
       const channelData = audioBuffer.getChannelData(0);
       
-      for (let i = 0; i < combinedSamples.length; i++) {
-        channelData[i] = combinedSamples[i] / 32768.0;
-      }
+      // Copy resampled samples (already normalized to [-1, 1])
+      channelData.set(resampledSamples);
       
       // Fade-in will be applied by scheduleSingleBuffer when first buffer is scheduled
       
@@ -785,7 +796,7 @@ export class ProductionAudioManager {
     
     // Force flush even if below minimum samples
     const totalLength = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
-    if (totalLength === 0 || !this.playbackContext) {
+    if (totalLength === 0 || !this.recordingContext) {
       this.pcmCarryByte = null;
       return;
     }
@@ -800,14 +811,15 @@ export class ProductionAudioManager {
         offset += chunk.length;
       }
       
-      // Create single smooth audio buffer
-      // TTS outputs at 16kHz, so we need to use 16kHz sample rate to avoid pitch issues
-      const audioBuffer = this.playbackContext.createBuffer(1, combinedSamples.length, 16000);
+      // Resample from 16kHz to 48kHz
+      const resampledSamples = this.resample16kTo48k(combinedSamples);
+      
+      // Create audio buffer at 48kHz (recording context sample rate)
+      const audioBuffer = this.recordingContext.createBuffer(1, resampledSamples.length, this.recordingContext.sampleRate);
       const channelData = audioBuffer.getChannelData(0);
       
-      for (let i = 0; i < combinedSamples.length; i++) {
-        channelData[i] = combinedSamples[i] / 32768.0;
-      }
+      // Copy resampled samples (already normalized to [-1, 1])
+      channelData.set(resampledSamples);
       
       // Fade-in will be applied by scheduleSingleBuffer when first buffer is scheduled
       
@@ -872,12 +884,12 @@ export class ProductionAudioManager {
    * Prevents audio engine overload and eliminates crackling
    */
   private startSmartQueueManager(): void {
-    if (!this.playbackContext) {
+    if (!this.recordingContext) {
       return;
     }
 
     // Clean up finished buffers
-    const now = this.playbackContext.currentTime;
+    const now = this.recordingContext.currentTime;
     this.scheduledBuffers = this.scheduledBuffers.filter(buffer => buffer.endTime > now);
 
     // Calculate how much audio is currently scheduled ahead
@@ -935,11 +947,11 @@ export class ProductionAudioManager {
    * Returns true if scheduled successfully, false otherwise
    */
   private scheduleSingleBuffer(audioBuffer: AudioBuffer, startTime: number): boolean {
-    if (!this.playbackContext) {
+    if (!this.recordingContext) {
       return false;
     }
-
-    const currentTime = this.playbackContext.currentTime;
+    
+    const currentTime = this.recordingContext.currentTime;
     
     // Ensure we don't schedule in the past
     if (startTime < currentTime) {
@@ -955,16 +967,16 @@ export class ProductionAudioManager {
         this.isFirstBuffer = false;
       }
       
-      const source = this.playbackContext.createBufferSource();
+      const source = this.recordingContext.createBufferSource();
       source.buffer = audioBuffer;
       
-      const gainNode = this.playbackContext.createGain();
+      const gainNode = this.recordingContext.createGain();
       gainNode.gain.value = 1.5;
       
       source.connect(gainNode);
-      
+
       // Route TTS audio to both speakers (user hears) and AEC input (for echo cancellation)
-      gainNode.connect(this.playbackContext.destination);
+      gainNode.connect(this.recordingContext.destination);
       if (this.ttsDestinationNode) {
         gainNode.connect(this.ttsDestinationNode);
       }
@@ -1000,7 +1012,7 @@ export class ProductionAudioManager {
       return;
     }
 
-    if (!this.playbackContext) {
+    if (!this.recordingContext) {
       return;
     }
 
@@ -1009,7 +1021,7 @@ export class ProductionAudioManager {
     this.manuallyStoppedPlayback = false;
     
     const audioBuffer = this.audioQueue.shift()!;
-    const currentTime = this.playbackContext.currentTime;
+    const currentTime = this.recordingContext.currentTime;
     
     // Calculate start time for seamless playback
     let startTime: number;
@@ -1031,10 +1043,14 @@ export class ProductionAudioManager {
     
     console.log(`▶️  Playing buffer ${audioBuffer.duration.toFixed(3)}s at ${startTime.toFixed(3)}s (isPlaying: ${this.isPlaying}, ${this.audioQueue.length} remaining in queue)`);
     
-    this.currentSource = this.playbackContext.createBufferSource();
+    if (!this.recordingContext) {
+      return;
+    }
+    
+    this.currentSource = this.recordingContext.createBufferSource();
     this.currentSource.buffer = audioBuffer;
     
-    const gainNode = this.playbackContext.createGain();
+    const gainNode = this.recordingContext.createGain();
     
     // Apply crossfade if there's a previous buffer
     if (this.lastGainNode) {
@@ -1063,7 +1079,7 @@ export class ProductionAudioManager {
     this.currentSource.connect(gainNode);
     
     // Route TTS audio to both speakers (user hears) and AEC input (for echo cancellation)
-    gainNode.connect(this.playbackContext.destination);
+    gainNode.connect(this.recordingContext.destination);
     if (this.ttsDestinationNode) {
       gainNode.connect(this.ttsDestinationNode);
     }
@@ -1326,11 +1342,6 @@ export class ProductionAudioManager {
     if (this.recordingContext && this.recordingContext.state !== 'closed') {
       this.recordingContext.close();
       this.recordingContext = null;
-    }
-
-    if (this.playbackContext && this.playbackContext.state !== 'closed') {
-      this.playbackContext.close();
-      this.playbackContext = null;
     }
 
     this.onPlaybackComplete = null;
