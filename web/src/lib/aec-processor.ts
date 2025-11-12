@@ -203,7 +203,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
     }
     
     // If we didn't process any frames (not enough accumulated data), output mic input directly (passthrough)
-    // This ensures continuous audio output while we accumulate frames
+    // This ensures continuous audio output while we accumulate frames for AEC processing
     if (!processedAnyFrames) {
       // Passthrough: copy current mic input directly to output
       // This ensures continuous audio flow while accumulating frames for AEC processing
