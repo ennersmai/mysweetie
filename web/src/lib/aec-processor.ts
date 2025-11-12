@@ -32,6 +32,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
   aecFrameSize: number = 0; // Required frame size for AEC processing
   micBuffer: Float32Array = new Float32Array(0); // Accumulated mic input buffer
   ttsBuffer: Float32Array = new Float32Array(0); // Accumulated TTS input buffer
+  debugFrameCount: number = 0; // Debug counter for logging
   
   constructor() {
     super();
@@ -67,6 +68,13 @@ class AECProcessor extends AudioWorkletProcessorClass {
           this.outBuf = [new Float32Array(this.aecFrameSize)] as Float32Array[]; // Library expects array of Float32Arrays
           
           console.log(`✅ AEC initialized at ${this.sampleRate}Hz (1 render, 1 capture channel), frame size: ${this.aecFrameSize}`);
+          
+          // Warn if frame size is 0 or suspicious
+          if (this.aecFrameSize === 0) {
+            console.warn('⚠️ WARNING: AEC frame size is 0! This will cause issues.');
+          } else if (this.aecFrameSize > 128) {
+            console.log(`ℹ️ AEC requires ${this.aecFrameSize} samples per frame (larger than standard 128-sample worklet frames)`);
+          }
           
           // Notify main thread that initialization is complete
           this.port.postMessage({ type: 'init-done' });
@@ -176,6 +184,19 @@ class AECProcessor extends AudioWorkletProcessorClass {
     // Fill remaining output with silence if we didn't have enough accumulated data
     if (outputOffset < frameSize) {
       cleanOutputChannel.fill(0, outputOffset);
+    }
+    
+    // Debug logging: log RMS of output every 100 frames
+    if (!this.debugFrameCount) this.debugFrameCount = 0;
+    this.debugFrameCount++;
+    if (this.debugFrameCount % 100 === 0) {
+      // Calculate RMS of output to see if audio is flowing
+      let sum = 0;
+      for (let i = 0; i < cleanOutputChannel.length; i++) {
+        sum += cleanOutputChannel[i] * cleanOutputChannel[i];
+      }
+      const rms = Math.sqrt(sum / cleanOutputChannel.length);
+      console.log(`[AEC] Output RMS: ${rms.toFixed(6)}, micBuffer: ${this.micBuffer.length}, ttsBuffer: ${this.ttsBuffer.length}, aecFrameSize: ${this.aecFrameSize}`);
     }
     
     // Return true to keep the processor alive

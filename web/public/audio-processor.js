@@ -59,6 +59,13 @@ class AudioProcessor extends AudioWorkletProcessor {
     const rmsMic = this.calculateRMS(micChannel);
     const isSpeechFrame = rmsMic > this.VAD_THRESHOLD;
     
+    // Debug logging (log every 100 frames to avoid spam)
+    if (!this.frameCount) this.frameCount = 0;
+    this.frameCount++;
+    if (this.frameCount % 100 === 0) {
+      console.log(`[VAD] RMS: ${rmsMic.toFixed(6)}, Threshold: ${this.VAD_THRESHOLD.toFixed(6)}, isSpeech: ${isSpeechFrame}, speaking: ${this.vadSpeaking}`);
+    }
+    
     // Simple VAD state machine
     if (isSpeechFrame) {
       this.speechFrames++;
