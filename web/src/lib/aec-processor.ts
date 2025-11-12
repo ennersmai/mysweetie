@@ -158,9 +158,11 @@ class AECProcessor extends AudioWorkletProcessorClass {
     // Process accumulated frames when we have enough data
     const cleanOutputChannel = cleanOutput[0];
     let outputOffset = 0;
+    let processedAnyFrames = false;
     
     // Process as many 480-sample frames as we can
     while (this.micBuffer.length >= this.aecFrameSize && outputOffset < frameSize) {
+      processedAnyFrames = true;
       try {
         // Extract frame-sized chunks from buffers
         const micFrame = this.micBuffer.subarray(0, this.aecFrameSize);
@@ -200,12 +202,16 @@ class AECProcessor extends AudioWorkletProcessorClass {
       }
     }
     
-    // If we don't have enough accumulated data yet, output the mic input directly (passthrough)
+    // If we didn't process any frames (not enough accumulated data), output mic input directly (passthrough)
     // This ensures continuous audio output while we accumulate frames
-    if (outputOffset < frameSize) {
+    if (!processedAnyFrames) {
       // Passthrough: copy current mic input directly to output
       // This ensures continuous audio flow while accumulating frames for AEC processing
-      cleanOutputChannel.set(micInput[0], outputOffset);
+      cleanOutputChannel.set(micInput[0]);
+    } else if (outputOffset < frameSize) {
+      // We processed some frames but didn't fill the entire output buffer
+      // Fill the remainder with silence (shouldn't happen often)
+      cleanOutputChannel.fill(0, outputOffset);
     }
     
     // Debug logging: log RMS of output every 100 frames
