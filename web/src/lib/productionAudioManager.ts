@@ -172,6 +172,8 @@ export class ProductionAudioManager {
         .replace(/:\s*number\s*(?![^\/]*\/\/)/g, ' ') // Remove :number type annotations
         .replace(/:\s*boolean\s*(?![^\/]*\/\/)/g, ' ') // Remove :boolean type annotations
         .replace(/private\s+(?![^\/]*\/\/)/g, '') // Remove private keyword
+        // Remove TypeScript 'as' type assertions: `value as Type` -> `value`
+        .replace(/\s+as\s+[A-Z][a-zA-Z0-9_\[\]\s\|]*/g, '') // Remove 'as Type' assertions
         .replace(/@ts-expect-error\s*/g, '') // Remove @ts-expect-error comments
         .replace(/\/\/\s*@ts-expect-error.*$/gm, '') // Remove @ts-expect-error comment lines
         .replace(/\/\/\s*@ts-ignore.*$/gm, ''); // Remove @ts-ignore comment lines
