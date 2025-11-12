@@ -61,18 +61,23 @@ class AECProcessor extends AudioWorkletProcessorClass {
           this.aec = new AEC3Module.AEC3(this.sampleRate, 1, 1);
           
           // Step 5: Determine the required frame size for AEC processing
-          // API: const bufSz = aec.processSize(inputData)
-          // A standard worklet frame is 128 samples
-          const tempInput = [new Float32Array(128)]; // Dummy input to get the size
+          // WebRTC AEC3 typically processes in 10ms frames
+          // At 48kHz: 480 samples = 10ms
+          // Try to get the frame size from the library, but fallback to 480 if it returns 0
+          const tempInput = [new Float32Array(480)]; // Try with 10ms frame (480 samples at 48kHz)
           this.aecFrameSize = this.aec.processSize(tempInput);
+          
+          // If processSize returns 0 or invalid, use standard 10ms frame size
+          if (this.aecFrameSize === 0 || this.aecFrameSize < 128) {
+            console.warn(`⚠️ AEC processSize returned ${this.aecFrameSize}, using default 480 samples (10ms at 48kHz)`);
+            this.aecFrameSize = 480; // Standard 10ms frame at 48kHz
+          }
+          
           this.outBuf = [new Float32Array(this.aecFrameSize)] as Float32Array[]; // Library expects array of Float32Arrays
           
           console.log(`✅ AEC initialized at ${this.sampleRate}Hz (1 render, 1 capture channel), frame size: ${this.aecFrameSize}`);
           
-          // Warn if frame size is 0 or suspicious
-          if (this.aecFrameSize === 0) {
-            console.warn('⚠️ WARNING: AEC frame size is 0! This will cause issues.');
-          } else if (this.aecFrameSize > 128) {
+          if (this.aecFrameSize > 128) {
             console.log(`ℹ️ AEC requires ${this.aecFrameSize} samples per frame (larger than standard 128-sample worklet frames)`);
           }
           
