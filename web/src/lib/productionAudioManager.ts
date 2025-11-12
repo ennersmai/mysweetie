@@ -179,12 +179,11 @@ export class ProductionAudioManager {
           return '(' + cleanedParams + ')';
         })
         // Handle property types: `prop: Type =` -> `prop =` (but be careful with object properties)
-        // Don't match object property values like `{ wasmBinary: wasm }` - only match type annotations
-        // Type annotations are uppercase (Float32Array, MessageEvent, etc.) or primitives (number, boolean, any)
-        .replace(/(\w+)\s*:\s*([A-Z][a-zA-Z0-9_\[\]\s\|]*|number|boolean|any|null)\s*=/g, '$1 =') // Remove property type annotations before =
-        // Remove remaining type annotations before = or ; (but NOT in object literals)
-        // Don't match if followed by } (object literal) or if lowercase (object property value)
-        .replace(/:\s*([A-Z][a-zA-Z0-9_\[\]\s\|]*|number|boolean|any|null)(?=\s*[=;])/g, '') // Remove type annotations (only uppercase types or primitives)
+        // Match class property declarations (must be at start of line or after whitespace, before = or ;)
+        // Handle union types like `Float32Array[] | null` by matching until = or ;
+        // Exclude object literals by ensuring we're not inside braces
+        .replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*[=;])/gm, '$1$2') // Remove property type annotations (class properties at line start)
+        .replace(/(\s+)(\w+)\s*:\s*[^=;]+(?=\s*[=;])/g, '$1$2') // Remove property type annotations (class properties after whitespace)
         // Handle return type annotations: `): Type {` -> `) {`
         .replace(/\)\s*:\s*\w+\s*\{/g, ') {')
         // Remove remaining simple type annotations (fallback, exclude comment chars)
