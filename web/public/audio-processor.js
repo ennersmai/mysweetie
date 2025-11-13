@@ -17,7 +17,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Simple VAD parameters
     this.VAD_THRESHOLD = 0.0045;
     this.SPEECH_FRAMES_REQUIRED = 4;
-    this.SILENCE_FRAMES_REQUIRED = 30;
+    this.SILENCE_FRAMES_REQUIRED = 90; // Increased from 60 to 90 (~1.8s at 20ms per frame) to allow longer phrases without cutting off prematurely
     
     // Message handler for threshold updates
     this.port.onmessage = (event) => {
@@ -58,13 +58,6 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Calculate RMS for VAD
     const rmsMic = this.calculateRMS(micChannel);
     const isSpeechFrame = rmsMic > this.VAD_THRESHOLD;
-    
-    // Debug logging (log every 100 frames to avoid spam)
-    if (!this.frameCount) this.frameCount = 0;
-    this.frameCount++;
-    if (this.frameCount % 100 === 0) {
-      console.log(`[VAD] RMS: ${rmsMic.toFixed(6)}, Threshold: ${this.VAD_THRESHOLD.toFixed(6)}, isSpeech: ${isSpeechFrame}, speaking: ${this.vadSpeaking}`);
-    }
     
     // Simple VAD state machine
     if (isSpeechFrame) {

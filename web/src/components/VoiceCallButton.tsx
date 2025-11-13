@@ -79,6 +79,23 @@ export default function VoiceCallButton({
   const shouldSendAudioRef = useRef<boolean>(true);
   const callStateRef = useRef<keyof CallState>('IDLE');
   const isEndingCallRef = useRef<boolean>(false);
+  const blobDecodeChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  const enqueueBlobForPlayback = useCallback((blob: Blob) => {
+    blobDecodeChainRef.current = blobDecodeChainRef.current
+      .catch(() => {
+        // Swallow previous error so the chain keeps running.
+      })
+      .then(async () => {
+        const buffer = await blob.arrayBuffer();
+        if (audioManagerRef.current) {
+          audioManagerRef.current.playAudio(buffer);
+        }
+      })
+      .catch(error => {
+        console.error('[FRONTEND] Failed to decode/play Blob audio chunk:', error);
+      });
+  }, []);
 
   // Check audio support on mount
   useEffect(() => {
@@ -142,11 +159,8 @@ export default function VoiceCallButton({
 
       // Handle Blob data (audio from Rime.ai)
       if (event.data instanceof Blob) {
-        event.data.arrayBuffer().then(buffer => {
-          if (audioManagerRef.current) {
-            audioManagerRef.current.playAudio(buffer);
-          }
-        });
+        // WebSocket should already deliver ArrayBuffers, but keep an ordered fallback.
+        enqueueBlobForPlayback(event.data);
         return;
       }
 
@@ -327,7 +341,7 @@ export default function VoiceCallButton({
     } catch (error) {
       console.error('Error handling WebSocket message:', error);
     }
-  }, [onError]);
+  }, [enqueueBlobForPlayback, onError]);
 
   const initializeCall = async (): Promise<boolean> => {
     try {
@@ -435,10 +449,18 @@ export default function VoiceCallButton({
           
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
             // If AI is speaking, this is an interruption
-            if (callStateRef.current === 'AI_SPEAKING') {
+            if (callStateRef.current === 'AI_SPEAKING' || callStateRef.current === 'AI_PROCESSING') {
               console.log('🛑 [FRONTEND] User interrupting AI speech - sending interrupt + user_speech_started');
+              // CRITICAL: Manually set state to USER_SPEAKING immediately for responsive UI
+              // Backend will also transition, but we do it here to avoid delay
+              setCallState('USER_SPEAKING');
+              callStateRef.current = 'USER_SPEAKING';
+              shouldSendAudioRef.current = true;
+              console.log('🔄 [FRONTEND STATE] Manually set state to USER_SPEAKING for immediate barge-in');
+              
+              // Send interrupt first to stop TTS
               websocketRef.current.send(JSON.stringify({ type: 'interrupt' }));
-              // CRITICAL: Also send user_speech_started so backend transitions to USER_SPEAKING
+              // CRITICAL: Also send user_speech_started IMMEDIATELY so backend transitions to USER_SPEAKING
               // This allows the backend to receive our audio blob when we finish speaking
               websocketRef.current.send(JSON.stringify({ type: 'user_speech_started' }));
             } else {
@@ -503,6 +525,7 @@ export default function VoiceCallButton({
 
       console.log('initializeCall: Connecting to WebSocket:', wsUrl_full);
       websocketRef.current = new WebSocket(wsUrl_full);
+      websocketRef.current.binaryType = 'arraybuffer';
 
       return new Promise((resolve) => {
         const ws = websocketRef.current!;

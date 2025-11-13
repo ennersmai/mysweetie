@@ -21,9 +21,12 @@ declare const WebRtcAec3: (options?: { wasmBinary?: ArrayBuffer }) => Promise<{
 // AudioWorkletProcessor and registerProcessor are globals in AudioWorklet context
 // In IIFE format, access them via globalThis (available in all JavaScript contexts)
 // Note: TypeScript syntax removed for Blob execution - use plain JavaScript
+// @ts-ignore - AudioWorkletProcessor is available at runtime in AudioWorklet context
 const AudioWorkletProcessorClass = globalThis.AudioWorkletProcessor;
+// @ts-ignore - registerProcessor is available at runtime in AudioWorklet context
 const registerProcessorFn = globalThis.registerProcessor;
 
+// @ts-ignore - AudioWorkletProcessorClass is available at runtime
 class AECProcessor extends AudioWorkletProcessorClass {
   // Note: TypeScript type annotations removed for Blob execution, but types kept for TS checking
   aec: any = null;
@@ -32,14 +35,26 @@ class AECProcessor extends AudioWorkletProcessorClass {
   aecFrameSize: number = 0; // Required frame size for AEC processing
   micBuffer: Float32Array = new Float32Array(0); // Accumulated mic input buffer
   ttsBuffer: Float32Array = new Float32Array(0); // Accumulated TTS input buffer
-  debugFrameCount: number = 0; // Debug counter for logging
-  micInputFrameCount: number = 0; // Debug counter for mic input logging
+  aecReady: boolean = false; // Track if AEC has processed at least one frame (ready for continuous processing)
+  ttsActive: boolean = false; // Track if TTS is currently playing (for adaptive processing)
   
   constructor() {
     super();
     
-    // Message handler for initialization
+    // Message handler for initialization and control messages
     this.port.onmessage = async (ev: MessageEvent) => {
+      if (ev.data.type === 'tts_stopped') {
+        // TTS has stopped - clear TTS buffer and mark as inactive
+        // This allows AEC to adapt and stop canceling user speech
+        // CRITICAL: Also clear mic buffer to prevent processing residual frames with empty TTS
+        // This ensures clean passthrough of user speech immediately
+        this.ttsBuffer = new Float32Array(0);
+        this.micBuffer = new Float32Array(0); // Clear mic buffer to force passthrough
+        this.ttsActive = false;
+        console.log('🔔 AEC: TTS stopped - cleared TTS and mic buffers, marked inactive (forcing passthrough)');
+        return;
+      }
+      
       if (ev.data.type === 'init') {
         try {
           const { sampleRate, wasm } = ev.data;
@@ -120,17 +135,6 @@ class AECProcessor extends AudioWorkletProcessorClass {
     
     const frameSize = micInput[0].length; // Standard worklet frame size (128 samples)
     
-    // Debug: log mic input RMS occasionally
-    if (!this.micInputFrameCount) this.micInputFrameCount = 0;
-    this.micInputFrameCount++;
-    if (this.micInputFrameCount % 100 === 0) {
-      let micSum = 0;
-      for (let i = 0; i < micInput[0].length; i++) {
-        micSum += micInput[0][i] * micInput[0][i];
-      }
-      const micRMS = Math.sqrt(micSum / micInput[0].length);
-      console.log(`[AEC] Mic input RMS: ${micRMS.toFixed(6)}, micBuffer: ${this.micBuffer.length}`);
-    }
     
     // Accumulate mic input into buffer
     const newMicLength = this.micBuffer.length + frameSize;
@@ -141,18 +145,29 @@ class AECProcessor extends AudioWorkletProcessorClass {
     
     // Accumulate TTS input into buffer (if present)
     if (ttsInput && ttsInput[0] && ttsInput[0].length > 0) {
+      // TTS is active - mark it and accumulate
+      this.ttsActive = true;
       const newTtsLength = this.ttsBuffer.length + frameSize;
       const newTtsBuffer = new Float32Array(newTtsLength);
       newTtsBuffer.set(this.ttsBuffer, 0);
       newTtsBuffer.set(ttsInput[0], this.ttsBuffer.length);
       this.ttsBuffer = newTtsBuffer;
     } else {
-      // Pad TTS buffer with zeros if no TTS input
-      const newTtsLength = this.ttsBuffer.length + frameSize;
-      const newTtsBuffer = new Float32Array(newTtsLength);
-      newTtsBuffer.set(this.ttsBuffer, 0);
-      newTtsBuffer.fill(0, this.ttsBuffer.length);
-      this.ttsBuffer = newTtsBuffer;
+      // No TTS input - if TTS was active, we need to clear buffer gradually
+      // If TTS just stopped (ttsActive was true), clear buffer immediately
+      // Otherwise, pad with zeros to maintain frame alignment
+      if (this.ttsActive) {
+        // TTS just stopped - clear buffer immediately to allow AEC adaptation
+        this.ttsBuffer = new Float32Array(0);
+        this.ttsActive = false;
+      } else {
+        // TTS already stopped - pad with zeros to maintain frame alignment
+        const newTtsLength = this.ttsBuffer.length + frameSize;
+        const newTtsBuffer = new Float32Array(newTtsLength);
+        newTtsBuffer.set(this.ttsBuffer, 0);
+        newTtsBuffer.fill(0, this.ttsBuffer.length);
+        this.ttsBuffer = newTtsBuffer;
+      }
     }
     
     // Process accumulated frames when we have enough data
@@ -172,9 +187,14 @@ class AECProcessor extends AudioWorkletProcessorClass {
         const micChannels = [micFrame];
         const ttsChannels = [ttsFrame];
         
-        // Step 1: Analyze the playback/render stream (TTS)
-        // API: aec.analyze(ttsInput) where ttsInput is Float32Array[]
-        this.aec.analyze(ttsChannels);
+        // Step 1: Analyze the playback/render stream (TTS) - only if TTS is active
+        // If TTS has stopped, don't analyze (prevents AEC from canceling user speech)
+        if (this.ttsActive || this.ttsBuffer.length > 0) {
+          // TTS is active or we have residual TTS data - analyze it
+          // API: aec.analyze(ttsInput) where ttsInput is Float32Array[]
+          this.aec.analyze(ttsChannels);
+        }
+        // If TTS has stopped and buffer is cleared, skip analyze to allow user speech through
         
         // Step 2: Process the capture stream (Mic), writing to our pre-allocated buffer
         // API: aec.process(outBuf, micInput) where both are Float32Array[]
@@ -202,31 +222,36 @@ class AECProcessor extends AudioWorkletProcessorClass {
       }
     }
     
-    // If we didn't process any frames (not enough accumulated data), output mic input directly (passthrough)
-    // This ensures continuous audio output while we accumulate frames for AEC processing
+    // If we didn't process any frames (not enough accumulated data)
     if (!processedAnyFrames) {
-      // Passthrough: copy current mic input directly to output
-      // This ensures continuous audio flow while accumulating frames for AEC processing
-      cleanOutputChannel.set(micInput[0]);
-    } else if (outputOffset < frameSize) {
-      // We processed some frames but didn't fill the entire output buffer
-      // Fill the remainder with silence (shouldn't happen often)
-      cleanOutputChannel.fill(0, outputOffset);
+      // CRITICAL: Use passthrough during initial accumulation so VAD can detect speech
+      // BUT: If TTS just stopped, use processed output (even if empty) to allow AEC adaptation
+      // Once AEC is ready (has processed at least one frame), it will process continuously
+      if (!this.aecReady) {
+        // Initial accumulation: use passthrough so VAD can detect speech
+        // This is necessary because VAD needs audio to work, even if it has some echo
+        cleanOutputChannel.set(micInput[0]);
+      } else if (!this.ttsActive && this.ttsBuffer.length === 0) {
+        // TTS has stopped and buffer is cleared - AEC should pass through user speech
+        // Use passthrough to ensure user speech gets through immediately
+        cleanOutputChannel.set(micInput[0]);
+      } else {
+        // AEC was ready but temporarily doesn't have enough data
+        // Use passthrough to maintain audio flow
+        cleanOutputChannel.set(micInput[0]);
+      }
+    } else {
+      // Mark AEC as ready once we've processed at least one frame
+      this.aecReady = true;
+      
+      if (outputOffset < frameSize) {
+        // We processed some frames but didn't fill the entire output buffer
+        // Fill the remainder with passthrough to maintain audio flow
+        const remainingSamples = frameSize - outputOffset;
+        cleanOutputChannel.set(micInput[0].subarray(0, remainingSamples), outputOffset);
+      }
     }
     
-    // Debug logging: log RMS of output every 100 frames
-    if (!this.debugFrameCount) this.debugFrameCount = 0;
-    this.debugFrameCount++;
-    if (this.debugFrameCount % 100 === 0) {
-      // Calculate RMS of output to see if audio is flowing
-      let sum = 0;
-      for (let i = 0; i < cleanOutputChannel.length; i++) {
-        sum += cleanOutputChannel[i] * cleanOutputChannel[i];
-      }
-      const rms = Math.sqrt(sum / cleanOutputChannel.length);
-      const mode = processedAnyFrames ? 'PROCESSED' : 'PASSTHROUGH';
-      console.log(`[AEC] Output RMS: ${rms.toFixed(6)}, mode: ${mode}, micBuffer: ${this.micBuffer.length}, ttsBuffer: ${this.ttsBuffer.length}, aecFrameSize: ${this.aecFrameSize}`);
-    }
     
     // Return true to keep the processor alive
     return true;
@@ -234,5 +259,6 @@ class AECProcessor extends AudioWorkletProcessorClass {
 }
 
 // Register the processor so it can be instantiated
+// @ts-ignore - TypeScript doesn't understand AudioWorklet runtime types
 registerProcessorFn('aec-processor', AECProcessor);
 

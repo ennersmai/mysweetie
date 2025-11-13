@@ -38,7 +38,7 @@ export class ProductionAudioManager {
   private manuallyStoppedPlayback = false;
   private playbackPlayhead = 0; // Scheduled playback time for seamless transitions
   private lastGainNode: GainNode | null = null; // For crossfading
-  private readonly CROSSFADE_DURATION = 0.01; // 10ms crossfade between buffers
+  private readonly CROSSFADE_DURATION = 0.008; // 8ms crossfade - matches normal TTS exactly
   private readonly FADE_IN_DURATION = 0.01; // 10ms fade-in for first buffer to prevent crack/pop
   private isFirstBuffer = true; // Track if this is the first buffer of TTS session (for fade-in)
 
@@ -54,38 +54,59 @@ export class ProductionAudioManager {
 
   // VAD state (managed by worklet)
   private vadSpeaking = false;
+  private lastSpeechEndTime = 0; // Timestamp of last speech end (for cooldown)
+  private readonly SPEECH_COOLDOWN_MS = 300; // Cooldown period after speech end before allowing new speech start
 
   // PCM accumulation for TTS playback
   private pcmAccumulator: Int16Array[] = [];
   private pcmAccumulatorTimer: number | null = null;
+  private isFlushingPCM = false; // Guard flag to prevent concurrent flushes
   private readonly PCM_ACCUMULATION_TIME = 500; // Increased from 200ms to 500ms to reduce static noise
-  private readonly PCM_MIN_SAMPLES = 8000; // ~500ms at 16kHz, ~333ms at 24kHz - minimum samples before flushing
+  private readonly PCM_MIN_SAMPLES = 48000; // ~3000ms at 16kHz - increased significantly for smoother playback and reduced crackling
   private pcmCarryByte: number | null = null; // Carry byte for odd-length buffers
+  private pendingBuffers: AudioBuffer[] = []; // Accumulate buffers before concatenating for seamless playback
+  private keepAliveSource: AudioBufferSourceNode | null = null; // Keep AudioContext alive to prevent random suspensions
   
   /**
-   * Resample audio from 16kHz to 48kHz using linear interpolation
+   * Resample audio from 16kHz to the recording context's sample rate using linear interpolation
+   * CRITICAL: Use actual AudioContext sample rate, not hardcoded 48kHz!
    * @param input16k Int16Array of 16kHz PCM samples
-   * @returns Float32Array of 48kHz samples (normalized to [-1, 1])
+   * @returns Float32Array of samples at recording context sample rate (normalized to [-1, 1])
    */
-  private resample16kTo48k(input16k: Int16Array): Float32Array {
+  private resample16kToTargetRate(input16k: Int16Array): Float32Array {
+    if (!this.recordingContext) {
+      throw new Error('Recording context not available for resampling');
+    }
+    
+    const inputSampleRate = 16000;
+    const outputSampleRate = this.recordingContext.sampleRate; // Use ACTUAL sample rate, not hardcoded!
+    const ratio = outputSampleRate / inputSampleRate;
+    
     const inputLength = input16k.length;
-    const outputLength = inputLength * 3; // 48kHz = 3x 16kHz
+    const outputLength = Math.ceil(inputLength * ratio);
     const output = new Float32Array(outputLength);
     
+    // Normalize input to float32
+    const inputFloat = new Float32Array(inputLength);
+    for (let i = 0; i < inputLength; i++) {
+      inputFloat[i] = input16k[i] / 32768.0;
+    }
+    
+    // Linear interpolation with correct ratio
     for (let i = 0; i < outputLength; i++) {
-      // Calculate position in input array (0 to inputLength-1)
-      const inputPos = i / 3;
+      const inputPos = i / ratio;
       const inputIndex = Math.floor(inputPos);
       const fraction = inputPos - inputIndex;
       
       if (inputIndex < inputLength - 1) {
         // Linear interpolation between two samples
-        const sample1 = input16k[inputIndex] / 32768.0;
-        const sample2 = input16k[inputIndex + 1] / 32768.0;
-        output[i] = sample1 + (sample2 - sample1) * fraction;
+        output[i] = inputFloat[inputIndex] * (1 - fraction) + inputFloat[inputIndex + 1] * fraction;
+      } else if (inputIndex < inputLength) {
+        // Last sample
+        output[i] = inputFloat[inputIndex];
       } else {
-        // Last sample (or beyond) - just use the last sample
-        output[i] = input16k[inputLength - 1] / 32768.0;
+        // Beyond end - use last sample
+        output[i] = inputFloat[inputLength - 1];
       }
     }
     
@@ -125,10 +146,21 @@ export class ProductionAudioManager {
         console.log('✅ Echo cancellation is ENABLED');
       }
 
-      // Create recording context at browser's native sample rate (usually 48kHz)
-      // We'll resample TTS audio from 16kHz to 48kHz manually
+      // Create recording context at browser's native sample rate (may vary by browser/device)
+      // We'll resample TTS audio from 16kHz to the actual context sample rate
       this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      console.log('ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz');
+      console.log('🎵 ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz (will resample TTS from 16kHz to this rate)');
+      
+      // CRITICAL: Ensure AudioContext stays active to prevent crackling
+      // Suspended contexts cause audio dropouts and crackling
+      if (this.recordingContext.state === 'suspended') {
+        console.log('🔧 AudioContext is suspended, resuming...');
+        await this.recordingContext.resume();
+      }
+      
+      // CRITICAL: Keep AudioContext alive with continuous silent tone
+      // Random suspensions cause crackling - this prevents them
+      this.startKeepAliveTone();
 
       // Fetch library JS file from simple URL (copied to output root by vite-plugin-static-copy)
       // This bypasses Node module resolution and avoids build-time errors
@@ -398,11 +430,21 @@ export class ProductionAudioManager {
             this.ringBuffer.shift();
           }
           
-          // Ensure recording context stays active during TTS
-          if (this.recordingContext && this.recordingContext.state === 'suspended') {
-            console.log('🔧 Resuming suspended recording context');
-            this.recordingContext.resume();
-          }
+              // CRITICAL: Ensure recording context stays active during TTS
+              // Suspended contexts cause random crackling
+              if (this.recordingContext) {
+                if (this.recordingContext.state === 'suspended') {
+                  console.warn('⚠️ AudioContext suspended during playback - resuming to prevent crackling');
+                  this.recordingContext.resume().catch(err => console.error('Failed to resume AudioContext:', err));
+                }
+                // Keep context alive by ensuring it's running
+                if (this.recordingContext.state === 'running') {
+                  // Context is active - good
+                } else {
+                  // Try to resume if not running
+                  this.recordingContext.resume().catch(() => {});
+                }
+              }
           
           // During calibration, send audio chunks directly without VAD processing
           if (this.isCalibrating && this.onCalibrationChunk) {
@@ -441,24 +483,53 @@ export class ProductionAudioManager {
       return; // Already speaking
     }
     
+    // Cooldown check: prevent false triggers immediately after speech end
+    // BUT: Skip cooldown during interrupts OR if we're already in USER_SPEAKING state (allows immediate re-trigger)
+    const now = performance.now();
+    const timeSinceLastSpeechEnd = now - this.lastSpeechEndTime;
+    const isInterrupt = this.isPlayingTTS;
+    
+    // Skip cooldown if:
+    // 1. This is an interrupt (user speaking during TTS) - allows immediate barge-in
+    // 2. Very recent speech end (< 100ms) - allows rapid re-triggers for second interrupt
+    // 3. Cooldown was reset (lastSpeechEndTime === 0) - allows immediate second interrupt
+    // This ensures that when TTS starts again after first interrupt, second interrupt works immediately
+    const cooldownWasReset = this.lastSpeechEndTime === 0;
+    const skipCooldown = isInterrupt || (timeSinceLastSpeechEnd < 100) || cooldownWasReset;
+    
+    if (!skipCooldown && timeSinceLastSpeechEnd < this.SPEECH_COOLDOWN_MS) {
+      console.log(`⏸️ Ignoring speech start - cooldown active (${timeSinceLastSpeechEnd.toFixed(0)}ms < ${this.SPEECH_COOLDOWN_MS}ms), isInterrupt: ${isInterrupt}, cooldownWasReset: ${cooldownWasReset}`);
+      return;
+    }
+    
     this.vadSpeaking = true;
     const timestamp = performance.now();
     console.log(`🎤 Echo-aware VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms`);
     
-    // Check if this is an interrupt (user speaking during TTS)
-    const isInterrupt = this.isPlayingTTS;
-    
-    // Initialize utterance buffer WITH ring buffer (captures first word!)
-    this.utteranceBuffer = [...this.ringBuffer];
-    this.isSendingAudio = true;
-    console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll)`);
-    
-    // Handle interrupt
+    // Handle interrupt FIRST (before initializing utterance buffer)
     if (isInterrupt) {
       console.log('🎤 Interrupt detected - stopping TTS playback');
       
-      // Stop TTS playback
+      // Stop TTS playback immediately
       this.stopPlayback();
+      
+      // CRITICAL: Don't reduce ring buffer during interrupt - keep full buffer for better STT
+      // The AEC should handle echo cancellation, so we can keep more audio for STT accuracy
+      // Keep full buffer to ensure we capture the user's speech
+      console.log(`🔄 Keeping full ring buffer during interrupt (${this.ringBuffer.length} chunks) for better STT accuracy`);
+      
+      // CRITICAL: Notify AEC that TTS has stopped so it can adapt
+      // This prevents AEC from canceling user speech thinking it's echo
+      if (this.aecNode) {
+        this.aecNode.port.postMessage({
+          type: 'tts_stopped'
+        });
+        console.log('🔔 Notified AEC that TTS stopped - allowing adaptation');
+      }
+      
+      // Reset cooldown to allow immediate second interrupt
+      // Set to 0 so timeSinceLastSpeechEnd will be large (now - 0 = now), bypassing cooldown
+      this.lastSpeechEndTime = 0;
       
       // Send explicit interrupt command to backend
       if (this.onInterrupt) {
@@ -466,6 +537,12 @@ export class ProductionAudioManager {
         this.onInterrupt();
       }
     }
+    
+    // Initialize utterance buffer WITH ring buffer (captures first word!)
+    // During interrupt, this will use the reduced ring buffer (recent clean audio only)
+    this.utteranceBuffer = [...this.ringBuffer];
+    this.isSendingAudio = true;
+    console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll), isSendingAudio: ${this.isSendingAudio}`);
     
     // ALWAYS notify backend that user started speaking
     if (this.onSpeechStart) {
@@ -482,7 +559,8 @@ export class ProductionAudioManager {
     }
     
     this.vadSpeaking = false;
-    console.log(`🔇 Echo-aware VAD: SPEECH ENDED`);
+    this.lastSpeechEndTime = performance.now(); // Record timestamp for cooldown
+    console.log(`🔇 Echo-aware VAD: SPEECH ENDED (cooldown started)`);
     
     this.isSendingAudio = false;
     
@@ -706,11 +784,11 @@ export class ProductionAudioManager {
           clearTimeout(this.pcmAccumulatorTimer);
           this.pcmAccumulatorTimer = null;
         }
-        this.flushPCMAccumulator();
+        this.flushPCMAccumulator(false);
       } else {
         // Set timer to flush accumulator after accumulation time
         this.pcmAccumulatorTimer = window.setTimeout(() => {
-          this.flushPCMAccumulator();
+          this.flushPCMAccumulator(true); // Force flush on timeout
         }, this.PCM_ACCUMULATION_TIME);
       }
       
@@ -721,7 +799,13 @@ export class ProductionAudioManager {
     }
   }
 
-  private flushPCMAccumulator(): void {
+  private flushPCMAccumulator(force: boolean = false): void {
+    // Guard: prevent concurrent flushes
+    if (this.isFlushingPCM) {
+      console.log('⏸️ Flush already in progress, skipping duplicate flush');
+      return;
+    }
+    
     if (this.pcmAccumulator.length === 0 || !this.recordingContext) {
       // Clear timer if accumulator is empty
       if (this.pcmAccumulatorTimer) {
@@ -731,43 +815,166 @@ export class ProductionAudioManager {
       return;
     }
     
+    // Set guard flag
+    this.isFlushingPCM = true;
+    
     try {
-      // Combine all accumulated chunks
+      // Clear timer immediately to prevent duplicate flushes
+      if (this.pcmAccumulatorTimer) {
+        clearTimeout(this.pcmAccumulatorTimer);
+        this.pcmAccumulatorTimer = null;
+      }
+      
+      // Calculate total samples available
       const totalLength = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
       
       // Only flush if we have minimum samples (unless forced)
-      if (totalLength < this.PCM_MIN_SAMPLES) {
+      if (!force && totalLength < this.PCM_MIN_SAMPLES) {
         // Don't flush yet, wait for more samples
+        this.isFlushingPCM = false; // Release guard
         return;
       }
       
-      const combinedSamples = new Int16Array(totalLength);
+      // CRITICAL: Use splice to take only what we need, preserving order
+      // Take at least PCM_MIN_SAMPLES, or a multiple of it for smooth playback
+      // This matches the normal TTS behavior and ensures correct ordering
+      const takeSamples = force 
+        ? totalLength 
+        : Math.max(this.PCM_MIN_SAMPLES, Math.floor(totalLength / this.PCM_MIN_SAMPLES) * this.PCM_MIN_SAMPLES);
       
+      // Extract chunks in order until we have enough samples
+      const chunksToFlush: Int16Array[] = [];
+      let samplesTaken = 0;
+      
+      while (samplesTaken < takeSamples && this.pcmAccumulator.length > 0) {
+        const chunk = this.pcmAccumulator.shift()!; // Remove from front (FIFO - maintains order)
+        chunksToFlush.push(chunk);
+        samplesTaken += chunk.length;
+      }
+      
+      if (chunksToFlush.length === 0) {
+        this.isFlushingPCM = false; // Release guard
+        return;
+      }
+      
+      // Combine chunks in order
+      const combinedSamples = new Int16Array(samplesTaken);
       let offset = 0;
-      for (const chunk of this.pcmAccumulator) {
+      for (const chunk of chunksToFlush) {
         combinedSamples.set(chunk, offset);
         offset += chunk.length;
       }
       
-      // Resample from 16kHz to 48kHz
-      const resampledSamples = this.resample16kTo48k(combinedSamples);
+      // CRITICAL: Create buffer at 16kHz and let browser handle resampling automatically
+      // Browser's native resampling is MUCH better than manual resampling - eliminates crackling!
+      // Normal TTS uses this approach and sounds perfect
+      const floatSamples = new Float32Array(combinedSamples.length);
+      for (let i = 0; i < combinedSamples.length; i++) {
+        floatSamples[i] = combinedSamples[i] / 32768.0;
+      }
       
-      // Create audio buffer at 48kHz (recording context sample rate)
-      const audioBuffer = this.recordingContext.createBuffer(1, resampledSamples.length, this.recordingContext.sampleRate);
+      // Create buffer at 16kHz - browser will automatically resample to AudioContext sample rate
+      const audioBuffer = this.recordingContext.createBuffer(1, floatSamples.length, 16000);
       const channelData = audioBuffer.getChannelData(0);
+      channelData.set(floatSamples);
       
-      // Copy resampled samples (already normalized to [-1, 1])
-      channelData.set(resampledSamples);
+      // Schedule buffer immediately - no concatenation, just like normal TTS
+      // Browser-native resampling handles everything smoothly
+      console.log(`📦 Flushed ${chunksToFlush.length} PCM chunks (${samplesTaken} samples) → ${audioBuffer.duration.toFixed(3)}s buffer (${this.pcmAccumulator.length} chunks remaining)`);
       
-      // Fade-in will be applied by scheduleSingleBuffer when first buffer is scheduled
+      // Add directly to queue - no concatenation needed
+      this.audioQueue.push(audioBuffer);
       
-      console.log(`📦 Flushed ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer added to queue (queue length: ${this.audioQueue.length + 1})`);
+      // Start smart queue manager if not already running
+      if (!this.isPlaying && !this.queueManagerTimer) {
+        console.log('🎵 Starting smart playback queue manager');
+        this.isPlaying = true;
+        this.startSmartQueueManager();
+      } else {
+        console.log(`⏳ Buffer queued (${this.audioQueue.length} in master queue, ${this.scheduledBuffers.length} scheduled)`);
+      }
       
-      // Clear accumulator
+      // If there are remaining chunks and we have enough samples, flush again immediately
+      // This ensures continuous playback without gaps
+      const remainingSamples = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
+      if (remainingSamples >= this.PCM_MIN_SAMPLES) {
+        // Release guard and flush again (recursive, but guarded)
+        this.isFlushingPCM = false;
+        this.flushPCMAccumulator(false);
+        return;
+      }
+      
+    } catch (error) {
+      console.error('Error flushing PCM accumulator:', error);
       this.pcmAccumulator = [];
+      this.pcmCarryByte = null; // Reset carry byte on error
+    } finally {
+      // Always release guard flag
+      this.isFlushingPCM = false;
+    }
+  }
+
+  flushRemainingPCM(): void {
+    console.log('🔚 TTS sentence complete - flushing remaining PCM accumulator');
+    
+    // Clear timer
+    if (this.pcmAccumulatorTimer) {
+      clearTimeout(this.pcmAccumulatorTimer);
       this.pcmAccumulatorTimer = null;
+    }
+    
+    // Wait for any in-progress flush to complete
+    if (this.isFlushingPCM) {
+      console.log('⏳ Waiting for in-progress flush to complete before final flush');
+      // Wait a bit and retry (simple approach - could use Promise if needed)
+      setTimeout(() => this.flushRemainingPCM(), 50);
+      return;
+    }
+    
+    // Force flush even if below minimum samples
+    const totalLength = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
+    if (totalLength === 0 || !this.recordingContext) {
+      this.pcmCarryByte = null;
+      return;
+    }
+    
+    // Set guard flag
+    this.isFlushingPCM = true;
+    
+    try {
+      // CRITICAL: Extract chunks in order using shift (FIFO - maintains order)
+      // This matches normal TTS behavior and ensures correct ordering
+      const chunksToFlush: Int16Array[] = [];
+      while (this.pcmAccumulator.length > 0) {
+        chunksToFlush.push(this.pcmAccumulator.shift()!); // Remove from front
+      }
       
-      // Add to playback queue
+      // Combine all accumulated chunks (force flush regardless of minimum)
+      const combinedSamples = new Int16Array(totalLength);
+      
+      let offset = 0;
+      for (const chunk of chunksToFlush) {
+        combinedSamples.set(chunk, offset);
+        offset += chunk.length;
+      }
+      
+      // CRITICAL: Create buffer at 16kHz and let browser handle resampling automatically
+      // Browser's native resampling is MUCH better than manual resampling - eliminates crackling!
+      // Normal TTS uses this approach and sounds perfect
+      const floatSamples = new Float32Array(combinedSamples.length);
+      for (let i = 0; i < combinedSamples.length; i++) {
+        floatSamples[i] = combinedSamples[i] / 32768.0;
+      }
+      
+      // Create buffer at 16kHz - browser will automatically resample to AudioContext sample rate
+      const audioBuffer = this.recordingContext.createBuffer(1, floatSamples.length, 16000);
+      const channelData = audioBuffer.getChannelData(0);
+      channelData.set(floatSamples);
+      
+      // Schedule buffer immediately - no concatenation, just like normal TTS
+      console.log(`📦 Final flush: ${chunksToFlush.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer`);
+      
+      // Add directly to queue - no concatenation needed
       this.audioQueue.push(audioBuffer);
       
       // Start smart queue manager if not already running
@@ -780,71 +987,113 @@ export class ProductionAudioManager {
       }
       
     } catch (error) {
-      console.error('Error flushing PCM accumulator:', error);
+      console.error('Error flushing remaining PCM accumulator:', error);
       this.pcmAccumulator = [];
-      this.pcmAccumulatorTimer = null;
-      this.pcmCarryByte = null; // Reset carry byte on error
+      this.pcmCarryByte = null;
+    } finally {
+      // Always release guard flag
+      this.isFlushingPCM = false;
+      // Clear carry byte on final flush
+      this.pcmCarryByte = null;
     }
   }
 
-  flushRemainingPCM(): void {
-    console.log('🔚 TTS sentence complete - flushing remaining PCM accumulator');
-    if (this.pcmAccumulatorTimer) {
-      clearTimeout(this.pcmAccumulatorTimer);
-      this.pcmAccumulatorTimer = null;
-    }
-    
-    // Force flush even if below minimum samples
-    const totalLength = this.pcmAccumulator.reduce((sum, chunk) => sum + chunk.length, 0);
-    if (totalLength === 0 || !this.recordingContext) {
-      this.pcmCarryByte = null;
+  /**
+   * Concatenate pending buffers into a single seamless buffer
+   * CRITICAL: Apply crossfade at boundaries to prevent crackling
+   */
+  private concatenateAndScheduleBuffers(): void {
+    if (!this.recordingContext || !this.pendingBuffers || this.pendingBuffers.length === 0) {
       return;
     }
     
-    try {
-      // Combine all accumulated chunks (force flush regardless of minimum)
-      const combinedSamples = new Int16Array(totalLength);
-      
-      let offset = 0;
-      for (const chunk of this.pcmAccumulator) {
-        combinedSamples.set(chunk, offset);
-        offset += chunk.length;
-      }
-      
-      // Resample from 16kHz to 48kHz
-      const resampledSamples = this.resample16kTo48k(combinedSamples);
-      
-      // Create audio buffer at 48kHz (recording context sample rate)
-      const audioBuffer = this.recordingContext.createBuffer(1, resampledSamples.length, this.recordingContext.sampleRate);
-      const channelData = audioBuffer.getChannelData(0);
-      
-      // Copy resampled samples (already normalized to [-1, 1])
-      channelData.set(resampledSamples);
-      
-      // Fade-in will be applied by scheduleSingleBuffer when first buffer is scheduled
-      
-      console.log(`📦 Final flush: ${this.pcmAccumulator.length} PCM chunks (${totalLength} samples) → ${audioBuffer.duration.toFixed(3)}s buffer`);
-      
-      // Clear accumulator
-      this.pcmAccumulator = [];
-      
-      // Add to playback queue
-      this.audioQueue.push(audioBuffer);
-      
-      // Start smart queue manager if not already running
+    // If only one buffer, no need to concatenate
+    if (this.pendingBuffers.length === 1) {
+      this.audioQueue.push(this.pendingBuffers[0]);
+      this.pendingBuffers = [];
       if (!this.isPlaying && !this.queueManagerTimer) {
         console.log('🎵 Starting smart playback queue manager');
         this.isPlaying = true;
         this.startSmartQueueManager();
       }
-      
-    } catch (error) {
-      console.error('Error flushing remaining PCM:', error);
-      this.pcmAccumulator = [];
+      return;
     }
     
-    // Clear carry byte on final flush
-    this.pcmCarryByte = null;
+    // Calculate total length
+    const totalLength = this.pendingBuffers.reduce((sum, buf) => sum + buf.length, 0);
+    if (totalLength === 0) {
+      this.pendingBuffers = [];
+      return;
+    }
+    
+    // Create concatenated buffer
+    const concatenatedBuffer = this.recordingContext.createBuffer(
+      1, 
+      totalLength, 
+      this.recordingContext.sampleRate
+    );
+    const concatenatedChannel = concatenatedBuffer.getChannelData(0);
+    
+    // Copy buffers with crossfade at boundaries to prevent crackling
+    let offset = 0;
+    const crossfadeSamples = Math.floor(0.001 * this.recordingContext.sampleRate); // 1ms crossfade
+    
+    for (let i = 0; i < this.pendingBuffers.length; i++) {
+      const buffer = this.pendingBuffers[i];
+      const channelData = buffer.getChannelData(0);
+      
+      if (i === 0) {
+        // First buffer - copy all
+        concatenatedChannel.set(channelData, offset);
+        offset += channelData.length;
+      } else {
+        // Subsequent buffers - crossfade with previous
+        const prevBuffer = this.pendingBuffers[i - 1];
+        const prevChannelData = prevBuffer.getChannelData(0);
+        const prevEnd = offset - prevChannelData.length;
+        
+        // Crossfade: fade out previous, fade in current
+        const fadeLength = Math.min(crossfadeSamples, Math.min(prevChannelData.length, channelData.length));
+        const fadeStart = prevEnd + prevChannelData.length - fadeLength;
+        
+        for (let j = 0; j < fadeLength; j++) {
+          const fadeProgress = j / fadeLength;
+          const prevIdx = prevChannelData.length - fadeLength + j;
+          const currIdx = j;
+          
+          // Blend: previous fades out, current fades in
+          concatenatedChannel[fadeStart + j] = 
+            concatenatedChannel[fadeStart + j] * (1 - fadeProgress) + 
+            channelData[currIdx] * fadeProgress;
+        }
+        
+        // Copy remaining samples from current buffer
+        if (channelData.length > fadeLength) {
+          concatenatedChannel.set(
+            channelData.subarray(fadeLength), 
+            offset
+          );
+          offset += channelData.length - fadeLength;
+        }
+      }
+    }
+    
+    console.log(`🔗 Concatenated ${this.pendingBuffers.length} buffers with crossfades → ${concatenatedBuffer.duration.toFixed(3)}s seamless buffer`);
+    
+    // Clear pending buffers
+    this.pendingBuffers = [];
+    
+    // Add concatenated buffer to queue
+    this.audioQueue.push(concatenatedBuffer);
+    
+    // Start smart queue manager if not already running
+    if (!this.isPlaying && !this.queueManagerTimer) {
+      console.log('🎵 Starting smart playback queue manager');
+      this.isPlaying = true;
+      this.startSmartQueueManager();
+    } else {
+      console.log(`⏳ Buffer queued (${this.audioQueue.length} in master queue, ${this.scheduledBuffers.length} scheduled)`);
+    }
   }
 
   /**
@@ -900,11 +1149,21 @@ export class ProductionAudioManager {
     }
 
     // Schedule more buffers if we have less than target duration
+    // Use 8ms crossfade like normal TTS for seamless playback
+    let nextStartTime = now;
+    if (this.scheduledBuffers.length > 0) {
+      const lastBuffer = this.scheduledBuffers[this.scheduledBuffers.length - 1];
+      // Start next buffer with 8ms overlap (matches normal TTS)
+      nextStartTime = Math.max(now, lastBuffer.endTime - this.CROSSFADE_DURATION);
+    }
+    
     while (scheduledDuration < this.TARGET_BUFFER_DURATION && this.audioQueue.length > 0) {
       const audioBuffer = this.audioQueue.shift()!;
-      const scheduled = this.scheduleSingleBuffer(audioBuffer, now + scheduledDuration);
+      const scheduled = this.scheduleSingleBuffer(audioBuffer, nextStartTime);
       if (scheduled) {
-        scheduledDuration += audioBuffer.duration;
+        // Update playhead: end time minus crossfade (matches normal TTS)
+        nextStartTime = nextStartTime + audioBuffer.duration - this.CROSSFADE_DURATION;
+        scheduledDuration = Math.max(0, nextStartTime - now);
       } else {
         // Failed to schedule, put buffer back
         this.audioQueue.unshift(audioBuffer);
@@ -958,20 +1217,50 @@ export class ProductionAudioManager {
       startTime = currentTime + 0.01;
     }
 
-    const endTime = startTime + audioBuffer.duration;
+    let endTime = startTime + audioBuffer.duration;
     
     try {
-      // Apply fade-in to first buffer if needed
-      if (this.isFirstBuffer) {
-        this.applyFadeIn(audioBuffer, this.FADE_IN_DURATION);
-        this.isFirstBuffer = false;
-      }
+      // Don't modify buffer data - let browser handle everything (matches normal TTS)
+      // Normal TTS doesn't modify buffer data, just schedules with crossfades
       
       const source = this.recordingContext.createBufferSource();
       source.buffer = audioBuffer;
       
       const gainNode = this.recordingContext.createGain();
-      gainNode.gain.value = 1.5;
+      
+      // Use exact same crossfade logic as normal TTS (8ms crossfade)
+      if (this.lastGainNode && this.scheduledBuffers.length > 0) {
+        const lastBuffer = this.scheduledBuffers[this.scheduledBuffers.length - 1];
+        const prevEnd = lastBuffer.endTime;
+        
+        // Start new buffer with 8ms overlap (matches normal TTS)
+        startTime = Math.max(currentTime, prevEnd - this.CROSSFADE_DURATION);
+        endTime = startTime + audioBuffer.duration;
+        
+        // Fade out previous buffer during crossfade (matches normal TTS exactly)
+        const downStart = Math.max(currentTime, prevEnd - this.CROSSFADE_DURATION);
+        try {
+          this.lastGainNode.gain.setValueAtTime(1, downStart);
+          this.lastGainNode.gain.linearRampToValueAtTime(0, prevEnd);
+        } catch (e) {
+          // Ignore scheduling errors
+        }
+        
+        // Fade in new buffer during crossfade (matches normal TTS exactly)
+        try {
+          gainNode.gain.setValueAtTime(0, startTime);
+          gainNode.gain.linearRampToValueAtTime(1, startTime + this.CROSSFADE_DURATION);
+        } catch (e) {
+          gainNode.gain.value = 1;
+        }
+      } else {
+        // First buffer - set gain to 1 (matches normal TTS)
+        try {
+          gainNode.gain.setValueAtTime(1, startTime);
+        } catch (e) {
+          gainNode.gain.value = 1;
+        }
+      }
       
       source.connect(gainNode);
 
@@ -982,6 +1271,9 @@ export class ProductionAudioManager {
       }
       
       source.start(startTime);
+      
+      // Store gain node for next buffer's fade-out
+      this.lastGainNode = gainNode;
       
       // Track scheduled buffer
       this.scheduledBuffers.push({ source, endTime });
@@ -1054,26 +1346,26 @@ export class ProductionAudioManager {
     
     // Apply crossfade if there's a previous buffer
     if (this.lastGainNode) {
-      // Fade out previous buffer during crossfade period
+      // Simple linear crossfade - more reliable
       try {
         const fadeStart = Math.max(currentTime, startTime - this.CROSSFADE_DURATION);
-        this.lastGainNode.gain.setValueAtTime(1.5, fadeStart);
+        this.lastGainNode.gain.setValueAtTime(1.0, fadeStart);
         this.lastGainNode.gain.linearRampToValueAtTime(0, startTime);
       } catch (e) {
         // Ignore scheduling errors
       }
       
       // Fade in new buffer from start
+      // Simple linear ramp - more reliable
       try {
         gainNode.gain.setValueAtTime(0, startTime);
-        gainNode.gain.linearRampToValueAtTime(1.5, startTime + this.CROSSFADE_DURATION);
+        gainNode.gain.linearRampToValueAtTime(1.0, startTime + this.CROSSFADE_DURATION);
       } catch (e) {
-        // Fallback if scheduling fails
-        gainNode.gain.value = 1.5;
+        gainNode.gain.value = 1.0;
       }
     } else {
       // First buffer - no crossfade needed
-      gainNode.gain.value = 1.5;
+      gainNode.gain.value = 1.0;
     }
     
     this.currentSource.connect(gainNode);
@@ -1139,6 +1431,15 @@ export class ProductionAudioManager {
   stopPlayback(): void {
     this.manuallyStoppedPlayback = true;
     
+    // CRITICAL: Notify AEC that TTS stopped BEFORE stopping playback
+    // This allows AEC to adapt immediately and stop canceling user speech
+    if (this.aecNode) {
+      this.aecNode.port.postMessage({
+        type: 'tts_stopped'
+      });
+      console.log('🔔 Notified AEC that TTS stopped (from stopPlayback) - allowing adaptation');
+    }
+    
     // Stop queue manager
     if (this.queueManagerTimer) {
       clearTimeout(this.queueManagerTimer);
@@ -1175,9 +1476,6 @@ export class ProductionAudioManager {
     this.playbackPlayhead = 0; // Reset playhead
     this.lastGainNode = null; // Clear gain node reference
     this.isFirstBuffer = true; // Reset for next TTS session
-    
-    // Reset VAD state when playback stops
-    this.vadSpeaking = false;
     
     if (this.pcmAccumulatorTimer) {
       clearTimeout(this.pcmAccumulatorTimer);
@@ -1258,18 +1556,30 @@ export class ProductionAudioManager {
 
   /**
    * Set VAD threshold (from backend calibration)
-   * Simple pass-through to worklet
+   * Apply multiplier to prevent over-sensitivity and ensure minimum threshold
    */
   setVADThreshold(backendThreshold: number): void {
-    // Send threshold to worklet
+    // Apply multiplier to backend threshold to prevent over-sensitivity
+    // Backend calibration can be too sensitive, especially in quiet environments
+    // BUT: Don't make it too high or VAD won't detect speech at all
+    // Reduced multiplier to allow better detection, especially after AEC processing
+    const THRESHOLD_MULTIPLIER = 1.2; // Increase threshold by 1.2x (reduced from 1.5x to allow detection)
+    const MIN_THRESHOLD = 0.0008; // Minimum threshold (reduced from 0.001 to allow detection)
+    
+    const adjustedThreshold = Math.max(
+      backendThreshold * THRESHOLD_MULTIPLIER,
+      MIN_THRESHOLD
+    );
+    
+    // Send adjusted threshold to worklet
     if (this.workletNode) {
       this.workletNode.port.postMessage({
         type: 'vad_threshold',
-        threshold: backendThreshold
+        threshold: adjustedThreshold
       });
     }
     
-    console.log(`🎯 VAD threshold updated from backend calibration: ${backendThreshold.toFixed(6)}`);
+    console.log(`🎯 VAD threshold updated: backend=${backendThreshold.toFixed(6)}, adjusted=${adjustedThreshold.toFixed(6)} (${THRESHOLD_MULTIPLIER}x multiplier, min=${MIN_THRESHOLD})`);
   }
 
   getAssembledAudio(): Blob | null {
@@ -1285,7 +1595,47 @@ export class ProductionAudioManager {
     return blob;
   }
 
+  /**
+   * Start a continuous silent tone to keep AudioContext alive
+   * Prevents random suspensions that cause crackling
+   */
+  private startKeepAliveTone(): void {
+    if (!this.recordingContext) return;
+    
+    // Stop existing keep-alive if any
+    this.stopKeepAliveTone();
+    
+    // Create a very long silent buffer (10 seconds)
+    const keepAliveBuffer = this.recordingContext.createBuffer(1, this.recordingContext.sampleRate * 10, this.recordingContext.sampleRate);
+    this.keepAliveSource = this.recordingContext.createBufferSource();
+    this.keepAliveSource.buffer = keepAliveBuffer;
+    
+    // Connect to destination but with zero gain (silent)
+    const gainNode = this.recordingContext.createGain();
+    gainNode.gain.value = 0; // Silent
+    this.keepAliveSource.connect(gainNode);
+    gainNode.connect(this.recordingContext.destination);
+    
+    // Start and loop
+    this.keepAliveSource.loop = true;
+    this.keepAliveSource.start(0);
+    
+    console.log('🔇 Started keep-alive tone to prevent AudioContext suspension');
+  }
+  
+  private stopKeepAliveTone(): void {
+    if (this.keepAliveSource) {
+      try {
+        this.keepAliveSource.stop();
+      } catch (e) {
+        // Ignore if already stopped
+      }
+      this.keepAliveSource = null;
+    }
+  }
+
   cleanup(): void {
+    this.stopKeepAliveTone();
     this.stopRecording();
     this.stopPlayback();
     
@@ -1327,6 +1677,9 @@ export class ProductionAudioManager {
     // Disconnect TTS destination node (no need to disconnect, just nullify)
     this.ttsDestinationNode = null;
     
+    // Stop keep-alive tone
+    this.stopKeepAliveTone();
+    
     // Disconnect VAD worklet
     if (this.workletNode) {
       this.workletNode.disconnect();
@@ -1349,3 +1702,4 @@ export class ProductionAudioManager {
     console.log('Audio manager cleaned up');
   }
 }
+

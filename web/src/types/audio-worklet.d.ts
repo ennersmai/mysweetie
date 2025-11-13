@@ -12,7 +12,9 @@ interface AudioWorkletProcessor {
   ): boolean;
 }
 
-declare var AudioWorkletProcessor: {
+// AudioWorkletProcessor is a global class provided by the browser in AudioWorklet context
+// We need to ensure it's available at runtime, not just as a type
+declare const AudioWorkletProcessor: {
   prototype: AudioWorkletProcessor;
   new (options?: AudioWorkletProcessorOptions): AudioWorkletProcessor;
 };
