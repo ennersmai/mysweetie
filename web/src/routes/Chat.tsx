@@ -20,6 +20,11 @@ function parseActions(text: string) {
   return withoutBackslashes.replace(/\*(.*?)\*/g, '<em>$1</em>');
 }
 
+const isIOSDevice = () => {
+  if (typeof navigator === 'undefined') return false;
+  return /iP(ad|hone|od)/i.test(navigator.userAgent);
+};
+
 const BouncingLoader = () => (
   <div className="bouncing-loader">
     <div className="bounce1" />
@@ -118,6 +123,7 @@ export default function Chat() {
   const [editText, setEditText] = useState('');
   const [longPressMessage, setLongPressMessage] = useState<{ index: number; isUser: boolean } | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
+  const isIOSRef = useRef<boolean>(isIOSDevice());
 
   const MODEL_OPTIONS: { key: string; desc: string; premium?: boolean }[] = [
     { key: 'Sweet Myth', desc: 'Quick, capable general model' },
@@ -1110,17 +1116,34 @@ export default function Chat() {
 
   const onSubmit = async (e?: FormEvent, regeneratedInput?: string) => {
     if (e) { e.preventDefault(); e.stopPropagation(); }
-    // Snapshot and restore window scroll to avoid footer jumping
-    const prevScrollY = window.scrollY;
-    // Keep input focused immediately on submit
-    setTimeout(() => {
+    const hasWindow = typeof window !== 'undefined';
+    const prevScrollY = hasWindow ? window.scrollY : 0;
+    const prevScrollX = hasWindow ? window.scrollX : 0;
+
+    const refocusInput = (preventScroll: boolean) => {
+      if (!inputRef.current) return;
       try {
-        (inputRef.current as any)?.focus?.({ preventScroll: true });
+        if (preventScroll) {
+          (inputRef.current as any)?.focus?.({ preventScroll: true });
+        } else {
+          inputRef.current.focus();
+        }
       } catch {
-        inputRef.current?.focus();
+        inputRef.current.focus();
       }
-    }, 0);
-    setTimeout(() => window.scrollTo({ top: prevScrollY, left: window.scrollX, behavior: 'auto' }), 0);
+    };
+
+    if (isIOSRef.current) {
+      // iOS: focus synchronously and allow Safari to manage scroll to prevent viewport locking
+      refocusInput(false);
+    } else {
+      setTimeout(() => refocusInput(true), 0);
+      if (hasWindow) {
+        setTimeout(() => {
+          window.scrollTo({ top: prevScrollY, left: prevScrollX, behavior: 'auto' });
+        }, 0);
+      }
+    }
     const raw = regeneratedInput ?? input;
     const isAutoContinue = !regeneratedInput && (raw?.trim()?.length ?? 0) === 0;
     const messageToSend = isAutoContinue ? 'Continue' : raw;
@@ -2439,5 +2462,4 @@ export default function Chat() {
     </div>
   );
 }
-
 

@@ -80,6 +80,7 @@ export default function VoiceCallButton({
   const callStateRef = useRef<keyof CallState>('IDLE');
   const isEndingCallRef = useRef<boolean>(false);
   const blobDecodeChainRef = useRef<Promise<void>>(Promise.resolve());
+  const isStartingCallRef = useRef<boolean>(false);
 
   const enqueueBlobForPlayback = useCallback((blob: Blob) => {
     blobDecodeChainRef.current = blobDecodeChainRef.current
@@ -595,22 +596,35 @@ export default function VoiceCallButton({
       console.log('Call already active, skipping start');
       return;
     }
+
+    if (isStartingCallRef.current) {
+      console.log('Call initialization already in progress, ignoring duplicate start');
+      return;
+    }
     
     if (!audioSupported) {
       onError?.('Audio not supported in this browser');
       return;
     }
 
-    console.log('Attempting to initialize call...');
-    const initialized = await initializeCall();
-    console.log('Call initialization result:', initialized);
-    
-    if (initialized) {
-      setIsCallActive(true);
-      setCallState('IDLE');
-      console.log('Call started successfully');
-    } else {
-      console.log('Call initialization failed');
+    isStartingCallRef.current = true;
+
+    try {
+      console.log('Attempting to initialize call...');
+      const initialized = await initializeCall();
+      console.log('Call initialization result:', initialized);
+      
+      if (initialized) {
+        setIsCallActive(true);
+        setCallState('IDLE');
+        console.log('Call started successfully');
+      } else {
+        console.log('Call initialization failed');
+      }
+    } catch (error) {
+      console.error('Unexpected error while starting call:', error);
+    } finally {
+      isStartingCallRef.current = false;
     }
   };
 
@@ -709,7 +723,7 @@ export default function VoiceCallButton({
     
     const buttonDisabled = isCallActive 
       ? false 
-      : (disabled || connectionStatus === 'connecting' || micPermission === 'denied');
+      : (disabled || connectionStatus === 'connecting' || micPermission === 'denied' || isStartingCallRef.current);
     
     console.log(`🖱️ Button clicked:
       - isCallActive: ${isCallActive}
@@ -718,7 +732,8 @@ export default function VoiceCallButton({
       - connectionStatus: ${connectionStatus}
       - micPermission: ${micPermission}
       - computed disabled: ${buttonDisabled}
-      - isEndingCallRef: ${isEndingCallRef.current}`);
+      - isEndingCallRef: ${isEndingCallRef.current}
+      - isStartingCallRef: ${isStartingCallRef.current}`);
     
     // If button is disabled, log why
     if (buttonDisabled) {
