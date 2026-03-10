@@ -75,6 +75,10 @@ ELEVENLABS_API_KEY=your_elevenlabs_api_key
 
 ## Recent Updates
 
+- ✅ Fixed chat repetition bug (LLM context sanitization, memory parser improvements)
+- ✅ Fixed AEC RangeError in voice calls (buffer synchronization)
+- ✅ Pre-compiled AEC processor for cross-browser compatibility
+- ✅ TTS-aware VAD with adaptive thresholding
 - ✅ New conversation management system
 - ✅ "New Chat" functionality with sidebar navigation
 - ✅ Chat history on account page
