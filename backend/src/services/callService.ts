@@ -128,8 +128,12 @@ export class CallService {
 
     logger.info(`Call session created: ${sessionId} for user ${userId}`);
 
-    // Start VAD calibration phase
-    this.startVADCalibration(session);
+    // Skip server-side VAD calibration — client VAD handles speech detection locally.
+    // Go straight to LISTENING for instant readiness (no 500ms+ startup delay).
+    // If the client still sends calibration_complete, it will be handled gracefully.
+    session.isCalibrating = false;
+    this.sendStateUpdate(session, CallState.LISTENING);
+    logger.info(`🎤 Session ${sessionId} immediately ready for voice input (no calibration delay)`);
 
     return session;
   }
@@ -692,10 +696,18 @@ export class CallService {
         'you',
         'bye',
         'goodbye',
+        'amen',
+        'amen.',
         'see you next time',
         'transcribe everything accurately',
         'please subscribe',
-        'please like and subscribe'
+        'please like and subscribe',
+        'subtitles by',
+        'the end',
+        'so',
+        'yeah',
+        'okay',
+        'hmm'
       ];
       
       const lowerTranscript = transcript.toLowerCase().trim();

@@ -1553,28 +1553,31 @@ export default function Chat() {
         const currentMessages = messagesRef.current || [];
         console.log('🔄 Refreshing history, current messages:', currentMessages.length);
         
+        // Small delay to let the backend finish saving before we fetch
+        await new Promise(r => setTimeout(r, 300));
         const res = await apiClient.get(`/chat/history/${currentConversationId}`);
         if (res.ok) {
           const data = await res.json();
           const mapped = (data || []).map((m: any) => ({ id: m.id as string, role: m.role as 'user' | 'assistant', content: m.content as string }));
           
-          // Merge: Keep current messages that don't have IDs yet, add/update from database
-          const currentWithoutIds = currentMessages.filter(m => !m.id);
+          // Trust the DB as the single source of truth.
+          // The old merge logic compared content and kept UI-only messages when
+          // parseResponseForStorage trimmed the text, creating duplicates that
+          // poisoned the LLM context with consecutive same-role messages.
+          // Now: only keep UI-only messages that come AFTER the last DB message
+          // AND don't share the same role as the last DB message (avoids dupes).
+          const currentWithoutIds = currentMessages.filter(m => !m.id && m.content && m.content.trim().length > 0);
+          const lastDbRole = mapped.length > 0 ? mapped[mapped.length - 1].role : null;
           const merged = [...mapped];
           
-          // Add current messages without IDs (newly sent but not yet saved)
-          currentWithoutIds.forEach(currentMsg => {
-            // Only add if not already in mapped (by content match)
-            const exists = mapped.some((m: Message) => 
-              m.role === currentMsg.role && 
-              m.content === currentMsg.content
-            );
-            if (!exists) {
-              merged.push(currentMsg);
-            }
-          });
+          // Only append truly new messages (not yet saved to DB)
+          // Skip if the first unsaved message has the same role as the last DB message
+          // (this is almost certainly a duplicate from the parse/trim difference)
+          if (currentWithoutIds.length > 0 && currentWithoutIds[0].role !== lastDbRole) {
+            merged.push(...currentWithoutIds);
+          }
           
-          console.log('📝 Merged messages - DB:', mapped.length, 'Current without IDs:', currentWithoutIds.length, 'Total:', merged.length);
+          console.log('📝 Refreshed messages - DB:', mapped.length, 'Unsaved kept:', merged.length - mapped.length);
           setMessages(merged);
         }
       } else if (moderationBlockedRef.current) {

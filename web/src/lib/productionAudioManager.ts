@@ -5,9 +5,8 @@
  * Outputs 16kHz WAV files optimized for Groq STT.
  */
 
-// Import processor code as raw text (will be combined with library code)
-// @ts-ignore - ?raw import might not be in type definitions
-import aecProcessorCode from './aec-processor.ts?raw';
+// AEC processor is now a pre-compiled plain JS file at /aec-processor-worklet.js
+// Fetched at runtime instead of imported as raw text (eliminates fragile TS stripping)
 
 // Import WASM URL using Vite's ?url suffix - this gives us the resolved URL at build time
 // @ts-ignore - ?url import might not be in type definitions
@@ -114,304 +113,154 @@ export class ProductionAudioManager {
       // Random suspensions cause crackling - this prevents them
       this.startKeepAliveTone();
 
-      // Fetch library JS file from simple URL (copied to output root by vite-plugin-static-copy)
-      // This bypasses Node module resolution and avoids build-time errors
-      console.log('Fetching webrtcaec3 library JS file...');
-      const jsResponse = await fetch(JS_URL);
-      if (!jsResponse.ok) {
-        throw new Error(`Failed to fetch JS library: ${jsResponse.status} ${jsResponse.statusText}`);
-      }
-      const aecLibraryCode = await jsResponse.text();
-      console.log('✅ JS library code fetched, size:', aecLibraryCode.length, 'characters');
+      // --- AEC + VAD Pipeline (with fallback to VAD-only if AEC fails) ---
+      let aecEnabled = false;
       
-      // Pre-fetch WASM buffer in main thread using Vite-resolved URL
-      // This prevents network requests from within the Blob worklet
-      console.log('Pre-fetching WASM module from:', wasmUrl);
-      const wasmResponse = await fetch(wasmUrl);
-      if (!wasmResponse.ok) {
-        throw new Error(`Failed to fetch WASM file: ${wasmResponse.status} ${wasmResponse.statusText}`);
-      }
-      const wasmBuffer = await wasmResponse.arrayBuffer();
-      console.log('✅ WASM buffer pre-fetched, size:', wasmBuffer.byteLength, 'bytes');
-      
-      // Dynamically construct the worklet script as a single ES module
-      // This bypasses all module-loading restrictions by creating our own mega-module
-      console.log('Constructing AEC worklet module from library and processor code...');
-      
-      // Remove export statements from library code so we can use it directly
-      // The library exports WebRtcAec3, we need to make it available in our scope
-      // Also patch the library to declare WebRtcAec3Wasm variable (prevents ReferenceError)
-      // No need to patch WASM URLs since we're passing the buffer directly to the factory
-      let modifiedLibraryCode = aecLibraryCode
-        .replace(/export\s*{\s*WebRtcAec3\s*};?/g, '') // Remove export statement
-        .replace(/export\s+default\s+WebRtcAec3;?/g, ''); // Remove default export if present
-      
-      // Patch: Add WebRtcAec3Wasm declaration at the beginning if not already present
-      // This prevents "assignment to undeclared variable" errors in module context
-      if (!modifiedLibraryCode.includes('var WebRtcAec3Wasm') && 
-          !modifiedLibraryCode.includes('let WebRtcAec3Wasm') && 
-          !modifiedLibraryCode.includes('const WebRtcAec3Wasm')) {
-        modifiedLibraryCode = 'var WebRtcAec3Wasm;\n' + modifiedLibraryCode;
-        console.log('✅ Patched library code: added WebRtcAec3Wasm declaration');
-      }
-      
-      // Remove any import/export statements from processor code
-      // Also strip TypeScript syntax since this will be executed as plain JavaScript
-      // The processor code should only contain the class definition and registration
-      
-      // First, remove multi-line declare statement (must be done on full text, not line by line)
-      let modifiedProcessorCode = aecProcessorCode
-        // Remove multi-line WebRtcAec3 type declaration (spans multiple lines)
-        .replace(/\/\/\s*Declare WebRtcAec3[\s\S]*?declare\s+const\s+WebRtcAec3\s*:[\s\S]*?\}>;\s*/g, '')
-        // Remove standalone declare statements
-        .replace(/^\s*declare\s+const\s+WebRtcAec3[\s\S]*?\}>;\s*$/gm, '')
-        // Remove import/export statements
-        .replace(/^\s*import\s+.*$/gm, '')
-        .replace(/^\s*export\s+.*$/gm, '');
-      
-      // Now process line by line to avoid breaking comments
-      const lines = modifiedProcessorCode.split('\n');
-      const processedLines = lines.map((line: string) => {
-        // Skip comment lines - don't modify them (single-line // comments, multi-line /* */ comments)
-        const trimmedLine = line.trim();
-        if (trimmedLine.startsWith('//') || trimmedLine.startsWith('*') || trimmedLine.startsWith('/*')) {
-          return line;
+      try {
+        // Step 1: Fetch library JS + WASM + processor JS in parallel
+        console.log('[AEC] Fetching webrtcaec3 library, WASM, and processor...');
+        const [jsResponse, wasmResponse, processorResponse] = await Promise.all([
+          fetch(JS_URL),
+          fetch(wasmUrl),
+          fetch('/aec-processor-worklet.js')
+        ]);
+        
+        if (!jsResponse.ok) throw new Error(`JS library fetch failed: ${jsResponse.status}`);
+        if (!wasmResponse.ok) throw new Error(`WASM fetch failed: ${wasmResponse.status}`);
+        if (!processorResponse.ok) throw new Error(`AEC processor fetch failed: ${processorResponse.status}`);
+        
+        const [aecLibraryCode, wasmBuffer, processorCode] = await Promise.all([
+          jsResponse.text(),
+          wasmResponse.arrayBuffer(),
+          processorResponse.text()
+        ]);
+        console.log(`[AEC] Assets loaded: lib=${aecLibraryCode.length} chars, wasm=${wasmBuffer.byteLength} bytes, processor=${processorCode.length} chars`);
+        
+        // Step 2: Combine library + processor into single worklet script (no TS stripping needed)
+        let modifiedLibraryCode = aecLibraryCode
+          .replace(/export\s*{\s*WebRtcAec3\s*};?/g, '')
+          .replace(/export\s+default\s+WebRtcAec3;?/g, '');
+        
+        if (!modifiedLibraryCode.includes('var WebRtcAec3Wasm') && 
+            !modifiedLibraryCode.includes('let WebRtcAec3Wasm') && 
+            !modifiedLibraryCode.includes('const WebRtcAec3Wasm')) {
+          modifiedLibraryCode = 'var WebRtcAec3Wasm;\n' + modifiedLibraryCode;
         }
         
-        // Process non-comment lines
-        let processedLine = line;
+        const finalWorkletScript = [
+          '// --- webrtcaec3.js library ---',
+          modifiedLibraryCode,
+          '// --- AEC processor (pre-compiled plain JS) ---',
+          processorCode
+        ].join('\n');
         
-        // Remove type annotations from arrow function parameters
-        processedLine = processedLine.replace(/\((\w+)\s*:\s*[^)]+\)\s*=>/g, '($1) =>');
+        // Step 3: Load via Blob URL
+        const blob = new Blob([finalWorkletScript], { type: 'application/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
         
-        // Remove type annotations from regular function parameters
-        processedLine = processedLine.replace(/\(([^)]+)\)(?!\s*=>)/g, (_match: string, params: string) => {
-          const cleanedParams = params.split(',').map((param: string) => {
-            const trimmed = param.trim();
-            const paramMatch = trimmed.match(/^(\w+)\s*:/);
-            return paramMatch ? paramMatch[1] : trimmed;
-          }).join(', ');
-          return '(' + cleanedParams + ')';
-        });
-        
-        // Remove property type annotations (class properties only)
-        // Match: whitespace + propName + : + type + = or ;
-        // Replace with: whitespace + propName (preserve the = or ; that follows)
-        // Handle properties with = assignment: "prop: Type = value" -> "prop = value"
-        // The lookahead (?=\s*=) ensures we don't consume the =, so we just remove ": Type"
-        processedLine = processedLine.replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*=)/gm, '$1$2');
-        // Handle properties with ; termination: "prop: Type;" -> "prop;"
-        processedLine = processedLine.replace(/^(\s+)(\w+)\s*:\s*[^=;]+(?=\s*;)/gm, '$1$2');
-        
-        // Remove return type annotations
-        processedLine = processedLine.replace(/\)\s*:\s*\w+\s*\{/g, ') {');
-        
-        // Remove 'as' type assertions
-        processedLine = processedLine.replace(/\s+as\s+[A-Z][a-zA-Z0-9_\[\]\s\|]*/g, '');
-        
-        // Remove private keyword
-        processedLine = processedLine.replace(/private\s+/g, '');
-        
-        return processedLine;
-      });
-      
-      modifiedProcessorCode = processedLines.join('\n')
-        // Remove TypeScript comment directives (safe to do on full text)
-        .replace(/@ts-expect-error\s*/g, '')
-        .replace(/\/\/\s*@ts-expect-error.*$/gm, '')
-        .replace(/\/\/\s*@ts-ignore.*$/gm, '');
-      
-      // Construct the final module script
-      // Use array join instead of template literal to avoid syntax errors from backticks/${} in code
-      const finalWorkletScript = [
-        '// --- Start of webrtcaec3.js library code ---',
-        modifiedLibraryCode,
-        '// --- End of webrtcaec3.js library code ---',
-        '',
-        '// --- Start of aec-processor.js code ---',
-        modifiedProcessorCode,
-        '// --- End of aec-processor.js code ---'
-      ].join('\n');
-      
-      // Create a Blob URL from the combined script
-      // AudioWorklets loaded via addModule() are treated as ES modules
-      // ES modules support top-level await, so the library code can use await
-      const blob = new Blob([finalWorkletScript], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      
-      // Verify the script doesn't have syntax errors before loading
-      // This helps catch issues early
-      try {
-        // Just check if it can be parsed (don't execute)
-        new Function(finalWorkletScript);
-      } catch (parseError: any) {
-        console.warn('⚠️ Script parse check failed (might be false positive for modules):', parseError.message);
-        // Don't throw - modules might have syntax that Function() can't parse
-      }
-      console.log('✅ AEC worklet module constructed, blob URL created');
-      
-      // Load the worklet module from the Blob URL
-      try {
-        await this.recordingContext.audioWorklet.addModule(blobUrl);
-        console.log('✅ AEC processor loaded from blob URL');
-        // Clean up the blob URL after loading
-        URL.revokeObjectURL(blobUrl);
-      } catch (e: any) {
-        URL.revokeObjectURL(blobUrl); // Clean up on error too
-        console.error('Failed to load AEC worklet module:', e);
-        console.error('Error details:', {
-          message: e?.message,
-          stack: e?.stack,
-          name: e?.name
-        });
-        // Log snippets of the script to help debug syntax errors
-        const scriptPreview = finalWorkletScript.substring(0, 1000);
-        console.error('Script preview (first 1000 chars):', scriptPreview);
-        // Also log where the processor code starts (might be where the error is)
-        const processorStartIndex = finalWorkletScript.indexOf('// --- Start of aec-processor.js code ---');
-        if (processorStartIndex >= 0) {
-          const processorPreview = finalWorkletScript.substring(processorStartIndex, processorStartIndex + 1500);
-          console.error('Processor code preview (first 1500 chars):', processorPreview);
-          // Try to find the declare statement if it still exists
-          const declareIndex = finalWorkletScript.indexOf('declare const WebRtcAec3');
-          if (declareIndex >= 0) {
-            const declarePreview = finalWorkletScript.substring(declareIndex, declareIndex + 200);
-            console.error('⚠️ Found remaining declare statement at index', declareIndex, ':', declarePreview);
-          }
-          // Check if async keyword is present
-          const asyncIndex = finalWorkletScript.indexOf('async (ev) =>');
-          const asyncWithTypeIndex = finalWorkletScript.indexOf('async (ev:');
-          console.error('Async function check:', {
-            'async (ev) =>': asyncIndex >= 0 ? 'Found' : 'Not found',
-            'async (ev:': asyncWithTypeIndex >= 0 ? 'Found (type not removed!)' : 'Not found',
-            asyncIndex,
-            asyncWithTypeIndex
-          });
-          // Check for await usage
-          const awaitIndex = finalWorkletScript.indexOf('await WebRtcAec3');
-          if (awaitIndex >= 0) {
-            const awaitContext = finalWorkletScript.substring(Math.max(0, awaitIndex - 100), awaitIndex + 100);
-            console.error('Await context:', awaitContext);
-          }
+        try {
+          await this.recordingContext.audioWorklet.addModule(blobUrl);
+          console.log('[AEC] ✅ AEC worklet module loaded');
+        } finally {
+          URL.revokeObjectURL(blobUrl);
         }
-        throw e;
+        
+        // Step 4: Create AEC node and initialize
+        this.aecNode = new AudioWorkletNode(this.recordingContext, 'aec-processor', {
+          numberOfInputs: 2,
+          numberOfOutputs: 1
+        });
+        
+        const aecInitPromise = new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('AEC init timeout (10s)')), 10000);
+          this.aecNode!.port.onmessage = (event) => {
+            if (event.data.type === 'init-done') { clearTimeout(timeout); resolve(); }
+            else if (event.data.type === 'init-error') { clearTimeout(timeout); reject(new Error(event.data.error)); }
+          };
+        });
+        
+        this.aecNode.port.postMessage({
+          type: 'init',
+          sampleRate: this.recordingContext.sampleRate,
+          wasm: wasmBuffer
+        }, [wasmBuffer]);
+        
+        await aecInitPromise;
+        console.log('[AEC] ✅ AEC initialized successfully');
+        
+        // Step 5: Create TTS routing nodes for AEC reference signal
+        this.ttsDestinationNode = this.recordingContext.createMediaStreamDestination();
+        this.ttsSourceNode = this.recordingContext.createMediaStreamSource(this.ttsDestinationNode.stream);
+        
+        aecEnabled = true;
+      } catch (aecError: any) {
+        console.warn(`[AEC] ⚠️ AEC setup failed, falling back to VAD-only mode: ${aecError.message}`);
+        console.warn('[AEC] Voice will work but echo cancellation will rely on browser defaults only.');
+        // Clean up partial AEC state
+        this.aecNode = null;
+        this.ttsDestinationNode = null;
+        this.ttsSourceNode = null;
+        aecEnabled = false;
       }
       
-      // Load audio worklet for simple VAD
+      // --- Load VAD worklet (required for both AEC and fallback paths) ---
       await this.recordingContext.audioWorklet.addModule('/audio-processor.js');
-      console.log('✅ Audio processor (VAD) loaded');
-
-      // Create AEC worklet node with 2 inputs (mic, TTS) and 1 output (clean audio)
-      this.aecNode = new AudioWorkletNode(this.recordingContext, 'aec-processor', {
-        numberOfInputs: 2,
-        numberOfOutputs: 1
-      });
-      console.log('✅ AEC worklet node created');
-
-      // Initialize AEC via message
-      // Pass WASM buffer so library doesn't need to fetch it
-      const aecInitPromise = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('AEC initialization timeout'));
-        }, 10000); // 10 second timeout
-        
-        this.aecNode!.port.onmessage = (event) => {
-          if (event.data.type === 'init-done') {
-            clearTimeout(timeout);
-            console.log('✅ AEC initialized successfully');
-            resolve();
-          } else if (event.data.type === 'init-error') {
-            clearTimeout(timeout);
-            reject(new Error(`AEC initialization error: ${event.data.error}`));
-          }
-        };
-      });
-
-      // Send init message to AEC worklet with WASM buffer
-      // WebRtcAec3 is already in scope from the combined module
-      // Pass WASM buffer so library doesn't need to fetch it (may need API adjustment)
-      this.aecNode.port.postMessage({
-        type: 'init',
-        sampleRate: this.recordingContext.sampleRate,
-        wasm: wasmBuffer // Pass WASM buffer (may need to check if library supports this)
-      }, [wasmBuffer]); // Transfer the buffer
-
-      // Wait for AEC initialization
-      await aecInitPromise;
-
-      // Create TTS destination node in recording context (48kHz) to capture TTS audio for AEC
-      // TTS audio will be resampled from 16kHz to 48kHz before being added to the audio graph
-      this.ttsDestinationNode = this.recordingContext.createMediaStreamDestination();
-      this.ttsSourceNode = this.recordingContext.createMediaStreamSource(this.ttsDestinationNode.stream);
-      console.log('✅ TTS destination and source nodes created in recording context (48kHz)');
-
-      // Create VAD worklet node with single input (receives clean audio from AEC)
+      console.log('✅ VAD worklet loaded');
+      
       this.workletNode = new AudioWorkletNode(this.recordingContext, 'audio-processor', {
         numberOfInputs: 1,
-        numberOfOutputs: 1 // Pass-through output
+        numberOfOutputs: 1
       });
-      console.log('✅ VAD worklet node created');
-
-      // Build new audio chain:
-      // micSource → AEC (input 0)
-      // ttsSourceNode → AEC (input 1)
-      // AEC → VAD worklet
+      
+      // --- Wire up audio graph ---
       const micSource = this.recordingContext.createMediaStreamSource(this.mediaStream);
-      micSource.connect(this.aecNode, 0, 0); // Mic to AEC input 0
-      this.ttsSourceNode.connect(this.aecNode, 0, 1); // TTS to AEC input 1
-      this.aecNode.connect(this.workletNode); // AEC output to VAD input
-      console.log('✅ Audio chain configured: mic → AEC → VAD');
+      
+      if (aecEnabled && this.aecNode && this.ttsSourceNode) {
+        // Full AEC pipeline: mic → AEC(input0), TTS → AEC(input1), AEC → VAD
+        micSource.connect(this.aecNode, 0, 0);
+        this.ttsSourceNode.connect(this.aecNode, 0, 1);
+        this.aecNode.connect(this.workletNode);
+        console.log('✅ Audio chain: mic → AEC → VAD (echo cancellation active)');
+      } else {
+        // Fallback: mic → VAD directly (relies on browser echo cancellation)
+        micSource.connect(this.workletNode);
+        console.log('✅ Audio chain: mic → VAD (fallback mode, no AEC)');
+      }
 
-      // Handle messages from VAD worklet
+      // --- Handle VAD worklet messages ---
       this.workletNode.port.onmessage = (event) => {
         const message = event.data;
         
         if (message.type === 'speech_start') {
-          // VAD detected speech
           this.handleSpeechStart();
         } else if (message.type === 'speech_end') {
-          // VAD detected speech end
           this.handleSpeechEnd();
         } else if (message.type === 'audio_data') {
-          // Audio data from worklet (for ring buffer and recording)
           const pcmData: Float32Array = message.data;
           
-          // Always maintain ring buffer (last ~1200ms of audio)
+          // Maintain ring buffer (pre-roll for capturing first word)
           this.ringBuffer.push(pcmData);
           if (this.ringBuffer.length > this.RING_BUFFER_SIZE) {
             this.ringBuffer.shift();
           }
           
-              // CRITICAL: Ensure recording context stays active during TTS
-              // Suspended contexts cause random crackling
-              if (this.recordingContext) {
-                if (this.recordingContext.state === 'suspended') {
-                  console.warn('⚠️ AudioContext suspended during playback - resuming to prevent crackling');
-                  this.recordingContext.resume().catch(err => console.error('Failed to resume AudioContext:', err));
-                }
-                // Keep context alive by ensuring it's running
-                if (this.recordingContext.state === 'running') {
-                  // Context is active - good
-                } else {
-                  // Try to resume if not running
-                  this.recordingContext.resume().catch(() => {});
-                }
-              }
+          // Keep AudioContext alive
+          if (this.recordingContext && this.recordingContext.state === 'suspended') {
+            this.recordingContext.resume().catch(() => {});
+          }
           
-          // During calibration, send audio chunks directly without VAD processing
+          // During calibration, send audio chunks for backend threshold calculation
           if (this.isCalibrating && this.onCalibrationChunk) {
-            // Convert Float32Array to Int16Array PCM for calibration
             const int16Data = new Int16Array(pcmData.length);
             for (let i = 0; i < pcmData.length; i++) {
-              // Clamp to [-1, 1] and convert to 16-bit integer
               const sample = Math.max(-1, Math.min(1, pcmData[i]));
               int16Data[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
             }
             this.onCalibrationChunk(int16Data.buffer);
-            return; // Skip recording during calibration
+            return;
           }
           
-          // If actively recording speech, accumulate in utterance buffer
+          // Accumulate audio during active speech
           if (this.isSendingAudio) {
             this.utteranceBuffer.push(pcmData);
           }
@@ -650,6 +499,15 @@ export class ProductionAudioManager {
     if (!this.isPlayingTTS) {
       console.log('🎵 Starting TTS playback session');
       this.isPlayingTTS = true;
+      
+      // Notify AEC that TTS is starting so it activates echo cancellation
+      if (this.aecNode) {
+        this.aecNode.port.postMessage({ type: 'tts_started' });
+      }
+      // Notify VAD to raise threshold during TTS (second layer of echo protection)
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({ type: 'tts_playing', playing: true });
+      }
     }
 
     try {
@@ -1035,9 +893,17 @@ export class ProductionAudioManager {
       if (this.isPlayingTTS) {
         setTimeout(() => {
           if (this.audioQueue.length === 0 && this.scheduledBuffers.length === 0 && this.isPlayingTTS) {
-            console.log('✅ TTS session complete - re-enabling VAD');
+            console.log('✅ TTS session complete - notifying AEC+VAD, re-enabling normal detection');
             this.isPlayingTTS = false;
             this.isFirstBuffer = true;
+            
+            // Notify AEC and VAD that TTS is done
+            if (this.aecNode) {
+              this.aecNode.port.postMessage({ type: 'tts_stopped' });
+            }
+            if (this.workletNode) {
+              this.workletNode.port.postMessage({ type: 'tts_playing', playing: false });
+            }
             
             if (this.onPlaybackComplete) {
               this.onPlaybackComplete();
@@ -1257,9 +1123,17 @@ export class ProductionAudioManager {
           // Wait a bit to see if more audio arrives before clearing TTS state
           setTimeout(() => {
             if (this.audioQueue.length === 0 && !this.isPlaying && this.isPlayingTTS) {
-              console.log('✅ TTS session complete - no more audio after delay, re-enabling VAD');
+              console.log('✅ TTS session complete - notifying AEC+VAD, re-enabling normal detection');
               this.isPlayingTTS = false;
               this.isFirstBuffer = true; // Reset for next TTS session
+              
+              // Notify AEC and VAD that TTS is done
+              if (this.aecNode) {
+                this.aecNode.port.postMessage({ type: 'tts_stopped' });
+              }
+              if (this.workletNode) {
+                this.workletNode.port.postMessage({ type: 'tts_playing', playing: false });
+              }
               
               if (this.onPlaybackComplete) {
                 this.onPlaybackComplete();
@@ -1285,14 +1159,15 @@ export class ProductionAudioManager {
   stopPlayback(): void {
     this.manuallyStoppedPlayback = true;
     
-    // CRITICAL: Notify AEC that TTS stopped BEFORE stopping playback
-    // This allows AEC to adapt immediately and stop canceling user speech
+    // CRITICAL: Notify AEC and VAD that TTS stopped BEFORE stopping playback
+    // This allows AEC to adapt and VAD to lower threshold immediately
     if (this.aecNode) {
-      this.aecNode.port.postMessage({
-        type: 'tts_stopped'
-      });
-      console.log('🔔 Notified AEC that TTS stopped (from stopPlayback) - allowing adaptation');
+      this.aecNode.port.postMessage({ type: 'tts_stopped' });
     }
+    if (this.workletNode) {
+      this.workletNode.port.postMessage({ type: 'tts_playing', playing: false });
+    }
+    console.log('🔔 Notified AEC+VAD that TTS stopped');
     
     // Stop queue manager
     if (this.queueManagerTimer) {
@@ -1363,6 +1238,14 @@ export class ProductionAudioManager {
       // Reset VAD state to ensure clean detection after TTS
       this.vadSpeaking = false;
       this.isFirstBuffer = true; // Reset for next TTS session
+      
+      // Notify AEC and VAD that TTS is done
+      if (this.aecNode) {
+        this.aecNode.port.postMessage({ type: 'tts_stopped' });
+      }
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({ type: 'tts_playing', playing: false });
+      }
       
       if (!this.isPlaying && this.onPlaybackComplete) {
         console.log('🔔 Notifying backend: TTS playback complete');

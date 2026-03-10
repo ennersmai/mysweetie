@@ -216,6 +216,58 @@ function formatMessagesForOpenRouter(messages: any[]) {
     return messages.map(({ role, content }) => ({ role, content }));
 }
 
+/**
+ * Sanitize messages before sending to LLM.
+ * Fixes common issues that cause repetitive/broken responses:
+ * 1. Removes messages with empty or missing role/content
+ * 2. Merges consecutive same-role messages (keeps last in group)
+ * 3. Caps total history to prevent context overflow
+ */
+function sanitizeMessagesForLLM(messages: any[]): any[] {
+  // Step 1: Filter out invalid messages
+  const valid = messages.filter(m => {
+    if (!m || typeof m !== 'object') return false;
+    if (!m.role || typeof m.role !== 'string') return false;
+    if (!m.content || typeof m.content !== 'string' || m.content.trim().length === 0) return false;
+    if (!['user', 'assistant', 'system'].includes(m.role)) return false;
+    return true;
+  });
+
+  // Step 2: Deduplicate consecutive same-role messages
+  // When we see multiple assistant messages in a row, keep only the LAST one
+  // (the first is usually a stale/duplicate from a merge bug)
+  const deduped: any[] = [];
+  for (let i = 0; i < valid.length; i++) {
+    const msg = valid[i];
+    const next = valid[i + 1];
+    
+    // Skip this message if the next message has the same role
+    // (keep the later one as it's more likely to be the correct/complete version)
+    if (next && msg.role === next.role && msg.role !== 'system') {
+      logger.warn({
+        message: 'Dropping duplicate consecutive message',
+        role: msg.role,
+        contentPreview: msg.content.substring(0, 80),
+      });
+      continue;
+    }
+    
+    deduped.push(msg);
+  }
+
+  // Step 3: Cap history length (keep system + last N messages)
+  // Most models work best with ~40 messages of context
+  const MAX_HISTORY = 40;
+  if (deduped.length > MAX_HISTORY) {
+    const systemMsgs = deduped.filter(m => m.role === 'system');
+    const nonSystemMsgs = deduped.filter(m => m.role !== 'system');
+    const trimmed = nonSystemMsgs.slice(-MAX_HISTORY);
+    return [...systemMsgs, ...trimmed];
+  }
+
+  return deduped;
+}
+
 
 export async function* processChat(request: ChatRequest) {
   const { character, messages, userId, conversationId } = request;
@@ -244,7 +296,7 @@ export async function* processChat(request: ChatRequest) {
       : '';
     
     const nsfwPrompt = nsfwAllowed ? JAILBREAK_PROMPT : '';
-    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- You are ${character.name}. You are NOT ${userProfile?.display_name || 'the user'}.\n- Speak ONLY in first person as ${character.name}.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as ${character.name}.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Keep actions concise but descriptive - aim for 2-3 sentences maximum per action block.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n- Do not repeat yourself. Avoid reiterating previously stated facts or phrases. If you notice repetition, change topic or progress the scene.`;
+    const responseStylePrompt = `\n\nStyle and Role Rules (must follow strictly):\n- You are ${character.name}. You are NOT ${userProfile?.display_name || 'the user'}.\n- Speak ONLY in first person as ${character.name}.\n- NEVER write lines, actions, or internal thoughts for ${userProfile?.display_name || 'the user'}. Do not imitate, quote, or paraphrase ${userProfile?.display_name || 'the user'} as if you spoke it.\n- NEVER continue or complete ${userProfile?.display_name || 'the user'}'s sentences, actions, or messages. React only to what they actually sent.\n- If ${userProfile?.display_name || 'the user'} asks you to speak as them, politely refuse and continue speaking only as ${character.name}.\n- Use *action* formatting: wrap your actions in asterisks, e.g., *leans closer*.\n- First describe your action, THEN provide your spoken response.\n- Keep actions concise but descriptive - aim for 2-3 sentences maximum per action block.\n- Avoid short replies; write a few immersive paragraphs unless brevity is explicitly requested.\n\nAnti-Repetition Rules (CRITICAL):\n- NEVER reuse the same physical actions across messages. If you already leaned closer, shifted, bit your lip, or twirled your hair in a previous message, choose a COMPLETELY DIFFERENT action next time.\n- Vary your sentence structure and vocabulary. Do not start consecutive messages the same way.\n- Read the conversation history carefully. If a phrase, gesture, or description appeared before, do NOT use it again.\n- Progress the scene forward with each message. Introduce new topics, reactions, or emotional beats instead of circling back.\n- If ${userProfile?.display_name || 'the user'} points out repetition, acknowledge it naturally and immediately change your approach.`;
     
     // Replace template placeholders in character system prompt
     const personaName = userProfile?.display_name || 'the user';
@@ -259,10 +311,11 @@ export async function* processChat(request: ChatRequest) {
     
     const fullSystemPrompt = `${nsfwPrompt}${processedSystemPrompt}\n\n${memoryContext}${userPersonaContext}${responseStylePrompt}`;
 
-    const openRouterMessages = [
+    const rawMessages = [
         { role: 'system', content: fullSystemPrompt },
         ...formatMessagesForOpenRouter(messages)
     ];
+    const openRouterMessages = sanitizeMessagesForLLM(rawMessages);
 
     // Log the full context being sent to the model for debugging
     logger.info({

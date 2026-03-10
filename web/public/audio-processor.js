@@ -1,28 +1,49 @@
 /**
- * Simple VAD AudioWorkletProcessor
+ * TTS-Aware VAD AudioWorkletProcessor
  * 
- * Basic voice activity detection on microphone input.
- * Pass-through audio processing for clean foundation.
+ * Voice activity detection with adaptive threshold that rises during TTS
+ * playback to prevent echo from triggering false speech detection.
+ * Works as a second layer of protection alongside the AEC processor.
+ * In fallback mode (no AEC), this is the primary echo defense.
  */
 
 class AudioProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     
-    // Simple VAD state machine
+    // VAD state machine
     this.vadSpeaking = false;
     this.speechFrames = 0;
     this.silenceFrames = 0;
     
-    // Simple VAD parameters
-    this.VAD_THRESHOLD = 0.0045;
+    // Base VAD parameters
+    this.BASE_THRESHOLD = 0.0045;
+    this.VAD_THRESHOLD = this.BASE_THRESHOLD;
     this.SPEECH_FRAMES_REQUIRED = 4;
-    this.SILENCE_FRAMES_REQUIRED = 90; // Increased from 60 to 90 (~1.8s at 20ms per frame) to allow longer phrases without cutting off prematurely
+    this.SILENCE_FRAMES_REQUIRED = 90; // ~1.8s at 128 samples/frame @ 48kHz
     
-    // Message handler for threshold updates
+    // TTS-aware threshold boosting
+    this.isTTSPlaying = false;
+    this.TTS_THRESHOLD_MULTIPLIER = 3.0; // Raise threshold 3x during TTS playback
+    
+    // Message handler for threshold updates and TTS state
     this.port.onmessage = (event) => {
       if (event.data.type === 'vad_threshold') {
-        this.VAD_THRESHOLD = event.data.threshold || 0.0045;
+        this.BASE_THRESHOLD = event.data.threshold || 0.0045;
+        // Apply TTS multiplier if currently playing
+        this.VAD_THRESHOLD = this.isTTSPlaying 
+          ? this.BASE_THRESHOLD * this.TTS_THRESHOLD_MULTIPLIER 
+          : this.BASE_THRESHOLD;
+      } else if (event.data.type === 'tts_playing') {
+        this.isTTSPlaying = !!event.data.playing;
+        // Immediately adjust threshold
+        this.VAD_THRESHOLD = this.isTTSPlaying 
+          ? this.BASE_THRESHOLD * this.TTS_THRESHOLD_MULTIPLIER 
+          : this.BASE_THRESHOLD;
+        if (this.isTTSPlaying) {
+          // Reset speech detection to prevent stale state from triggering during TTS
+          this.speechFrames = 0;
+        }
       }
     };
   }

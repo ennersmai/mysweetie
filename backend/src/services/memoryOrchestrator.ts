@@ -289,9 +289,12 @@ INSTRUCTIONS:
     - Trivial facts (e.g., favorite color, what they ate for lunch).
     - Casual greetings, pleasantries, or conversational filler.
     - Information that is temporary or likely to change.
+    - Observations about ${personaName}'s conversational STYLE (e.g., "flirty", "confident", "playful", "direct"). These are NOT memories — they are tone descriptions that waste memory budget and cause repetitive behavior.
+    - Anything about how ${personaName} "makes the character feel" — that is the character's reaction, not a fact about ${personaName}.
 4. Score the importance from 1-10. A score of 7-10 is required for a memory to be considered critical.
 5. Summarize the memory from the character's perspective, using ${personaName}'s name (e.g., "I learned that ${personaName} works as a teacher.").
 6. The memory type MUST be exactly one of: "personal", "emotional", "factual", "relational", "preference".
+7. Each memory must contain a UNIQUE, CONCRETE fact. If two memories convey the same idea in different words, keep only the more specific one. NEVER extract vague personality observations like "user is confident" or "user is flirty" — these are not actionable memories.
 
 RESPOND IN THIS EXACT JSON FORMAT:
 {
@@ -430,16 +433,38 @@ JSON RESPONSE:`;
 
   // This is a placeholder for the actual implementation
   async extractAndStoreMemories(request: { userId: string; characterId: string; conversation: string; userPersona?: string | null; }): Promise<void> {
-    logger.info({ message: 'Memory extraction triggered', ...request });
-    // In the future, this will call the memory orchestrator LLM
-    // and store the results in the database.
+    logger.info({ message: 'Memory extraction triggered', userId: request.userId, characterId: request.characterId });
+    // Parse the "role: content" conversation string into ChatMessage[].
+    // Must handle multi-line messages (assistant responses with paragraph breaks).
+    const messages: ChatMessage[] = [];
+    const lines = request.conversation.split('\n');
+    let currentRole = '';
+    let currentContent = '';
+
+    for (const line of lines) {
+      // Check if this line starts a new message (role: content)
+      const roleMatch = line.match(/^(user|assistant):\s*(.*)/);
+      if (roleMatch) {
+        // Save previous message if any
+        if (currentRole && currentContent.trim()) {
+          messages.push({ role: currentRole, content: currentContent.trim() } as ChatMessage);
+        }
+        currentRole = roleMatch[1] || '';
+        currentContent = roleMatch[2] || '';
+      } else if (currentRole) {
+        // Continuation of current message (multi-line response)
+        currentContent += '\n' + line;
+      }
+    }
+    // Push the last message
+    if (currentRole && currentContent.trim()) {
+      messages.push({ role: currentRole, content: currentContent.trim() } as ChatMessage);
+    }
+
     const extractionResult = await this.extractMemories({
       user_id: request.userId,
       character_id: request.characterId,
-      conversation: request.conversation.split('\n').map(line => {
-        const [role, content] = line.split(': ');
-        return { role, content } as ChatMessage;
-      }),
+      conversation: messages,
       user_persona: request.userPersona ?? null
     });
 
