@@ -56,6 +56,11 @@ export interface CallSession {
    */
   ttsAbortController?: AbortController | null;
   /**
+   * Generation counter to prevent parallel AI response races.
+   * Each generateAIResponse call increments this and checks if it's still current.
+   */
+  aiGenerationId?: number;
+  /**
    * CLIENT-SIDE ASSEMBLY: Complete audio file assembled by client
    */
   completeAudioBlob?: Buffer;
@@ -933,10 +938,16 @@ export class CallService {
 
       logger.info(`Generating AI response for session ${session.id} with model: ${voiceOptimizedCharacter.model}, NSFW: ${chatRequest.nsfwMode}`);
 
-      // CRITICAL: Create a fresh AbortController for this AI response
-      // This ensures previous interrupts don't affect new responses
+      // CRITICAL: Abort any previous generation and create a fresh AbortController.
+      // This prevents parallel AI responses from racing when VAD splits a phrase.
+      if (session.ttsAbortController) {
+        session.ttsAbortController.abort();
+        logger.info(`🛑 Aborted previous AI generation for session ${session.id}`);
+      }
       session.ttsAbortController = new AbortController();
-      logger.info(`✅ Created fresh AbortController for session ${session.id} AI response`);
+      const generationId = (session.aiGenerationId || 0) + 1;
+      session.aiGenerationId = generationId;
+      logger.info(`✅ Created fresh AbortController for session ${session.id} AI response (generation #${generationId})`);
 
       // Stream TTS by sentence as AI response is generated
       let fullResponse = '';
@@ -996,6 +1007,12 @@ export class CallService {
       const completeText = sentenceBuffer.trim();
       logger.info(`📝 [FINAL TTS] Complete text: "${completeText}" (length: ${completeText.length})`);
       
+      // Check if this generation is still current (a newer one may have started)
+      if (session.aiGenerationId !== generationId) {
+        logger.info(`🛑 [STALE] Generation #${generationId} superseded by #${session.aiGenerationId} — skipping TTS for session ${session.id}`);
+        return;
+      }
+
       if (completeText.length > 0 && session.isActive && !session.ttsAbortController?.signal.aborted) {
         // Start TTS session
         if (!ttsStarted) {

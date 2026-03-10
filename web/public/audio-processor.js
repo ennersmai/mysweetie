@@ -20,7 +20,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.BASE_THRESHOLD = 0.0045;
     this.VAD_THRESHOLD = this.BASE_THRESHOLD;
     this.SPEECH_FRAMES_REQUIRED = 4;
-    this.SILENCE_FRAMES_REQUIRED = 90; // ~1.8s at 128 samples/frame @ 48kHz
+    this.SILENCE_FRAMES_REQUIRED = 560; // ~1.5s at 128 samples/frame @ 48kHz (128/48000 = 2.67ms/frame)
     
     // TTS-aware threshold boosting
     this.isTTSPlaying = false;

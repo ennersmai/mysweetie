@@ -97,10 +97,11 @@ export class ProductionAudioManager {
         console.log('✅ Echo cancellation is ENABLED');
       }
 
-      // Create recording context at browser's native sample rate (may vary by browser/device)
-      // We'll resample TTS audio from 16kHz to the actual context sample rate
-      this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      console.log('🎵 ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz (will resample TTS from 16kHz to this rate)');
+      // Force 48kHz: AEC3 library is designed for 48kHz and uses 480-sample (10ms) frames.
+      // If the context defaults to the hardware rate (e.g. 192kHz), AEC frame sizes break
+      // and VAD timing becomes wildly wrong (each 128-sample frame shrinks to <1ms).
+      this.recordingContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
+      console.log('🎵 ProductionAudioManager: Recording context created at', this.recordingContext.sampleRate, 'Hz (forced 48kHz for AEC compatibility)');
       
       // CRITICAL: Ensure AudioContext stays active to prevent crackling
       // Suspended contexts cause audio dropouts and crackling

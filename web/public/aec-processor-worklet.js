@@ -77,13 +77,15 @@ class AECProcessor extends AudioWorkletProcessorClass {
     // Create AEC instance: (sampleRate, renderChannels, captureChannels)
     this.aec = new AEC3Module.AEC3(this.sampleRate, 1, 1);
 
-    // Determine required frame size (WebRTC AEC3 = 10ms frames = 480 samples @ 48kHz)
-    var tempInput = [new Float32Array(480)];
+    // Determine required frame size (WebRTC AEC3 = 10ms frames)
+    // At 48kHz: 480 samples, at 16kHz: 160 samples, etc.
+    var expectedFrameSize = Math.floor(this.sampleRate / 100); // 10ms worth of samples
+    var tempInput = [new Float32Array(expectedFrameSize)];
     this.aecFrameSize = this.aec.processSize(tempInput);
 
     if (this.aecFrameSize === 0 || this.aecFrameSize < 128) {
-      console.warn('[AEC] processSize returned ' + this.aecFrameSize + ', using default 480');
-      this.aecFrameSize = 480;
+      console.warn('[AEC] processSize returned ' + this.aecFrameSize + ', using calculated ' + expectedFrameSize + ' (10ms at ' + this.sampleRate + 'Hz)');
+      this.aecFrameSize = expectedFrameSize;
     }
 
     this.outBuf = [new Float32Array(this.aecFrameSize)];
