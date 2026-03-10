@@ -2038,13 +2038,17 @@ export default function Chat() {
                           return;
                         }
                         
-                        // Finalize the assistant message
-                        assistantMessageRef.current = response;
+                        // Keep the LONGER of streamed vs final to prevent flash-and-nuke.
+                        // Chunks stream in real-time and may exceed the final (which is truncated
+                        // by parseResponseForStorage). Don't replace visible text with shorter text.
+                        const streamed = assistantMessageRef.current || '';
+                        const finalText = streamed.length >= response.length ? streamed : response;
+                        assistantMessageRef.current = finalText;
                         setMessages(prev => {
                           const next = [...prev];
                           const idx = currentAssistantIndexRef.current;
                           if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
-                            next[idx] = { ...next[idx], content: response };
+                            next[idx] = { ...next[idx], content: finalText };
                           }
                           return next;
                         });
@@ -2244,13 +2248,17 @@ export default function Chat() {
                           return;
                         }
                         
-                        // Finalize the assistant message
-                        assistantMessageRef.current = response;
+                        // Keep the LONGER of streamed vs final to prevent flash-and-nuke.
+                        // Chunks stream in real-time and may exceed the final (which is truncated
+                        // by parseResponseForStorage). Don't replace visible text with shorter text.
+                        const streamed = assistantMessageRef.current || '';
+                        const finalText = streamed.length >= response.length ? streamed : response;
+                        assistantMessageRef.current = finalText;
                         setMessages(prev => {
                           const next = [...prev];
                           const idx = currentAssistantIndexRef.current;
                           if (idx != null && idx >= 0 && idx < next.length && next[idx]?.role === 'assistant') {
-                            next[idx] = { ...next[idx], content: response };
+                            next[idx] = { ...next[idx], content: finalText };
                           }
                           return next;
                         });

@@ -61,6 +61,11 @@ export interface CallSession {
    */
   aiGenerationId?: number;
   /**
+   * Conversation history accumulated during this call.
+   * Each turn is stored so the LLM can see previous exchanges and avoid repetition.
+   */
+  callHistory: Array<{ role: string; content: string }>;
+  /**
    * CLIENT-SIDE ASSEMBLY: Complete audio file assembled by client
    */
   completeAudioBlob?: Buffer;
@@ -123,7 +128,8 @@ export class CallService {
       transcriptBuffer: '',
       isActive: true,
       startTime: Date.now(),
-      nsfwMode: nsfwMode || false
+      nsfwMode: nsfwMode || false,
+      callHistory: []
     };
 
     this.sessions.set(sessionId, session);
@@ -921,25 +927,31 @@ export class CallService {
             // Add voice-specific instructions to the existing character prompt
             prompt: session.character.prompt + `
 
-🎙️ VOICE CALL MODE — OVERRIDE ALL PREVIOUS FORMATTING RULES:
-- This is a REAL-TIME VOICE conversation. Your text will be spoken aloud by TTS.
-- ABSOLUTELY NO action descriptions, narration, or roleplay stage directions. No asterisks, no "I lean closer", no "a smile crosses my face". ONLY write words you would actually SAY on a phone call.
-- Keep responses to 1-3 SHORT sentences (30-60 words max). Imagine a real phone conversation.
-- Be warm, natural, and conversational. React to what they said, ask a follow-up, or share a brief thought.
-- If the user says something short, respond equally short (even a single sentence is fine).
-- IGNORE any earlier instructions about "immersive paragraphs" or "action formatting" — those are for text chat only.`
+🎙️ VOICE CALL MODE:
+- This is a real-time voice conversation.
+- Keep responses concise but expressive.
+- If user says something short, respond equally short.`
           };
 
           logger.info(`Voice call using model: ${voiceOptimizedCharacter.model} (from character.model: ${session.character.model})`);
 
+      // Build messages from call history so the LLM can see previous turns
+      // and avoid repeating actions/phrases. Cap at last 10 turns.
+      const historyMessages = session.callHistory.slice(-10);
+      const allMessages = [...historyMessages, { role: 'user', content: userMessage }];
+
+      // Add current user turn to call history immediately
+      session.callHistory.push({ role: 'user', content: userMessage });
+
       const chatRequest = {
         character: voiceOptimizedCharacter,
-        messages: [{ role: 'user', content: userMessage }],
+        messages: allMessages,
         userId: session.userId,
         conversationId: session.conversationId,
-        nsfwMode: session.nsfwMode || false, // Use session's NSFW mode
-        maxTokens: 150, // Voice calls: short responses, no flash-and-nuke truncation
+        nsfwMode: session.nsfwMode || false // Use session's NSFW mode
       };
+
+      logger.info(`Voice call history: ${historyMessages.length} previous turns + current message`);
 
       logger.info(`Generating AI response for session ${session.id} with model: ${voiceOptimizedCharacter.model}, NSFW: ${chatRequest.nsfwMode}`);
 
@@ -1058,6 +1070,9 @@ export class CallService {
       logger.info(`⚠️  NO MORE TTS CALLS AFTER THIS POINT - All TTS already processed during streaming`);
 
       if (fullResponse) {
+        // Store assistant response in call history for context in future turns
+        session.callHistory.push({ role: 'assistant', content: fullResponse });
+
         // Send final AI response to client for chat history (after all chunks)
         this.sendAIResponseToClient(session, fullResponse);
         
