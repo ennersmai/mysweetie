@@ -34,13 +34,13 @@ class AECProcessor extends AudioWorkletProcessorClass {
 
     this.port.onmessage = function (ev) {
       if (ev.data.type === 'tts_stopped') {
-        // TTS has stopped — start the tail countdown instead of clearing immediately.
-        // This lets the AEC process any residual echo in its internal filter.
+        // TTS has stopped — clear both buffers to prevent desync.
+        // If mic buffer is ahead of TTS buffer, analyze() gets a too-short array → RangeError.
         this.ttsActive = false;
         this.framesSinceTTSStopped = 0;
-        // Clear accumulated TTS buffer but keep mic buffer so AEC can process remaining frames
         this.ttsBuffer = new Float32Array(0);
-        console.log('[AEC] TTS stopped — starting tail processing');
+        this.micBuffer = new Float32Array(0);
+        console.log('[AEC] TTS stopped — cleared both buffers, starting tail processing');
         return;
       }
 
@@ -167,7 +167,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
     var outputOffset = 0;
     var processedAny = false;
 
-    while (this.micBuffer.length >= this.aecFrameSize && outputOffset < frameSize) {
+    while (this.micBuffer.length >= this.aecFrameSize && this.ttsBuffer.length >= this.aecFrameSize && outputOffset < frameSize) {
       processedAny = true;
       try {
         var micChunk = this.micBuffer.subarray(0, this.aecFrameSize);
