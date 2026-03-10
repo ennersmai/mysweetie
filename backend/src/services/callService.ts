@@ -457,8 +457,12 @@ export class CallService {
   }
 
   private parseTextForTTS(text: string): string {
-    // Remove asterisks but keep the action text
-    let parsed = text.replace(/\*/g, '');
+    // Strip entire action blocks between asterisks (e.g. "*I lean closer, smiling softly.*")
+    // These are roleplay stage directions that should NOT be spoken aloud
+    let parsed = text.replace(/\*[^*]+\*/g, '');
+    
+    // Fallback: remove any remaining stray asterisks
+    parsed = parsed.replace(/\*/g, '');
     
     // Remove emojis and special characters that shouldn't be spoken
     parsed = parsed.replace(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '');
@@ -917,13 +921,13 @@ export class CallService {
             // Add voice-specific instructions to the existing character prompt
             prompt: session.character.prompt + `
 
-🎙️ VOICE CALL MODE - Critical Instructions:
-- This is a REAL-TIME VOICE conversation (not text chat)
-- Keep responses VERY SHORT: 1-2 sentences MAX (20-40 words)
-- Speak naturally, conversationally - NO asterisk actions (*text*)
-- Be engaging but CONCISE - imagine a phone call
-- Quick, natural responses only
-- If user says something short, respond equally short`
+🎙️ VOICE CALL MODE — OVERRIDE ALL PREVIOUS FORMATTING RULES:
+- This is a REAL-TIME VOICE conversation. Your text will be spoken aloud by TTS.
+- ABSOLUTELY NO action descriptions, narration, or roleplay stage directions. No asterisks, no "I lean closer", no "a smile crosses my face". ONLY write words you would actually SAY on a phone call.
+- Keep responses to 1-3 SHORT sentences (30-60 words max). Imagine a real phone conversation.
+- Be warm, natural, and conversational. React to what they said, ask a follow-up, or share a brief thought.
+- If the user says something short, respond equally short (even a single sentence is fine).
+- IGNORE any earlier instructions about "immersive paragraphs" or "action formatting" — those are for text chat only.`
           };
 
           logger.info(`Voice call using model: ${voiceOptimizedCharacter.model} (from character.model: ${session.character.model})`);
@@ -933,7 +937,8 @@ export class CallService {
         messages: [{ role: 'user', content: userMessage }],
         userId: session.userId,
         conversationId: session.conversationId,
-        nsfwMode: session.nsfwMode || false // Use session's NSFW mode
+        nsfwMode: session.nsfwMode || false, // Use session's NSFW mode
+        maxTokens: 150, // Voice calls: short responses, no flash-and-nuke truncation
       };
 
       logger.info(`Generating AI response for session ${session.id} with model: ${voiceOptimizedCharacter.model}, NSFW: ${chatRequest.nsfwMode}`);

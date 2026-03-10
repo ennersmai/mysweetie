@@ -140,6 +140,7 @@ interface ChatRequest {
   nsfwMode: boolean; // Added for NSFW mode
   conversationId: string;
   autoContinue?: boolean;
+  maxTokens?: number; // Override MAX_RESPONSE_TOKENS (e.g. voice calls use lower limit)
 }
 
 interface Memory {
@@ -271,6 +272,7 @@ function sanitizeMessagesForLLM(messages: any[]): any[] {
 
 export async function* processChat(request: ChatRequest) {
   const { character, messages, userId, conversationId } = request;
+  const effectiveMaxTokens = request.maxTokens || MAX_RESPONSE_TOKENS;
   const conversationHistory = messages.map(m => `${m.role}: ${m.content}`).join('\n');
 
   try {
@@ -342,7 +344,7 @@ export async function* processChat(request: ChatRequest) {
             model: MODEL_MAP[character.model] || 'google/gemma-2-9b-it', // Fallback to a default model
             messages: openRouterMessages,
             stream: true,
-            max_tokens: MAX_RESPONSE_TOKENS,
+            max_tokens: effectiveMaxTokens,
             temperature: 0.9,
             top_p: 0.9,
             // repetition controls (supported by many OpenRouter models)
@@ -404,13 +406,13 @@ export async function* processChat(request: ChatRequest) {
                         if (typeof content === 'string' && content.length > 0) {
                             // Enforce token limit during streaming
                             const combinedTokens = encode(fullResponse + content);
-                            if (combinedTokens.length <= MAX_RESPONSE_TOKENS) {
+                            if (combinedTokens.length <= effectiveMaxTokens) {
                                 // Stream content immediately - moderation check happens at end
                                 moderationBuffer += content;
                                 fullResponse += content;
                                 yield { type: 'chunk', content };
                             } else {
-                                const truncatedText = decode(combinedTokens.slice(0, MAX_RESPONSE_TOKENS));
+                                const truncatedText = decode(combinedTokens.slice(0, effectiveMaxTokens));
                                 // Parse the truncated response immediately to remove incomplete sentences
                                 const parsedResponse = parseResponseForStorage(truncatedText);
                                 const delta = parsedResponse.slice(fullResponse.length);
