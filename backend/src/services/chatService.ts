@@ -85,7 +85,8 @@ function parseResponseForStorage(text: string): string {
     if (trimmed.length === 0) return false;
     
     // Check if sentence ends with proper punctuation
-    return /[.!?]$/.test(trimmed);
+    // Also allow trailing * for roleplay action blocks (e.g. "...steadily.*")
+    return /[.!?]\*?$/.test(trimmed);
   });
   
   // If we have complete sentences, return them joined
