@@ -492,7 +492,8 @@ export class CallService {
       if (!trimmed) continue;
       
       // If adding this sentence would make the chunk too long, start a new chunk
-      if (currentChunk.length + trimmed.length > 2000 && currentChunk.length > 0) {
+      // Keep chunks under 800 chars — Resemble silently truncates long text
+      if (currentChunk.length + trimmed.length > 800 && currentChunk.length > 0) {
         chunks.push(currentChunk.trim());
         currentChunk = trimmed;
       } else {
