@@ -933,8 +933,9 @@ export class CallService {
           logger.info(`Voice call using model: ${voiceOptimizedCharacter.model} (from character.model: ${session.character.model})`);
 
       // Build messages from call history so the LLM can see previous turns
-      // and avoid repeating actions/phrases. Cap at last 10 turns.
-      const historyMessages = session.callHistory.slice(-10);
+      // and avoid repeating actions/phrases. Cap at last 20 messages (~10 turns).
+      // At ~150 tokens/msg average, 20 msgs = ~3k tokens, leaving room for system prompt.
+      const historyMessages = session.callHistory.slice(-20);
       const allMessages = [...historyMessages, { role: 'user', content: userMessage }];
 
       // Add current user turn to call history immediately
@@ -945,7 +946,8 @@ export class CallService {
         messages: allMessages,
         userId: session.userId,
         conversationId: session.conversationId,
-        nsfwMode: session.nsfwMode || false // Use session's NSFW mode
+        nsfwMode: session.nsfwMode || false,
+        isVoiceCall: true // Triggers shorter response instructions in processChat
       };
 
       logger.info(`Voice call history: ${historyMessages.length} previous turns + current message`);

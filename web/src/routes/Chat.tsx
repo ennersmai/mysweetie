@@ -1253,6 +1253,7 @@ export default function Chat() {
         character: { ...character, model: modelKey },
         messages: isAutoContinue ? [...historyForApi, { role: 'user', content: 'Continue' }] : [...historyForApi, userMsg],
         nsfwMode,
+        fantasyMode,
         conversationId: conversationToUse,
         autoContinue: isAutoContinue,
       });

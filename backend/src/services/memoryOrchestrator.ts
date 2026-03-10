@@ -41,7 +41,7 @@ export class MemoryOrchestrator {
           messages: [
             {
               role: 'system',
-              content: 'You are a memory extraction AI for MySweetie.AI. Extract important memories from conversations and score their importance 1-10.'
+              content: 'You are a memory extraction system. Extract only concrete, meaningful facts from conversations. Output valid JSON only. Never extract vague personality observations.'
             },
             {
               role: 'user',
@@ -263,50 +263,49 @@ export class MemoryOrchestrator {
    */
   private buildMemoryExtractionPrompt(conversation: ChatMessage[], userPersona?: string | null): string {
     const conversationText = conversation
-      .map(msg => `${msg.role}: ${msg.content}`)
+      .map(msg => `${msg.role === 'user' ? (userPersona || 'User') : 'Character'}: ${msg.content}`)
       .join('\n');
 
     const personaName = userPersona || 'the user';
 
     return `
-Analyze the following conversation and extract CRITICAL memories. A critical memory is a piece of information that is ESSENTIAL for understanding ${personaName}'s personality, backstory, or their relationship with the character.
+Analyze this conversation and extract only MEANINGFUL, CONCRETE memories worth remembering long-term.
 
 CONVERSATION:
 ${conversationText}
 
-IMPORTANT: You are extracting memories about ${personaName} (the user), NOT about the character. The character is the one speaking in the conversation.
+You are extracting memories about **${personaName}** — the human in this conversation. Always refer to them as "${personaName}" (never "the user" or "user").
 
-GENDER CLARIFICATION: The character is always female, the user (${personaName}) is always male.
+EXTRACT memories like:
+- "${personaName} works as a software engineer" (concrete fact)
+- "${personaName} lost his father last year" (significant life event)
+- "${personaName} and I agreed to meet at the park on weekends" (relationship milestone)
+- "${personaName} prefers being called 'babe'" (stated preference)
 
-INSTRUCTIONS:
-1. Extract 0-3 memories. It is VERY IMPORTANT to extract nothing if no new critical information is revealed.
-2. Focus ONLY on:
-    - Core identity facts about ${personaName} (occupation, defining relationships).
-    - Deep personal preferences and values of ${personaName}.
-    - Major life events or emotional turning points in ${personaName}'s life.
-    - The established dynamics of the ${personaName}-character relationship (e.g., "${personaName} sees the character as a mentor").
-3. AVOID extracting:
-    - Trivial facts (e.g., favorite color, what they ate for lunch).
-    - Casual greetings, pleasantries, or conversational filler.
-    - Information that is temporary or likely to change.
-    - Observations about ${personaName}'s conversational STYLE (e.g., "flirty", "confident", "playful", "direct"). These are NOT memories — they are tone descriptions that waste memory budget and cause repetitive behavior.
-    - Anything about how ${personaName} "makes the character feel" — that is the character's reaction, not a fact about ${personaName}.
-4. Score the importance from 1-10. A score of 7-10 is required for a memory to be considered critical.
-5. Summarize the memory from the character's perspective, using ${personaName}'s name (e.g., "I learned that ${personaName} works as a teacher.").
-6. The memory type MUST be exactly one of: "personal", "emotional", "factual", "relational", "preference".
-7. Each memory must contain a UNIQUE, CONCRETE fact. If two memories convey the same idea in different words, keep only the more specific one. NEVER extract vague personality observations like "user is confident" or "user is flirty" — these are not actionable memories.
+DO NOT extract:
+- Vague personality observations ("${personaName} is flirty/confident/playful")
+- The character's own feelings or reactions
+- Greetings, filler, or generic conversation
+- Anything already obvious from context (e.g., "${personaName} said hello")
+- Style descriptions ("${personaName} uses a teasing tone")
 
-RESPOND IN THIS EXACT JSON FORMAT:
+Rules:
+1. Extract 0-3 memories. Extract NOTHING if no new significant information is revealed.
+2. Write each memory as a clear, standalone fact using ${personaName}'s name.
+3. Score importance 1-10. Only scores 7+ matter.
+4. Type must be one of: "personal", "emotional", "factual", "relational", "preference".
+
+JSON FORMAT:
 {
   "memories": [
     {
-      "text": "specific memory text, from the character's perspective, using ${personaName}'s name",
-      "importance": 9,
-      "type": "personal",
-      "context": "brief context about when this was mentioned"
+      "text": "${personaName} mentioned he works night shifts at a hospital.",
+      "importance": 8,
+      "type": "factual",
+      "context": "Came up when discussing schedules"
     }
   ],
-  "reasoning": "brief explanation of why these memories were (or were not) selected"
+  "reasoning": "Why these were or were not extracted"
 }
 
 JSON RESPONSE:`;
