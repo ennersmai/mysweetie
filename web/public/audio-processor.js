@@ -39,7 +39,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
     this.SPEECH_FRAMES_REQUIRED     = 20;  // ~53ms of sustained energy required — prevents echo/tap false triggers
-    this.SPEECH_FRAMES_DURING_TTS   = 40;  // ~107ms during TTS — extra bar: don't barge-in unless clearly real speech
+    this.SPEECH_FRAMES_DURING_TTS   = 30;  // ~107ms during TTS — extra bar: don't barge-in unless clearly real speech
     this.SILENCE_FRAMES_REQUIRED    = 260; // ~700 ms of silence to end utterance
     this.HANGOVER_LIMIT             = 30;  // ~80 ms forgiveness — quiet frames tolerated mid-speech
 
