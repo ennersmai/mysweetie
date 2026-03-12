@@ -38,9 +38,10 @@ class AudioProcessor extends AudioWorkletProcessor {
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
-    this.SPEECH_FRAMES_REQUIRED  = 4;    // ~10 ms of energy to trigger speech start (fast barge-in)
-    this.SILENCE_FRAMES_REQUIRED = 260;  // ~700 ms of silence to end utterance
-    this.HANGOVER_LIMIT          = 30;   // ~80 ms forgiveness — quiet frames tolerated mid-speech
+    this.SPEECH_FRAMES_REQUIRED     = 20;  // ~53ms of sustained energy required — prevents echo/tap false triggers
+    this.SPEECH_FRAMES_DURING_TTS   = 40;  // ~107ms during TTS — extra bar: don't barge-in unless clearly real speech
+    this.SILENCE_FRAMES_REQUIRED    = 260; // ~700 ms of silence to end utterance
+    this.HANGOVER_LIMIT             = 30;  // ~80 ms forgiveness — quiet frames tolerated mid-speech
 
     // ── Impulse / transient rejection ──
     // A mic tap or bump creates a single-frame energy spike (2.67ms) then silence.
@@ -173,8 +174,10 @@ class AudioProcessor extends AudioWorkletProcessor {
       this.silenceFrames = 0;
       this.hangoverFrames = 0; // reset forgiveness counter
 
-      // Trigger speech start after enough consecutive speech frames
-      if (!this.vadSpeaking && this.speechFrames >= this.SPEECH_FRAMES_REQUIRED) {
+      // Trigger speech start after enough consecutive speech frames.
+      // Require more frames during TTS playback — barge-in must only fire on clearly real speech.
+      const framesRequired = this.isTTSPlaying ? this.SPEECH_FRAMES_DURING_TTS : this.SPEECH_FRAMES_REQUIRED;
+      if (!this.vadSpeaking && this.speechFrames >= framesRequired) {
         this.vadSpeaking = true;
         this.port.postMessage({ type: 'speech_start' });
       }
