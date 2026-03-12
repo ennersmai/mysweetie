@@ -891,26 +891,24 @@ export class ProductionAudioManager {
       this.queueManagerTimer = null;
       
       // Handle completion callback
+      // Use a generous delay (1.5s) to allow more PCM chunks to arrive from the backend
+      // between multi-chunk TTS requests. The VoiceCallButton gates tts_playback_finished
+      // behind tts_stream_end, so even if this fires early it won't cause premature transition.
+      // But we still want to avoid clearing isPlayingTTS too early (which would notify AEC/VAD
+      // that TTS stopped, causing echo issues when the next chunk arrives).
       if (this.isPlayingTTS) {
         setTimeout(() => {
           if (this.audioQueue.length === 0 && this.scheduledBuffers.length === 0 && this.isPlayingTTS) {
-            console.log('✅ TTS session complete - notifying AEC+VAD, re-enabling normal detection');
-            this.isPlayingTTS = false;
-            this.isFirstBuffer = true;
-            
-            // Notify AEC and VAD that TTS is done
-            if (this.aecNode) {
-              this.aecNode.port.postMessage({ type: 'tts_stopped' });
-            }
-            if (this.workletNode) {
-              this.workletNode.port.postMessage({ type: 'tts_playing', playing: false });
-            }
+            console.log('✅ TTS queue empty for 1.5s - firing playback complete callback');
+            // Do NOT clear isPlayingTTS here — let completeTTSSession handle it
+            // when the backend confirms all chunks are done via tts_stream_end.
+            // This keeps AEC/VAD in TTS-aware mode between multi-chunk gaps.
             
             if (this.onPlaybackComplete) {
               this.onPlaybackComplete();
             }
           }
-        }, 200);
+        }, 1500);
       } else if (this.onPlaybackComplete) {
         this.onPlaybackComplete();
       }
@@ -1118,29 +1116,20 @@ export class ProductionAudioManager {
         this.playbackPlayhead = 0; // Reset playhead
         this.lastGainNode = null; // Clear gain node reference
         
-        // Only clear isPlayingTTS and notify completion if TTS session is actually done
-        // Keep isPlayingTTS=true if more audio might be coming
+        // Only fire completion if TTS session is active.
+        // Do NOT clear isPlayingTTS here — let completeTTSSession handle it
+        // when the backend confirms all chunks are done via tts_stream_end.
+        // This keeps AEC/VAD in TTS-aware mode between multi-chunk gaps.
         if (this.isPlayingTTS) {
-          // Wait a bit to see if more audio arrives before clearing TTS state
           setTimeout(() => {
             if (this.audioQueue.length === 0 && !this.isPlaying && this.isPlayingTTS) {
-              console.log('✅ TTS session complete - notifying AEC+VAD, re-enabling normal detection');
-              this.isPlayingTTS = false;
-              this.isFirstBuffer = true; // Reset for next TTS session
-              
-              // Notify AEC and VAD that TTS is done
-              if (this.aecNode) {
-                this.aecNode.port.postMessage({ type: 'tts_stopped' });
-              }
-              if (this.workletNode) {
-                this.workletNode.port.postMessage({ type: 'tts_playing', playing: false });
-              }
+              console.log('✅ TTS queue empty for 1.5s (playNextInQueue path) - firing completion callback');
               
               if (this.onPlaybackComplete) {
                 this.onPlaybackComplete();
               }
             }
-          }, 200); // 200ms delay to allow more audio to arrive
+          }, 1500); // 1.5s delay to bridge multi-chunk TTS gaps
         } else if (this.onPlaybackComplete) {
           console.log('✅ Playback complete - notifying backend');
           this.onPlaybackComplete();

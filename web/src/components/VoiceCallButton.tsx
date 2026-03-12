@@ -81,6 +81,7 @@ export default function VoiceCallButton({
   const isEndingCallRef = useRef<boolean>(false);
   const blobDecodeChainRef = useRef<Promise<void>>(Promise.resolve());
   const isStartingCallRef = useRef<boolean>(false);
+  const ttsStreamEndReceivedRef = useRef<boolean>(false); // True once backend signals ALL TTS chunks sent
 
   const enqueueBlobForPlayback = useCallback((blob: Blob) => {
     blobDecodeChainRef.current = blobDecodeChainRef.current
@@ -197,6 +198,8 @@ export default function VoiceCallButton({
               }
             } else if (message.state === 'AI_SPEAKING') {
               console.log(`🔄 [FRONTEND STATE] 🔊 AI is speaking - audio should be muted`);
+              // Reset the tts_stream_end flag for this new TTS session
+              ttsStreamEndReceivedRef.current = false;
             } else if (message.state === 'USER_SPEAKING') {
               console.log(`🔄 [FRONTEND STATE] 🎤 User is speaking - audio should be sent`);
             } else if (message.state === 'AI_PROCESSING') {
@@ -272,25 +275,23 @@ export default function VoiceCallButton({
           break;
           
         case 'tts_stream_end':
-          console.log('TTS stream ended - flushing remaining PCM data');
-          // Flush any remaining PCM data when TTS stream ends
+          console.log('📡 TTS stream ended - backend finished sending ALL TTS chunks');
+          ttsStreamEndReceivedRef.current = true;
+          
+          // Flush any remaining PCM data now that we know no more is coming
           if (audioManagerRef.current && 'flushRemainingPCM' in audioManagerRef.current) {
             (audioManagerRef.current as any).flushRemainingPCM();
-            console.log('Flushed remaining PCM data - waiting for audio manager completion callback');
+            console.log('Flushed remaining PCM data after tts_stream_end');
           }
           
-          // Fallback: If audio manager doesn't call completion callback within 1 second, send manually
+          // Fallback: generous delay to let all queued audio finish playing
           setTimeout(() => {
-            console.log(`[FALLBACK] Checking if fallback needed - callState: ${callStateRef.current}, WebSocket ready: ${websocketRef.current?.readyState === WebSocket.OPEN}`);
-            if (callStateRef.current === 'AI_SPEAKING' && websocketRef.current?.readyState === WebSocket.OPEN) {
-              console.log('[FALLBACK] Audio manager callback timeout - manually sending tts_playback_finished');
-              const message = { type: 'tts_playback_finished' };
-              websocketRef.current.send(JSON.stringify(message));
-              console.log('[FALLBACK] Manual tts_playback_finished sent');
-            } else {
-              console.log('[FALLBACK] No fallback needed - either not in AI_SPEAKING state or WebSocket not open');
+            if (ttsStreamEndReceivedRef.current && callStateRef.current === 'AI_SPEAKING' && websocketRef.current?.readyState === WebSocket.OPEN) {
+              console.log('[FALLBACK] Sending tts_playback_finished (tts_stream_end received, still in AI_SPEAKING)');
+              ttsStreamEndReceivedRef.current = false;
+              websocketRef.current.send(JSON.stringify({ type: 'tts_playback_finished' }));
             }
-          }, 1000);
+          }, 3000); // 3s fallback — generous to let all audio play
           break;
           
         case 'error':
@@ -419,20 +420,24 @@ export default function VoiceCallButton({
 
       // Set up audio manager callback to notify backend when TTS is actually done playing
       audioManagerRef.current.setPlaybackCompleteCallback(() => {
-        console.log('Audio manager: All TTS audio finished playing');
-        console.log(`[FRONTEND] WebSocket state: ${websocketRef.current?.readyState} (OPEN=${WebSocket.OPEN})`);
-        console.log(`[FRONTEND] WebSocket exists: ${!!websocketRef.current}`);
-        // Optimistically allow mic to send while we await server LISTENING state
+        console.log('Audio manager: All queued audio finished playing');
+        
+        // Only send tts_playback_finished if backend has confirmed ALL TTS chunks were sent.
+        // Without this gate, the callback fires prematurely between multi-chunk TTS requests
+        // (there's a 500ms-2s gap while the backend calls Resemble for the next chunk).
+        if (!ttsStreamEndReceivedRef.current) {
+          console.log('⏳ [FRONTEND] Audio queue empty but tts_stream_end NOT yet received — waiting for more chunks');
+          return;
+        }
+        
+        // All audio played AND backend confirmed done — safe to transition
+        ttsStreamEndReceivedRef.current = false;
         shouldSendAudioRef.current = true;
-        console.log('[FRONTEND] Optimistically enabling audio send after playback complete');
+        console.log('[FRONTEND] tts_stream_end received + all audio played → sending tts_playback_finished');
         
         if (websocketRef.current?.readyState === WebSocket.OPEN) {
-          const message = { type: 'tts_playback_finished' };
-          const messageStr = JSON.stringify(message);
-          console.log('[FRONTEND] Sending to backend:', messageStr);
-          
           try {
-            websocketRef.current.send(messageStr);
+            websocketRef.current.send(JSON.stringify({ type: 'tts_playback_finished' }));
             console.log('[FRONTEND] TTS playback finished message sent successfully');
           } catch (error) {
             console.error('[FRONTEND] Error sending WebSocket message:', error);

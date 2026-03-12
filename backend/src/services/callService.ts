@@ -698,7 +698,8 @@ export class CallService {
       const words = response.data.words || [];
       logger.info(`🎯 Groq transcription for session ${session.id}: "${transcript}" (confidence: ${confidence}, duration: ${duration}s, words: ${words.length})`);
 
-      // Filter out common Whisper hallucinations (happens with silent/empty audio)
+      // ── Whisper hallucination filter ──
+      // 1) Exact-match hallucination phrases
       const commonHallucinations = [
         'thanks for watching',
         'thank you',
@@ -719,7 +720,13 @@ export class CallService {
         'so',
         'yeah',
         'okay',
-        'hmm'
+        'hmm',
+        'i\'m sorry',
+        'i\'m going to go ahead and',
+        'thanks for listening',
+        'music',
+        'applause',
+        'laughter',
       ];
       
       const lowerTranscript = transcript.toLowerCase().trim();
@@ -727,16 +734,25 @@ export class CallService {
         lowerTranscript === phrase || lowerTranscript === phrase + '.'
       );
       
-      // Also check if audio duration is suspiciously short (< 0.2 seconds likely silence)
-      const isTooShort = duration > 0 && duration < 0.2;
+      // 2) Audio too short to contain real speech (< 0.3 seconds)
+      const isTooShort = duration > 0 && duration < 0.3;
       
-      // Check for suspiciously low word density (likely silence/echo)
-      // Normal speech: ~2-3 words/second, so anything < 0.2 words/second is suspicious
+      // 3) Word density too low — long silence with a few hallucinated words
       const wordDensity = words.length > 0 && duration > 0 ? words.length / duration : 1;
-      const isSuspiciouslyQuiet = duration > 5 && wordDensity < 0.2; // < 1 word per 5 seconds
+      const isSuspiciouslyQuiet = duration > 3 && wordDensity < 0.3; // < 1 word per 3 seconds
       
-      if (isHallucination || isTooShort || isSuspiciouslyQuiet) {
-        logger.warn(`🚫 Rejected low-quality transcription for session ${session.id}: "${transcript}" (duration: ${duration}s, words: ${words.length}, wordDensity: ${wordDensity.toFixed(2)}/s, isHallucination: ${isHallucination}, isTooShort: ${isTooShort}, isSuspiciouslyQuiet: ${isSuspiciouslyQuiet})`);
+      // 4) Transcript too long for audio duration — Whisper hallucinated an entire phrase
+      //    Normal speech: ~2.5 words/sec (~12-15 chars/sec). If transcript has >25 chars/sec
+      //    relative to audio duration, it's almost certainly hallucinated.
+      const charsPerSec = duration > 0 ? lowerTranscript.length / duration : 0;
+      const wordsPerSec = duration > 0 ? words.length / duration : 0;
+      const isOverlyDense = duration > 0 && duration < 3 && (charsPerSec > 25 || wordsPerSec > 5);
+      
+      // 5) Repetitive text — Whisper sometimes generates the same phrase repeated
+      const isRepetitive = /(.{8,})\1{2,}/.test(lowerTranscript); // Same 8+ char block repeated 3+ times
+      
+      if (isHallucination || isTooShort || isSuspiciouslyQuiet || isOverlyDense || isRepetitive) {
+        logger.warn(`🚫 Rejected transcription for session ${session.id}: "${transcript}" (duration: ${duration.toFixed(2)}s, words: ${words.length}, charsPerSec: ${charsPerSec.toFixed(1)}, wordsPerSec: ${wordsPerSec.toFixed(1)}, isHallucination: ${isHallucination}, isTooShort: ${isTooShort}, isSuspiciouslyQuiet: ${isSuspiciouslyQuiet}, isOverlyDense: ${isOverlyDense}, isRepetitive: ${isRepetitive})`);
         // Go back to listening state without sending anything, clear buffer for next utterance
         session.audioBuffer = [];
         session.state = CallState.LISTENING;
@@ -1058,6 +1074,11 @@ export class CallService {
         }
         
         logger.info(`✅ [ALL TTS CHUNKS DONE] Full response TTS complete`);
+        
+        // Signal frontend that ALL TTS audio has been sent.
+        // Frontend must wait for this before firing tts_playback_finished.
+        this.sendMessageToClient(session, { type: 'tts_stream_end' } as CallMessage);
+        logger.info(`📡 [TTS_STREAM_END] Sent to client for session ${session.id}`);
       } else if (session.ttsAbortController?.signal.aborted) {
         logger.info(`🛑 [INTERRUPT] Skipping final text TTS (session interrupted)`);
       } else if (completeText.length === 0) {
