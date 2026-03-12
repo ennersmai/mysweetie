@@ -382,53 +382,32 @@ export class ProductionAudioManager {
   }
 
   /**
-   * Convert Float32 PCM to 16kHz WAV with proper anti-aliased downsampling.
-   *
-   * Industry standard: low-pass filter BEFORE decimation to prevent aliasing.
-   * We use a simple windowed-sinc FIR filter (cutoff at Nyquist/2 of the target
-   * rate = 8 kHz) which is the standard approach for offline resampling.
+   * Convert Float32 PCM to 16kHz WAV with linear-interpolation downsampling.
+   * Speech content is concentrated below 4kHz, well within the 8kHz Nyquist of
+   * 16kHz output, so simple linear interpolation gives Whisper clean input.
    */
   private pcmToWav16k(pcm48k: Float32Array, sampleRate: number): Blob {
     const targetRate = 16000;
-    const ratio = sampleRate / targetRate; // 3 for 48k→16k
-
-    // ── Step 1: Anti-aliasing low-pass filter ──
-    // Cutoff at target Nyquist (8 kHz) to prevent aliasing artifacts.
-    // Uses a simple 1st-order IIR low-pass for performance (runs on main thread).
-    // RC = 1 / (2π × cutoff), α = dt / (RC + dt), dt = 1/sampleRate
-    const cutoffHz = targetRate / 2; // 8000 Hz
-    const rc = 1.0 / (2.0 * Math.PI * cutoffHz);
-    const dt = 1.0 / sampleRate;
-    const alpha = dt / (rc + dt); // ≈ 0.726 for 48k→8kHz cutoff
-
-    const filtered = new Float32Array(pcm48k.length);
-    filtered[0] = pcm48k[0];
-    for (let i = 1; i < pcm48k.length; i++) {
-      filtered[i] = filtered[i - 1] + alpha * (pcm48k[i] - filtered[i - 1]);
-    }
-
-    // ── Step 2: Downsample with linear interpolation ──
+    const ratio = sampleRate / targetRate; // 3.0 for 48k→16k
     const outputLength = Math.floor(pcm48k.length / ratio);
     const pcm16k = new Float32Array(outputLength);
 
     for (let i = 0; i < outputLength; i++) {
       const srcIndex = i * ratio;
       const srcFloor = Math.floor(srcIndex);
-      const srcCeil = Math.min(srcFloor + 1, filtered.length - 1);
+      const srcCeil = Math.min(srcFloor + 1, pcm48k.length - 1);
       const frac = srcIndex - srcFloor;
-      pcm16k[i] = filtered[srcFloor] * (1 - frac) + filtered[srcCeil] * frac;
+      pcm16k[i] = pcm48k[srcFloor] * (1 - frac) + pcm48k[srcCeil] * frac;
     }
 
-    console.log(`🔄 Downsampled ${pcm48k.length} @ ${sampleRate}Hz → ${pcm16k.length} @ ${targetRate}Hz (anti-aliased)`);
+    console.log(`🔄 Downsampled ${pcm48k.length} @ ${sampleRate}Hz → ${pcm16k.length} @ ${targetRate}Hz`);
 
-    // ── Step 3: Float32 → Int16 ──
     const int16Data = new Int16Array(pcm16k.length);
     for (let i = 0; i < pcm16k.length; i++) {
       const s = Math.max(-1, Math.min(1, pcm16k[i]));
       int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
 
-    // ── Step 4: Build WAV ──
     const wavHeader = this.createWavHeader(int16Data.length * 2, targetRate, 1);
     return new Blob([wavHeader, int16Data], { type: 'audio/wav' });
   }
