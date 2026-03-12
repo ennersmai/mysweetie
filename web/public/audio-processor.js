@@ -104,26 +104,31 @@ class AudioProcessor extends AudioWorkletProcessor {
    * plosives are normal and must not be suppressed.
    */
   isImpulseFrame(rms) {
-    // Always update short-term energy (both speech and silence)
-    this.shortTermEnergy = this.shortTermEnergy * (1 - this.SHORT_TERM_ALPHA)
-                         + rms * this.SHORT_TERM_ALPHA;
+    // Already speaking — plosives/shouts are valid, never suppress
+    if (this.vadSpeaking) {
+      this.shortTermEnergy = this.shortTermEnergy * (1 - this.SHORT_TERM_ALPHA)
+                           + rms * this.SHORT_TERM_ALPHA;
+      return false;
+    }
 
-    // Already speaking — don't suppress anything (plosives, shouts are valid)
-    if (this.vadSpeaking) return false;
-
-    // If still in cooldown from a previous impulse, suppress this frame too
+    // If still in post-impulse cooldown, suppress and don't pollute baseline
     if (this.impulseCooldown > 0) {
       this.impulseCooldown--;
       return true;
     }
 
-    // Impulse condition: sudden spike significantly above recent energy baseline
+    // ── CRITICAL: check against PREVIOUS shortTermEnergy, before this frame updates it ──
+    // Updating first then checking means (spike / spike) ≈ 1.0 → impulse never detected.
     const baseline = Math.max(this.noiseFloor, this.shortTermEnergy);
     if (rms > this.IMPULSE_RATIO * baseline) {
+      // Impulse detected — do NOT update shortTermEnergy with the spike value
       this.impulseCooldown = this.IMPULSE_COOLDOWN_FRAMES;
       return true;
     }
 
+    // Normal frame — update baseline
+    this.shortTermEnergy = this.shortTermEnergy * (1 - this.SHORT_TERM_ALPHA)
+                         + rms * this.SHORT_TERM_ALPHA;
     return false;
   }
 

@@ -30,7 +30,7 @@ class AECProcessor extends AudioWorkletProcessorClass {
     // Count consecutive frames since TTS stopped — gives AEC time to flush
     this.framesSinceTTSStopped = 0;
     // How many frames to keep running AEC after TTS stops (allows tail echo removal)
-    this.AEC_TAIL_FRAMES = 20; // ~53ms at 128 samples/frame @ 48kHz
+    this.AEC_TAIL_FRAMES = 150; // ~400ms at 128 samples/frame @ 48kHz — covers hardware speaker drain time on mobile
 
     this.port.onmessage = function (ev) {
       if (ev.data.type === 'tts_stopped') {

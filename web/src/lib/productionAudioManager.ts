@@ -303,16 +303,21 @@ export class ProductionAudioManager {
 
     // ── Barge-in path ──
     if (isInterrupt) {
-      // 1. Kill TTS playback immediately
+      // 1. Kill TTS playback immediately (stops Web Audio nodes)
       this.stopPlayback();
 
-      // 2. Notify AEC so it stops cancelling user speech
-      if (this.aecNode) {
-        this.aecNode.port.postMessage({ type: 'tts_stopped' });
+      // 2. Delay AEC tts_stopped by 350ms — hardware speaker has buffered audio
+      //    that physically keeps playing for 100-300ms after JS stopPlayback().
+      //    Keeping AEC active during this window prevents residual TTS from leaking
+      //    into the utterance buffer uncancelled.
+      const aecNodeRef = this.aecNode;
+      if (aecNodeRef) {
+        setTimeout(() => {
+          aecNodeRef.port.postMessage({ type: 'tts_stopped' });
+        }, 350);
       }
 
       // 3. Clear ring buffer — it's full of TTS echo, not user speech.
-      //    The VAD already confirmed speech, so we'll capture from this point onward.
       this.ringBuffer = [];
 
       // 4. Reset cooldown for rapid re-interrupt
