@@ -1,120 +1,152 @@
 /**
- * TTS-Aware VAD AudioWorkletProcessor
- * 
- * Voice activity detection with adaptive threshold that rises during TTS
- * playback to prevent echo from triggering false speech detection.
- * Works as a second layer of protection alongside the AEC processor.
- * In fallback mode (no AEC), this is the primary echo defense.
+ * Industry-Standard TTS-Aware VAD AudioWorkletProcessor
+ *
+ * Key improvements over naive RMS threshold:
+ *  1. Adaptive noise floor — tracks ambient noise and sets threshold relative to it.
+ *  2. Hysteresis — higher threshold to START speech, lower to STAY in speech.
+ *  3. Hangover / forgiveness — a few quiet frames inside speech don't reset detection.
+ *  4. Tuned timings — ~10ms to detect speech start, ~700ms silence to end utterance.
+ *  5. TTS-aware — raises threshold during AI playback (echo protection).
+ *
+ * Frame timing at 48 kHz with 128-sample render quanta:
+ *   1 frame ≈ 2.67 ms
  */
 
 class AudioProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    
-    // VAD state machine
+
+    // ── VAD state machine ──
     this.vadSpeaking = false;
-    this.speechFrames = 0;
-    this.silenceFrames = 0;
-    
-    // Base VAD parameters
-    this.BASE_THRESHOLD = 0.0045;
-    this.VAD_THRESHOLD = this.BASE_THRESHOLD;
-    this.SPEECH_FRAMES_REQUIRED = 4;
-    this.SILENCE_FRAMES_REQUIRED = 560; // ~1.5s at 128 samples/frame @ 48kHz (128/48000 = 2.67ms/frame)
-    
-    // TTS-aware threshold boosting
+    this.speechFrames = 0;   // consecutive frames above enter-threshold
+    this.silenceFrames = 0;  // consecutive frames below stay-threshold
+    this.hangoverFrames = 0; // forgiveness counter (quiet frames tolerated mid-speech)
+
+    // ── Adaptive noise floor ──
+    // Tracks the ambient noise level with a slow-attack / fast-release EMA.
+    // Threshold = noiseFloor × multiplier.
+    this.noiseFloor = 0.003;             // initial conservative estimate
+    this.NOISE_FLOOR_ATTACK = 0.002;     // slow: noise floor rises slowly (prevents speech from raising it)
+    this.NOISE_FLOOR_RELEASE = 0.05;     // fast: noise floor drops quickly when environment gets quieter
+    this.NOISE_FLOOR_MIN = 0.0005;       // absolute minimum (digital silence is never truly zero)
+    this.NOISE_FLOOR_MAX = 0.05;         // cap so a loud environment doesn't make VAD unusable
+
+    // ── Threshold multipliers (relative to noise floor) ──
+    this.ENTER_MULTIPLIER = 3.5;  // RMS must exceed noiseFloor × 3.5 to START speech
+    this.STAY_MULTIPLIER  = 2.0;  // RMS must stay above noiseFloor × 2.0 to REMAIN in speech (hysteresis)
+
+    // ── Frame counts ──
+    // At 128 samples / 48 kHz ≈ 2.67 ms per frame
+    this.SPEECH_FRAMES_REQUIRED  = 4;    // ~10 ms of energy to trigger speech start (fast barge-in)
+    this.SILENCE_FRAMES_REQUIRED = 260;  // ~700 ms of silence to end utterance
+    this.HANGOVER_LIMIT          = 30;   // ~80 ms forgiveness — quiet frames tolerated mid-speech
+
+    // ── TTS-aware threshold boosting ──
     this.isTTSPlaying = false;
-    this.TTS_THRESHOLD_MULTIPLIER = 3.0; // Raise threshold 3x during TTS playback
-    
-    // Message handler for threshold updates and TTS state
+    this.TTS_THRESHOLD_MULTIPLIER = 3.0; // raise thresholds 3× during TTS playback
+
+    // ── Message handler ──
     this.port.onmessage = (event) => {
       if (event.data.type === 'vad_threshold') {
-        this.BASE_THRESHOLD = event.data.threshold || 0.0045;
-        // Apply TTS multiplier if currently playing
-        this.VAD_THRESHOLD = this.isTTSPlaying 
-          ? this.BASE_THRESHOLD * this.TTS_THRESHOLD_MULTIPLIER 
-          : this.BASE_THRESHOLD;
+        // Allow external override of noise floor (e.g. calibration)
+        this.noiseFloor = Math.max(this.NOISE_FLOOR_MIN, event.data.threshold || this.noiseFloor);
       } else if (event.data.type === 'tts_playing') {
         this.isTTSPlaying = !!event.data.playing;
-        // Immediately adjust threshold
-        this.VAD_THRESHOLD = this.isTTSPlaying 
-          ? this.BASE_THRESHOLD * this.TTS_THRESHOLD_MULTIPLIER 
-          : this.BASE_THRESHOLD;
         if (this.isTTSPlaying) {
-          // Reset speech detection to prevent stale state from triggering during TTS
+          // Reset speech counters to prevent stale state from triggering during TTS
           this.speechFrames = 0;
+          this.hangoverFrames = 0;
         }
       }
     };
   }
-  
+
   /**
-   * Calculate RMS (Root Mean Square) energy of audio channel
+   * Calculate RMS (Root Mean Square) energy of audio frame
    */
   calculateRMS(channel) {
     if (!channel || channel.length === 0) return 0;
-    
     let sum = 0;
     for (let i = 0; i < channel.length; i++) {
       sum += channel[i] * channel[i];
     }
     return Math.sqrt(sum / channel.length);
   }
-  
+
+  /**
+   * Update adaptive noise floor using exponential moving average.
+   * Only update when NOT speaking — speech energy would corrupt the estimate.
+   */
+  updateNoiseFloor(rms) {
+    if (this.vadSpeaking) return; // freeze during speech
+
+    const alpha = rms > this.noiseFloor ? this.NOISE_FLOOR_ATTACK : this.NOISE_FLOOR_RELEASE;
+    this.noiseFloor = this.noiseFloor * (1 - alpha) + rms * alpha;
+    this.noiseFloor = Math.max(this.NOISE_FLOOR_MIN, Math.min(this.NOISE_FLOOR_MAX, this.noiseFloor));
+  }
+
   process(inputs, outputs) {
     const micInput = inputs[0];
-    
-    // Check if we have valid microphone input
-    if (!micInput || !micInput[0]) {
-      return true; // Keep processor alive
-    }
-    
+    if (!micInput || !micInput[0]) return true;
+
     const micChannel = micInput[0];
-    
-    // Pass-through: copy input to output
+
+    // Pass-through: copy input to output (for downstream nodes)
     if (outputs[0] && outputs[0][0]) {
       outputs[0][0].set(micChannel);
     }
-    
-    // Calculate RMS for VAD
-    const rmsMic = this.calculateRMS(micChannel);
-    const isSpeechFrame = rmsMic > this.VAD_THRESHOLD;
-    
-    // Simple VAD state machine
+
+    // ── Compute energy ──
+    const rms = this.calculateRMS(micChannel);
+
+    // ── Adaptive noise floor ──
+    this.updateNoiseFloor(rms);
+
+    // ── Compute dynamic thresholds ──
+    const ttsBoost = this.isTTSPlaying ? this.TTS_THRESHOLD_MULTIPLIER : 1.0;
+    const enterThreshold = this.noiseFloor * this.ENTER_MULTIPLIER * ttsBoost;
+    const stayThreshold  = this.noiseFloor * this.STAY_MULTIPLIER  * ttsBoost;
+
+    // ── Determine if this frame is speech ──
+    // Hysteresis: use higher threshold to enter speech, lower to stay
+    const threshold = this.vadSpeaking ? stayThreshold : enterThreshold;
+    const isSpeechFrame = rms > threshold;
+
+    // ── State machine with hangover ──
     if (isSpeechFrame) {
       this.speechFrames++;
       this.silenceFrames = 0;
-      
-      // Trigger speech start if we've had enough consecutive speech frames
+      this.hangoverFrames = 0; // reset forgiveness counter
+
+      // Trigger speech start after enough consecutive speech frames
       if (!this.vadSpeaking && this.speechFrames >= this.SPEECH_FRAMES_REQUIRED) {
         this.vadSpeaking = true;
-        this.port.postMessage({
-          type: 'speech_start'
-        });
+        this.port.postMessage({ type: 'speech_start' });
       }
     } else {
-      this.silenceFrames++;
-      this.speechFrames = 0;
-      
-      // Trigger speech end if we've had enough consecutive silence frames
-      if (this.vadSpeaking && this.silenceFrames >= this.SILENCE_FRAMES_REQUIRED) {
-        this.vadSpeaking = false;
-        this.port.postMessage({
-          type: 'speech_end'
-        });
+      // ── Hangover / forgiveness ──
+      // While speaking, tolerate a few quiet frames before counting silence.
+      // This prevents brief pauses (plosives, breaths) from ending the utterance.
+      if (this.vadSpeaking && this.hangoverFrames < this.HANGOVER_LIMIT) {
+        this.hangoverFrames++;
+        // Don't reset speechFrames — we're forgiving this gap
+      } else {
+        // Either not speaking, or hangover exhausted
+        this.silenceFrames++;
+        this.speechFrames = 0;
+
+        if (this.vadSpeaking && this.silenceFrames >= this.SILENCE_FRAMES_REQUIRED) {
+          this.vadSpeaking = false;
+          this.port.postMessage({ type: 'speech_end' });
+        }
       }
     }
-    
-    // Forward microphone audio to main thread for STT processing
-    this.port.postMessage({
-      type: 'audio_data',
-      data: micChannel
-    });
-    
-    // Return true to keep the processor alive
+
+    // Forward audio to main thread for ring buffer / STT
+    this.port.postMessage({ type: 'audio_data', data: micChannel });
+
     return true;
   }
 }
 
-// Register the processor so it can be instantiated
 registerProcessor('audio-processor', AudioProcessor);

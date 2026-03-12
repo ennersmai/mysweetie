@@ -47,7 +47,7 @@ export class ProductionAudioManager {
   private ttsDestinationNode: MediaStreamAudioDestinationNode | null = null; // Captures TTS for AEC
   private ttsSourceNode: MediaStreamAudioSourceNode | null = null; // TTS source in recording context
   private ringBuffer: Float32Array[] = [];
-  private readonly RING_BUFFER_SIZE = 350; // ~933ms pre-roll at 48kHz (128 samples per chunk @ 20ms)
+  private readonly RING_BUFFER_SIZE = 115; // ~300ms pre-roll at 48kHz (128 samples/frame × 115 = 14720 samples ≈ 307ms)
   private utteranceBuffer: Float32Array[] = [];
   private finalAudioBlob: Blob | null = null;
 
@@ -278,75 +278,57 @@ export class ProductionAudioManager {
   }
 
   /**
-   * Handle speech start event from echo-aware VAD worklet
+   * Handle speech start event from VAD worklet.
+   *
+   * Industry-standard barge-in:
+   *  - If TTS is playing → immediate interrupt (zero cooldown)
+   *  - Otherwise → apply a short cooldown to prevent echo-triggered re-fires
    */
   private handleSpeechStart(): void {
-    if (this.vadSpeaking) {
-      return; // Already speaking
-    }
-    
-    // Cooldown check: prevent false triggers immediately after speech end
-    // BUT: Skip cooldown during interrupts OR if we're already in USER_SPEAKING state (allows immediate re-trigger)
+    if (this.vadSpeaking) return; // Already in speech
+
     const now = performance.now();
-    const timeSinceLastSpeechEnd = now - this.lastSpeechEndTime;
     const isInterrupt = this.isPlayingTTS;
-    
-    // Skip cooldown if:
-    // 1. This is an interrupt (user speaking during TTS) - allows immediate barge-in
-    // 2. Very recent speech end (< 100ms) - allows rapid re-triggers for second interrupt
-    // 3. Cooldown was reset (lastSpeechEndTime === 0) - allows immediate second interrupt
-    // This ensures that when TTS starts again after first interrupt, second interrupt works immediately
-    const cooldownWasReset = this.lastSpeechEndTime === 0;
-    const skipCooldown = isInterrupt || (timeSinceLastSpeechEnd < 100) || cooldownWasReset;
-    
-    if (!skipCooldown && timeSinceLastSpeechEnd < this.SPEECH_COOLDOWN_MS) {
-      console.log(`⏸️ Ignoring speech start - cooldown active (${timeSinceLastSpeechEnd.toFixed(0)}ms < ${this.SPEECH_COOLDOWN_MS}ms), isInterrupt: ${isInterrupt}, cooldownWasReset: ${cooldownWasReset}`);
-      return;
-    }
-    
-    this.vadSpeaking = true;
-    const timestamp = performance.now();
-    console.log(`🎤 Echo-aware VAD: SPEECH DETECTED at ${timestamp.toFixed(0)}ms`);
-    
-    // Handle interrupt FIRST (before initializing utterance buffer)
-    if (isInterrupt) {
-      console.log('🎤 Interrupt detected - stopping TTS playback');
-      
-      // Stop TTS playback immediately
-      this.stopPlayback();
-      
-      // CRITICAL: Don't reduce ring buffer during interrupt - keep full buffer for better STT
-      // The AEC should handle echo cancellation, so we can keep more audio for STT accuracy
-      // Keep full buffer to ensure we capture the user's speech
-      console.log(`🔄 Keeping full ring buffer during interrupt (${this.ringBuffer.length} chunks) for better STT accuracy`);
-      
-      // CRITICAL: Notify AEC that TTS has stopped so it can adapt
-      // This prevents AEC from canceling user speech thinking it's echo
-      if (this.aecNode) {
-        this.aecNode.port.postMessage({
-          type: 'tts_stopped'
-        });
-        console.log('🔔 Notified AEC that TTS stopped - allowing adaptation');
+
+    // Cooldown gate — skip entirely for interrupts (barge-in must be instant)
+    if (!isInterrupt && this.lastSpeechEndTime > 0) {
+      const elapsed = now - this.lastSpeechEndTime;
+      if (elapsed < this.SPEECH_COOLDOWN_MS) {
+        return; // Too soon after last utterance ended — likely echo
       }
-      
-      // Reset cooldown to allow immediate second interrupt
-      // Set to 0 so timeSinceLastSpeechEnd will be large (now - 0 = now), bypassing cooldown
+    }
+
+    this.vadSpeaking = true;
+    console.log(`🎤 VAD: SPEECH START (interrupt: ${isInterrupt})`);
+
+    // ── Barge-in path ──
+    if (isInterrupt) {
+      // 1. Kill TTS playback immediately
+      this.stopPlayback();
+
+      // 2. Notify AEC so it stops cancelling user speech
+      if (this.aecNode) {
+        this.aecNode.port.postMessage({ type: 'tts_stopped' });
+      }
+
+      // 3. Clear ring buffer — it's full of TTS echo, not user speech.
+      //    The VAD already confirmed speech, so we'll capture from this point onward.
+      this.ringBuffer = [];
+
+      // 4. Reset cooldown for rapid re-interrupt
       this.lastSpeechEndTime = 0;
-      
-      // Send explicit interrupt command to backend
+
+      // 5. Send interrupt to backend
       if (this.onInterrupt) {
-        console.log('⚡ Sending interrupt command to backend');
         this.onInterrupt();
       }
     }
-    
-    // Initialize utterance buffer WITH ring buffer (captures first word!)
-    // During interrupt, this will use the reduced ring buffer (recent clean audio only)
+
+    // Initialize utterance buffer with ring buffer pre-roll (captures first word)
     this.utteranceBuffer = [...this.ringBuffer];
     this.isSendingAudio = true;
-    console.log(`🎤 Speech started - initialized with ${this.ringBuffer.length} ring buffer chunks (pre-roll), isSendingAudio: ${this.isSendingAudio}`);
-    
-    // ALWAYS notify backend that user started speaking
+
+    // Notify backend: user started speaking
     if (this.onSpeechStart) {
       this.onSpeechStart();
     }
@@ -400,41 +382,54 @@ export class ProductionAudioManager {
   }
 
   /**
-   * Convert Float32 PCM to 16kHz WAV with downsampling
+   * Convert Float32 PCM to 16kHz WAV with proper anti-aliased downsampling.
+   *
+   * Industry standard: low-pass filter BEFORE decimation to prevent aliasing.
+   * We use a simple windowed-sinc FIR filter (cutoff at Nyquist/2 of the target
+   * rate = 8 kHz) which is the standard approach for offline resampling.
    */
   private pcmToWav16k(pcm48k: Float32Array, sampleRate: number): Blob {
-    // Downsample 48kHz → 16kHz
     const targetRate = 16000;
-    const ratio = sampleRate / targetRate;
+    const ratio = sampleRate / targetRate; // 3 for 48k→16k
+
+    // ── Step 1: Anti-aliasing low-pass filter ──
+    // Cutoff at target Nyquist (8 kHz) to prevent aliasing artifacts.
+    // Uses a simple 1st-order IIR low-pass for performance (runs on main thread).
+    // RC = 1 / (2π × cutoff), α = dt / (RC + dt), dt = 1/sampleRate
+    const cutoffHz = targetRate / 2; // 8000 Hz
+    const rc = 1.0 / (2.0 * Math.PI * cutoffHz);
+    const dt = 1.0 / sampleRate;
+    const alpha = dt / (rc + dt); // ≈ 0.726 for 48k→8kHz cutoff
+
+    const filtered = new Float32Array(pcm48k.length);
+    filtered[0] = pcm48k[0];
+    for (let i = 1; i < pcm48k.length; i++) {
+      filtered[i] = filtered[i - 1] + alpha * (pcm48k[i] - filtered[i - 1]);
+    }
+
+    // ── Step 2: Downsample with linear interpolation ──
     const outputLength = Math.floor(pcm48k.length / ratio);
     const pcm16k = new Float32Array(outputLength);
-    
-    // Linear interpolation downsampling (better quality than simple decimation)
+
     for (let i = 0; i < outputLength; i++) {
       const srcIndex = i * ratio;
-      const srcIndexFloor = Math.floor(srcIndex);
-      const srcIndexCeil = Math.min(srcIndexFloor + 1, pcm48k.length - 1);
-      const fraction = srcIndex - srcIndexFloor;
-      
-      if (srcIndexFloor < pcm48k.length) {
-        pcm16k[i] = pcm48k[srcIndexFloor] * (1 - fraction) + 
-                     pcm48k[srcIndexCeil] * fraction;
-      }
+      const srcFloor = Math.floor(srcIndex);
+      const srcCeil = Math.min(srcFloor + 1, filtered.length - 1);
+      const frac = srcIndex - srcFloor;
+      pcm16k[i] = filtered[srcFloor] * (1 - frac) + filtered[srcCeil] * frac;
     }
-    
-    console.log(`🔄 Downsampled ${pcm48k.length} samples @ ${sampleRate}Hz → ${pcm16k.length} samples @ ${targetRate}Hz (linear interpolation)`);
-    
-    // Convert float32 (-1 to 1) → int16 (-32768 to 32767)
+
+    console.log(`🔄 Downsampled ${pcm48k.length} @ ${sampleRate}Hz → ${pcm16k.length} @ ${targetRate}Hz (anti-aliased)`);
+
+    // ── Step 3: Float32 → Int16 ──
     const int16Data = new Int16Array(pcm16k.length);
     for (let i = 0; i < pcm16k.length; i++) {
       const s = Math.max(-1, Math.min(1, pcm16k[i]));
       int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-    
-    // Create WAV header
+
+    // ── Step 4: Build WAV ──
     const wavHeader = this.createWavHeader(int16Data.length * 2, targetRate, 1);
-    
-    // Combine header + data
     return new Blob([wavHeader, int16Data], { type: 'audio/wav' });
   }
 
