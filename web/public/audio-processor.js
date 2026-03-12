@@ -32,8 +32,9 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.NOISE_FLOOR_MAX = 0.05;         // cap so a loud environment doesn't make VAD unusable
 
     // ── Threshold multipliers (relative to noise floor) ──
-    this.ENTER_MULTIPLIER = 3.5;  // RMS must exceed noiseFloor × 3.5 to START speech
-    this.STAY_MULTIPLIER  = 2.0;  // RMS must stay above noiseFloor × 2.0 to REMAIN in speech (hysteresis)
+    this.ENTER_MULTIPLIER = 5.0;  // RMS must exceed noiseFloor × 5.0 to START speech (raised from 3.5 to reduce false triggers)
+    this.STAY_MULTIPLIER  = 2.5;  // RMS must stay above noiseFloor × 2.5 to REMAIN in speech (hysteresis)
+    this.MIN_ENTER_THRESHOLD = 0.008; // Absolute minimum — prevents false triggers in very quiet environments
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
@@ -104,7 +105,7 @@ class AudioProcessor extends AudioWorkletProcessor {
 
     // ── Compute dynamic thresholds ──
     const ttsBoost = this.isTTSPlaying ? this.TTS_THRESHOLD_MULTIPLIER : 1.0;
-    const enterThreshold = this.noiseFloor * this.ENTER_MULTIPLIER * ttsBoost;
+    const enterThreshold = Math.max(this.MIN_ENTER_THRESHOLD, this.noiseFloor * this.ENTER_MULTIPLIER * ttsBoost);
     const stayThreshold  = this.noiseFloor * this.STAY_MULTIPLIER  * ttsBoost;
 
     // ── Determine if this frame is speech ──
