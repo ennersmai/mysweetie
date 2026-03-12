@@ -612,8 +612,11 @@ export class CallService {
 
       logger.info(`Processing complete audio file: ${audioData.length} bytes`);
       
-      if (audioData.length < 500) { // Minimum size to filter out empty audio
-        logger.warn(`⚠️ Audio file too small for session ${session.id}: ${audioData.length} bytes - returning to listening`);
+      // Minimum ~150ms of audio: 16kHz × 0.15s × 2 bytes + 44 byte WAV header ≈ 4844 bytes.
+      // A mic tap produces a burst then silence — the tap itself is <10ms so the whole
+      // clip will be tiny. Raising the floor rejects tap+silence clips before Whisper.
+      if (audioData.length < 5000) {
+        logger.warn(`⚠️ Audio file too small for session ${session.id}: ${audioData.length} bytes (< 5000) - returning to listening`);
         session.state = CallState.LISTENING;
         this.sendStateUpdate(session, CallState.LISTENING);
         return;

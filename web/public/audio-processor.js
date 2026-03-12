@@ -42,6 +42,17 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.SILENCE_FRAMES_REQUIRED = 260;  // ~700 ms of silence to end utterance
     this.HANGOVER_LIMIT          = 30;   // ~80 ms forgiveness — quiet frames tolerated mid-speech
 
+    // ── Impulse / transient rejection ──
+    // A mic tap or bump creates a single-frame energy spike (2.67ms) then silence.
+    // Speech onset creates a gradual multi-frame rise over 50-100ms.
+    // Track short-term energy EMA: if current frame spikes far above recent average
+    // while NOT already speaking, discard it as an impulse.
+    this.shortTermEnergy = 0.002;        // fast EMA — tracks recent ~5 frames (13ms)
+    this.SHORT_TERM_ALPHA = 0.2;         // α for short-term EMA
+    this.IMPULSE_RATIO = 6.0;            // spike 6× recent average = impulse, not speech
+    this.impulseCooldown = 0;            // frames remaining in post-impulse freeze
+    this.IMPULSE_COOLDOWN_FRAMES = 12;   // ~32ms freeze after an impulse (suppresses ringing)
+
     // ── TTS-aware threshold boosting ──
     this.isTTSPlaying = false;
     this.TTS_THRESHOLD_MULTIPLIER = 3.0; // raise thresholds 3× during TTS playback
@@ -86,6 +97,36 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.noiseFloor = Math.max(this.NOISE_FLOOR_MIN, Math.min(this.NOISE_FLOOR_MAX, this.noiseFloor));
   }
 
+  /**
+   * Detect impulse/transient noise (mic tap, bump, click).
+   * Returns true if this frame should be discarded as an impulse.
+   * Only fires when not already in a speech segment — during speech, loud
+   * plosives are normal and must not be suppressed.
+   */
+  isImpulseFrame(rms) {
+    // Always update short-term energy (both speech and silence)
+    this.shortTermEnergy = this.shortTermEnergy * (1 - this.SHORT_TERM_ALPHA)
+                         + rms * this.SHORT_TERM_ALPHA;
+
+    // Already speaking — don't suppress anything (plosives, shouts are valid)
+    if (this.vadSpeaking) return false;
+
+    // If still in cooldown from a previous impulse, suppress this frame too
+    if (this.impulseCooldown > 0) {
+      this.impulseCooldown--;
+      return true;
+    }
+
+    // Impulse condition: sudden spike significantly above recent energy baseline
+    const baseline = Math.max(this.noiseFloor, this.shortTermEnergy);
+    if (rms > this.IMPULSE_RATIO * baseline) {
+      this.impulseCooldown = this.IMPULSE_COOLDOWN_FRAMES;
+      return true;
+    }
+
+    return false;
+  }
+
   process(inputs, outputs) {
     const micInput = inputs[0];
     if (!micInput || !micInput[0]) return true;
@@ -99,6 +140,14 @@ class AudioProcessor extends AudioWorkletProcessor {
 
     // ── Compute energy ──
     const rms = this.calculateRMS(micChannel);
+
+    // ── Impulse / transient rejection ──
+    // Must run before noise floor update so impulse energy doesn't corrupt the floor.
+    if (this.isImpulseFrame(rms)) {
+      // Forward audio to ring buffer but do NOT run VAD logic
+      this.port.postMessage({ type: 'audio_data', data: micChannel });
+      return true;
+    }
 
     // ── Adaptive noise floor ──
     this.updateNoiseFloor(rms);
