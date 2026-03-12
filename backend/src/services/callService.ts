@@ -619,6 +619,19 @@ export class CallService {
         return;
       }
 
+      // ── Pre-STT noise gate: check audio energy before sending to Whisper ──
+      // Whisper hallucinates entire phrases when fed silence/noise.
+      // By measuring RMS energy of the PCM data we can skip the API call entirely.
+      const rmsEnergy = this.calculateAudioRMS(audioData);
+      logger.info(`🔊 Audio RMS energy for session ${session.id}: ${rmsEnergy.toFixed(4)} (threshold: 0.005)`);
+      if (rmsEnergy < 0.005) {
+        logger.info(`🔇 Audio below noise floor for session ${session.id} (RMS: ${rmsEnergy.toFixed(4)}) — skipping STT`);
+        session.state = CallState.LISTENING;
+        this.sendStateUpdate(session, CallState.LISTENING);
+        session.audioBuffer = [];
+        return;
+      }
+
       // Detect audio format based on file signature
       const audioHex = audioData.subarray(0, 4).toString('hex');
       logger.info(`🔍 Audio header signature (first 4 bytes): ${audioHex}`);
@@ -698,62 +711,28 @@ export class CallService {
       const words = response.data.words || [];
       logger.info(`🎯 Groq transcription for session ${session.id}: "${transcript}" (confidence: ${confidence}, duration: ${duration}s, words: ${words.length})`);
 
-      // ── Whisper hallucination filter ──
-      // 1) Exact-match hallucination phrases
-      const commonHallucinations = [
+      // ── Post-STT sanity check ──
+      // Only reject transcripts that are literally impossible in a voice call.
+      // Legitimate short words (yeah, okay, bye, hmm) are KEPT — the user might actually say them.
+      const lowerTranscript = transcript.toLowerCase().trim();
+      const impossiblePhrases = [
         'thanks for watching',
-        'thank you',
-        'thank you.',
-        'thank you. thank you',
-        'thank you. thank you.',
-        'you',
-        'bye',
-        'goodbye',
-        'amen',
-        'amen.',
-        'see you next time',
-        'transcribe everything accurately',
         'please subscribe',
         'please like and subscribe',
         'subtitles by',
-        'the end',
-        'so',
-        'yeah',
-        'okay',
-        'hmm',
-        'i\'m sorry',
-        'i\'m going to go ahead and',
+        'transcribe everything accurately',
+        'see you next time',
         'thanks for listening',
-        'music',
-        'applause',
-        'laughter',
       ];
-      
-      const lowerTranscript = transcript.toLowerCase().trim();
-      const isHallucination = commonHallucinations.some(phrase => 
+      const isImpossible = impossiblePhrases.some(phrase => 
         lowerTranscript === phrase || lowerTranscript === phrase + '.'
       );
       
-      // 2) Audio too short to contain real speech (< 0.3 seconds)
-      const isTooShort = duration > 0 && duration < 0.3;
+      // Repetitive text — Whisper sometimes generates the same phrase looped
+      const isRepetitive = /(.{8,})\1{2,}/.test(lowerTranscript);
       
-      // 3) Word density too low — long silence with a few hallucinated words
-      const wordDensity = words.length > 0 && duration > 0 ? words.length / duration : 1;
-      const isSuspiciouslyQuiet = duration > 3 && wordDensity < 0.3; // < 1 word per 3 seconds
-      
-      // 4) Transcript too long for audio duration — Whisper hallucinated an entire phrase
-      //    Normal speech: ~2.5 words/sec (~12-15 chars/sec). If transcript has >25 chars/sec
-      //    relative to audio duration, it's almost certainly hallucinated.
-      const charsPerSec = duration > 0 ? lowerTranscript.length / duration : 0;
-      const wordsPerSec = duration > 0 ? words.length / duration : 0;
-      const isOverlyDense = duration > 0 && duration < 3 && (charsPerSec > 25 || wordsPerSec > 5);
-      
-      // 5) Repetitive text — Whisper sometimes generates the same phrase repeated
-      const isRepetitive = /(.{8,})\1{2,}/.test(lowerTranscript); // Same 8+ char block repeated 3+ times
-      
-      if (isHallucination || isTooShort || isSuspiciouslyQuiet || isOverlyDense || isRepetitive) {
-        logger.warn(`🚫 Rejected transcription for session ${session.id}: "${transcript}" (duration: ${duration.toFixed(2)}s, words: ${words.length}, charsPerSec: ${charsPerSec.toFixed(1)}, wordsPerSec: ${wordsPerSec.toFixed(1)}, isHallucination: ${isHallucination}, isTooShort: ${isTooShort}, isSuspiciouslyQuiet: ${isSuspiciouslyQuiet}, isOverlyDense: ${isOverlyDense}, isRepetitive: ${isRepetitive})`);
-        // Go back to listening state without sending anything, clear buffer for next utterance
+      if (isImpossible || isRepetitive) {
+        logger.warn(`🚫 Rejected impossible transcription for session ${session.id}: "${transcript}" (isImpossible: ${isImpossible}, isRepetitive: ${isRepetitive})`);
         session.audioBuffer = [];
         session.state = CallState.LISTENING;
         this.sendStateUpdate(session, CallState.LISTENING);
@@ -842,6 +821,53 @@ export class CallService {
     pcmBuffer.copy(wavBuffer, 44);
 
     return wavBuffer;
+  }
+
+  /**
+   * Calculate RMS (Root Mean Square) energy of audio data.
+   * Works with WAV (reads PCM after 44-byte header) and raw buffers.
+   * Returns a 0-1 float where 0 = silence, 1 = max volume.
+   */
+  private calculateAudioRMS(audioData: Buffer): number {
+    try {
+      let pcmStart = 0;
+      const header = audioData.subarray(0, 4).toString('ascii');
+      
+      // For WAV files, skip the 44-byte header to get to PCM data
+      if (header === 'RIFF' && audioData.length > 44) {
+        pcmStart = 44;
+      } else if (header.charCodeAt(0) === 0x1a) {
+        // WebM/EBML — can't easily read PCM from container, return high energy
+        // to avoid false rejection. The noise gate won't help for WebM but it
+        // won't hurt either (we just skip it).
+        return 1.0;
+      }
+      
+      const pcmData = audioData.subarray(pcmStart);
+      
+      // Need at least 2 bytes for one 16-bit sample
+      if (pcmData.length < 2) return 0;
+      
+      // Read 16-bit signed PCM samples (little-endian)
+      const sampleCount = Math.floor(pcmData.length / 2);
+      let sumSquares = 0;
+      
+      // Sample every 4th value for performance on large buffers
+      const step = sampleCount > 10000 ? 4 : 1;
+      let samplesRead = 0;
+      
+      for (let i = 0; i < sampleCount; i += step) {
+        const sample = pcmData.readInt16LE(i * 2);
+        const normalized = sample / 32768.0; // Normalize to -1..1
+        sumSquares += normalized * normalized;
+        samplesRead++;
+      }
+      
+      return Math.sqrt(sumSquares / samplesRead);
+    } catch (error) {
+      logger.warn('Error calculating audio RMS, allowing through:', error);
+      return 1.0; // On error, allow through to avoid false rejection
+    }
   }
 
   private async openRimeConnection(session: CallSession, text: string): Promise<void> {
