@@ -32,9 +32,9 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.NOISE_FLOOR_MAX = 0.025;        // lowered cap — prevents loud PC fans from making threshold unachievable
 
     // ── Threshold multipliers (relative to noise floor) ──
-    this.ENTER_MULTIPLIER = 4.0;  // RMS must exceed noiseFloor × 4.0 to START speech
-    this.STAY_MULTIPLIER  = 2.0;  // RMS must stay above noiseFloor × 2.0 to REMAIN in speech (hysteresis)
-    this.MIN_ENTER_THRESHOLD = 0.006; // Absolute minimum — must be above backend 0.005 noise gate
+    this.ENTER_MULTIPLIER = 3.5;  // RMS must exceed noiseFloor × 3.5 to START speech
+    this.STAY_MULTIPLIER  = 1.8;  // RMS must stay above noiseFloor × 1.8 to REMAIN in speech (hysteresis)
+    this.MIN_ENTER_THRESHOLD = 0.0055; // Just above backend 0.005 noise gate
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
