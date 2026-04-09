@@ -1,0 +1,199 @@
+@import "tailwindcss";
+
+/* Hide scrollbars but keep scroll functionality */
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome, Safari */
+}
+
+/* Simple waveform animation for voice playing indicator */
+@keyframes wave-bounce {
+  0%, 100% { transform: scaleY(0.5); opacity: 0.8; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+.wavebar {
+  width: 3px;
+  height: 12px;
+  background: #fff;
+  display: inline-block;
+  animation: wave-bounce 1s infinite ease-in-out;
+  transform-origin: bottom;
+}
+.wavebar:nth-child(1) { animation-delay: 0ms; }
+.wavebar:nth-child(2) { animation-delay: 120ms; }
+.wavebar:nth-child(3) { animation-delay: 240ms; }
+.wavebar:nth-child(4) { animation-delay: 360ms; }
+.wavebar:nth-child(5) { animation-delay: 240ms; }
+
+/* Animated gradient background */
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  25% {
+    background-position: 100% 50%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  75% {
+    background-position: 0% 100%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animated-gradient {
+  background: linear-gradient(
+    45deg,
+    #8b5cf6,    /* violet-500 */
+    #a855f7,    /* purple-500 */
+    #ec4899,    /* pink-500 */
+    #f97316,    /* orange-500 */
+    #ec4899,    /* pink-500 */
+    #a855f7,    /* purple-500 */
+    #8b5cf6     /* violet-500 */
+  );
+  background-size: 400% 400%;
+  animation: gradient-shift 8s ease-in-out infinite;
+}
+
+.animated-gradient-subtle {
+  background: linear-gradient(
+    45deg,
+    rgba(139, 92, 246, 0.1),    /* violet-500/10 */
+    rgba(168, 85, 247, 0.15),   /* purple-500/15 */
+    rgba(236, 72, 153, 0.1),    /* pink-500/10 */
+    rgba(249, 115, 22, 0.05),   /* orange-500/5 */
+    rgba(236, 72, 153, 0.1),    /* pink-500/10 */
+    rgba(168, 85, 247, 0.15),   /* purple-500/15 */
+    rgba(139, 92, 246, 0.1)     /* violet-500/10 */
+  );
+  background-size: 400% 400%;
+  animation: gradient-shift 12s ease-in-out infinite;
+}
+
+/* Scroll animations */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.8s ease-out forwards;
+}
+
+/* Allow document-level scrolling */
+html, body, #root {
+  height: 100%;
+}
+html, body {
+  overflow: auto;
+}
+
+/* Bouncing loader for assistant messages */
+@keyframes bounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1.0);
+  }
+}
+
+.bouncing-loader > div {
+  width: 8px;
+  height: 8px;
+  background-color: #fff;
+  border-radius: 100%;
+  display: inline-block;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.bouncing-loader .bounce1 {
+  animation-delay: -0.32s;
+}
+
+.bouncing-loader .bounce2 {
+  animation-delay: -0.16s;
+}
+
+/* Custom scrollbar hiding utility */
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+/* ── Voice Call Button animations ─────────────────────────────────────── */
+
+/* LISTENING: slow breathing glow — gentle in/out like resting breath */
+@keyframes vcb-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.0), 0 0 8px 2px rgba(96, 165, 250, 0.25); }
+  50%       { box-shadow: 0 0 0 8px rgba(96, 165, 250, 0.12), 0 0 20px 6px rgba(96, 165, 250, 0.35); }
+}
+.vcb-listening {
+  animation: vcb-breathe 2.8s ease-in-out infinite;
+}
+
+/* USER_SPEAKING: ripple rings expanding outward */
+@keyframes vcb-ripple {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+.vcb-speaking-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2px solid rgba(74, 222, 128, 0.7);
+  animation: vcb-ripple 1.1s ease-out infinite;
+}
+.vcb-speaking-ring-2 {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2px solid rgba(74, 222, 128, 0.45);
+  animation: vcb-ripple 1.1s ease-out 0.4s infinite;
+}
+
+/* AI_PROCESSING: soft spinning arc */
+@keyframes vcb-spin-arc {
+  to { transform: rotate(360deg); }
+}
+.vcb-processing-arc {
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  border-top-color: rgba(250, 204, 21, 0.8);
+  border-right-color: rgba(250, 204, 21, 0.4);
+  animation: vcb-spin-arc 1s linear infinite;
+}
+
+/* AI_SPEAKING: pulsing purple glow */
+@keyframes vcb-glow-purple {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.0), 0 0 10px 3px rgba(168, 85, 247, 0.3); }
+  50%       { box-shadow: 0 0 0 6px rgba(168, 85, 247, 0.15), 0 0 22px 8px rgba(168, 85, 247, 0.45); }
+}
+.vcb-ai-speaking {
+  animation: vcb-glow-purple 1.6s ease-in-out infinite;
+}
+
+/* Base button transition (no jerky jumps) */
+.vcb-base {
+  transition: background-color 0.3s ease, transform 0.15s ease, box-shadow 0.3s ease;
+}
+/* ─────────────────────────────────────────────────────────────────────── */

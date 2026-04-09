@@ -1,0 +1,236 @@
+export default function Tos() {
+  return (
+    <section className="mx-auto max-w-4xl rounded-2xl border border-white/10 bg-white/5 p-8 shadow-xl backdrop-blur">
+      <h1 className="mb-4 text-3xl font-semibold text-white">Privacy Policy – MySweetie.AI</h1>
+      <p className="mb-6 text-sm text-gray-300">Last updated: {new Date().toLocaleDateString()}</p>
+
+      <div className="space-y-8 text-white/90 leading-relaxed">
+        <div className="text-gray-300">
+          <p>
+            At MySweetie.AI ("Service," "we," "us," "our"), we respect your privacy and are committed to protecting your personal information. This Privacy Policy explains how we collect, use, and safeguard your data.
+          </p>
+        </div>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">1. Information We Collect</h2>
+          <p className="mb-4">We may collect the following types of information:</p>
+          
+          <div className="space-y-4 ml-4">
+            <div>
+              <h3 className="font-medium text-white mb-2">a) Account & Contact Information</h3>
+              <p>• Email address, username, password (when you register).</p>
+            </div>
+            
+            <div>
+              <h3 className="font-medium text-white mb-2">b) Payment Information</h3>
+              <p>• Payments are processed securely by third-party providers such as Stripe.</p>
+              <p>• We do not store full credit/debit card numbers on our servers.</p>
+            </div>
+            
+            <div>
+              <h3 className="font-medium text-white mb-2">c) Usage Data</h3>
+              <p>• Information about how you use the Service (e.g., pages visited, features used, interactions with AI characters).</p>
+            </div>
+            
+            <div>
+              <h3 className="font-medium text-white mb-2">d) Device & Technical Data</h3>
+              <p>• Browser type, operating system, IP address, and cookies to improve user experience.</p>
+            </div>
+          </div>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">2. How We Use Your Information</h2>
+          <p className="mb-3">We use your data to:</p>
+          <div className="space-y-1 ml-4">
+            <p>• Provide and maintain the Service.</p>
+            <p>• Process payments and subscriptions.</p>
+            <p>• Personalize your experience (e.g., saving AI characters you build).</p>
+            <p>• Send important updates (e.g., subscription reminders, policy changes).</p>
+            <p>• Improve site performance and prevent fraud or abuse.</p>
+          </div>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">3. Sharing of Information</h2>
+          <p className="mb-3">We do not sell or rent your personal information.</p>
+          <p className="mb-3">We may share data with trusted third parties only when necessary to:</p>
+          <div className="space-y-1 ml-4">
+            <p>• Process payments (Stripe, payment gateways).</p>
+            <p>• Provide hosting, analytics, or security services.</p>
+            <p>• Comply with legal obligations.</p>
+          </div>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">4. Data Retention</h2>
+          <div className="space-y-1 ml-4">
+            <p>• We retain account data while your subscription is active.</p>
+            <p>• You may request deletion of your account and associated data at any time.</p>
+            <p>• Certain transaction records may be retained as required by law (e.g., financial records).</p>
+          </div>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">5. Cookies & Tracking</h2>
+          <div className="space-y-1 ml-4">
+            <p>• We use cookies and similar technologies to remember your preferences and improve site performance.</p>
+            <p>• You may disable cookies in your browser, but some features may not function properly.</p>
+          </div>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">6. Your Rights (GDPR & Global Compliance)</h2>
+          <p className="mb-3">Depending on your location, you may have the right to:</p>
+          <div className="space-y-1 ml-4">
+            <p>• Access, correct, or delete your personal data.</p>
+            <p>• Request data portability.</p>
+            <p>• Withdraw consent for certain data uses.</p>
+            <p>• File a complaint with your local data protection authority.</p>
+          </div>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">7. Security</h2>
+          <div className="space-y-1 ml-4">
+            <p>• We use industry-standard measures (encryption, secure hosting, access controls) to protect your data.</p>
+            <p>• However, no online service can guarantee 100% security.</p>
+          </div>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">8. Children's Privacy</h2>
+          <p className="mb-3 font-medium text-white">This Service is strictly for adults 18+ only.</p>
+          <p>We do not knowingly collect data from anyone under 18. If we discover such data, it will be deleted immediately.</p>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">9. Changes to This Policy</h2>
+          <p>We may update this Privacy Policy from time to time. Any changes will be posted on this page with the updated date.</p>
+        </section>
+
+        <div className="border-t border-white/10 pt-6"></div>
+
+        <section>
+          <h2 className="mb-4 text-xl font-medium text-white">10. Contact Us</h2>
+          <p>
+            For questions or concerns about this Privacy Policy, contact us at:{' '}
+            <a href="mailto:support@mysweetie.ai" className="text-pink-400 hover:text-pink-300 underline">
+              support@mysweetie.ai
+            </a>
+          </p>
+        </section>
+
+        <div className="border-t-2 border-pink-500/30 pt-8 mt-12"></div>
+
+        {/* Refund & Cancellation Policy Section */}
+        <div className="space-y-8">
+          <div>
+            <h1 className="mb-4 text-3xl font-semibold text-white">Refund & Cancellation Policy</h1>
+            <p className="mb-6 text-sm text-gray-300">Effective Date: {new Date().toLocaleDateString()}</p>
+            
+            <div className="text-gray-300 mb-8">
+              <p>
+                At MySweetie.AI, we are committed to providing our users with a high-quality, engaging service. This Refund & Cancellation Policy outlines how payments, renewals, cancellations, and refunds are handled. By subscribing to or purchasing from MySweetie.AI, you agree to this policy.
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">1. Subscriptions & Billing</h2>
+            <div className="space-y-2 ml-4">
+              <p>• All subscriptions (Basic and Premium) are billed automatically on a recurring basis (monthly, unless otherwise stated).</p>
+              <p>• Subscriptions will auto-renew at the end of each billing cycle unless cancelled in advance.</p>
+              <p>• Your payment method on file will be charged automatically by our payment processor (Stripe).</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">2. Cancellations</h2>
+            <div className="space-y-2 ml-4">
+              <p>• You may cancel your subscription at any time through your account settings.</p>
+              <p>• Cancellation will stop the next billing cycle. You will continue to have access until the end of your current paid period.</p>
+              <p>• To avoid being charged for the next period, you must cancel before the renewal date.</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">3. Refunds</h2>
+            <div className="space-y-2 ml-4">
+              <p>• Digital services are non-refundable once accessed or used (including AI chat, voice, or gallery features).</p>
+              <p>• We do not offer partial refunds for unused time in a billing cycle.</p>
+              <p className="mt-3 mb-2">• Refunds may only be considered in the following cases:</p>
+              <div className="ml-4 space-y-1">
+                <p>• Duplicate payment/accidental double charge.</p>
+                <p>• Technical issues on our side that prevent you from accessing the service (and cannot be resolved within a reasonable time).</p>
+                <p>• Fraudulent or unauthorized transactions (must be verified with Stripe or your bank).</p>
+              </div>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">4. One-Time Purchases</h2>
+            <div className="space-y-2 ml-4">
+              <p>• Unlocks (such as galleries, voice add-ons, or bonus features) are final and non-refundable once delivered.</p>
+              <p>• Please review carefully before purchasing.</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">5. Chargebacks & Disputes</h2>
+            <div className="space-y-2 ml-4">
+              <p>• Filing a chargeback with your bank without contacting us first may result in suspension or termination of your account.</p>
+              <p>• We encourage users to contact our support team at{' '}
+                <a href="mailto:support@mysweetie.ai" className="text-pink-400 hover:text-pink-300 underline">
+                  support@mysweetie.ai
+                </a>
+                {' '}before escalating a dispute.</p>
+            </div>
+          </section>
+
+          <div className="border-t border-white/10 pt-6"></div>
+
+          <section>
+            <h2 className="mb-4 text-xl font-medium text-white">6. Contact Us</h2>
+            <p>
+              If you believe you are entitled to a refund under this policy, or wish to cancel, please contact us at:{' '}
+              <a href="mailto:support@mysweetie.ai" className="text-pink-400 hover:text-pink-300 underline">
+                support@mysweetie.ai
+              </a>
+            </p>
+          </section>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
