@@ -5,7 +5,7 @@
  * when active. Designed to be placed next to the send button.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ProductionAudioManager } from '../lib/productionAudioManager';
 import Modal from './Modal';
 import { isWebAudioSupported, isMediaStreamSupported } from '../lib/audioUtils';
@@ -94,7 +94,7 @@ export default function VoiceCallButton({
           audioManagerRef.current.playAudio(buffer);
         }
       })
-      .catch(error => {
+      .catch((error: unknown) => {
         console.error('[FRONTEND] Failed to decode/play Blob audio chunk:', error);
       });
   }, []);
@@ -523,7 +523,7 @@ export default function VoiceCallButton({
         wsHost = apiUrl.host;
       } else if (typeof window !== 'undefined') {
         wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        wsHost = process.env.NODE_ENV === 'development' ? 'localhost:3001' : window.location.host;
+        wsHost = import.meta.env.DEV ? 'localhost:3001' : window.location.host;
       }
       // Include characterId and conversationId so backend can bind correct session context
       const urlParams = new URLSearchParams({
@@ -562,14 +562,14 @@ export default function VoiceCallButton({
 
         ws.onmessage = handleWebSocketMessage;
 
-        ws.onerror = (error) => {
+        ws.onerror = (error: Event) => {
           console.error('WebSocket error:', error);
           onError?.('Connection error occurred. Please try again.');
           setConnectionStatus('disconnected');
           resolve(false);
         };
 
-        ws.onclose = (event) => {
+        ws.onclose = (event: CloseEvent) => {
           console.log('WebSocket closed:', event.code, event.reason);
           setConnectionStatus('disconnected');
           
@@ -795,7 +795,7 @@ export default function VoiceCallButton({
       <button
         type="button"
         onClick={handleButtonClick}
-        onMouseDown={(e) => e.preventDefault()}
+        onMouseDown={(e: React.MouseEvent) => e.preventDefault()}
         disabled={
           isCallActive
             ? false
