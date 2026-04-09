@@ -60,8 +60,9 @@ export class ProductionAudioManager {
   private pcmAccumulator: Int16Array[] = [];
   private pcmAccumulatorTimer: number | null = null;
   private isFlushingPCM = false; // Guard flag to prevent concurrent flushes
-  private readonly PCM_ACCUMULATION_TIME = 500; // Increased from 200ms to 500ms to reduce static noise
-  private readonly PCM_MIN_SAMPLES = 48000; // ~3000ms at 16kHz - increased significantly for smoother playback and reduced crackling
+  private readonly PCM_ACCUMULATION_TIME = 100; // Reduced to 100ms for enterprise responsiveness
+  private readonly PCM_MIN_SAMPLES = 1600; // ~100ms at 16kHz - drastically reduced for lower latency
+
   private pcmCarryByte: number | null = null; // Carry byte for odd-length buffers
   private keepAliveSource: AudioBufferSourceNode | null = null; // Keep AudioContext alive to prevent random suspensions
   private healthCheckInterval: number | null = null; // Periodic AudioContext health check for iOS
@@ -1402,7 +1403,19 @@ export class ProductionAudioManager {
     }
   }
 
+  /**
+   * Explicitly resume the AudioContext.
+   * Required for Safari/iOS when the context is suspended due to backgrounding or lack of user gesture.
+   */
+  public async resumeContext(): Promise<void> {
+    if (this.recordingContext && this.recordingContext.state === 'suspended') {
+      console.log('🔊 [ProductionAudioManager] Explicitly resuming AudioContext...');
+      await this.recordingContext.resume();
+    }
+  }
+
   cleanup(): void {
+
     this.stopContextHealthCheck();
     this.stopKeepAliveTone();
     if (this.recordingContext) {

@@ -729,9 +729,14 @@ export default function VoiceCallButton({
     }
   };
 
-  const handleButtonClick = (e: React.MouseEvent) => {
+  const handleButtonClick = async (e: React.MouseEvent) => {
     e.preventDefault(); // Prevent form submission
     e.stopPropagation(); // Stop event bubbling
+    
+    // Explicitly try to resume AudioContext on every click (Safari/iOS requirement)
+    if (audioManagerRef.current) {
+      await audioManagerRef.current.resumeContext();
+    }
     
     const buttonDisabled = isCallActive 
       ? false 
@@ -762,6 +767,7 @@ export default function VoiceCallButton({
       endCall(true); // Force=true to bypass any guards
     }
   };
+
 
   if (!audioSupported) {
     return (

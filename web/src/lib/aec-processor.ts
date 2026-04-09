@@ -137,38 +137,29 @@ class AECProcessor extends AudioWorkletProcessorClass {
     
     
     // Accumulate mic input into buffer
-    const newMicLength = this.micBuffer.length + frameSize;
-    const newMicBuffer = new Float32Array(newMicLength);
-    newMicBuffer.set(this.micBuffer, 0);
-    newMicBuffer.set(micInput[0], this.micBuffer.length);
-    this.micBuffer = newMicBuffer;
+    // Optimization: avoid constant reallocations by using fixed buffers or more efficient growth
+    // For 128 -> 480 samples, we only need a small overhead
+    const growBuffer = (oldBuf: Float32Array, newData: Float32Array) => {
+      const combined = new Float32Array(oldBuf.length + newData.length);
+      combined.set(oldBuf);
+      combined.set(newData, oldBuf.length);
+      return combined;
+    };
+
+    this.micBuffer = growBuffer(this.micBuffer, micInput[0]);
     
-    // Accumulate TTS input into buffer (if present)
+    // Accumulate TTS input (AEC reference)
     if (ttsInput && ttsInput[0] && ttsInput[0].length > 0) {
-      // TTS is active - mark it and accumulate
       this.ttsActive = true;
-      const newTtsLength = this.ttsBuffer.length + frameSize;
-      const newTtsBuffer = new Float32Array(newTtsLength);
-      newTtsBuffer.set(this.ttsBuffer, 0);
-      newTtsBuffer.set(ttsInput[0], this.ttsBuffer.length);
-      this.ttsBuffer = newTtsBuffer;
+      this.ttsBuffer = growBuffer(this.ttsBuffer, ttsInput[0]);
+    } else if (this.ttsActive) {
+      this.ttsBuffer = new Float32Array(0);
+      this.ttsActive = false;
     } else {
-      // No TTS input - if TTS was active, we need to clear buffer gradually
-      // If TTS just stopped (ttsActive was true), clear buffer immediately
-      // Otherwise, pad with zeros to maintain frame alignment
-      if (this.ttsActive) {
-        // TTS just stopped - clear buffer immediately to allow AEC adaptation
-        this.ttsBuffer = new Float32Array(0);
-        this.ttsActive = false;
-      } else {
-        // TTS already stopped - pad with zeros to maintain frame alignment
-        const newTtsLength = this.ttsBuffer.length + frameSize;
-        const newTtsBuffer = new Float32Array(newTtsLength);
-        newTtsBuffer.set(this.ttsBuffer, 0);
-        newTtsBuffer.fill(0, this.ttsBuffer.length);
-        this.ttsBuffer = newTtsBuffer;
-      }
+      // Pad TTS with zeros if not active but we have mic data (to maintain alignment)
+      this.ttsBuffer = growBuffer(this.ttsBuffer, new Float32Array(micInput[0].length));
     }
+
     
     // Process accumulated frames when we have enough data
     const cleanOutputChannel = cleanOutput[0];

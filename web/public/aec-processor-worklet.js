@@ -138,7 +138,14 @@ class AECProcessor extends AudioWorkletProcessorClass {
       this.framesSinceTTSStopped++;
     }
 
-    // Decide whether to run AEC processing or pure passthrough
+    // Optimization: avoid constant reallocations by using fixed buffers or more efficient growth
+    var growBuffer = function(oldBuf, newData) {
+      var combined = new Float32Array(oldBuf.length + newData.length);
+      combined.set(oldBuf);
+      combined.set(newData, oldBuf.length);
+      return combined;
+    };
+
     var shouldRunAEC = this.ttsActive || (this.framesSinceTTSStopped < this.AEC_TAIL_FRAMES);
 
     if (!shouldRunAEC) {
@@ -151,19 +158,10 @@ class AECProcessor extends AudioWorkletProcessorClass {
     }
 
     // --- AEC Processing Path ---
-
-    // Accumulate mic input
-    var newMicBuf = new Float32Array(this.micBuffer.length + frameSize);
-    newMicBuf.set(this.micBuffer, 0);
-    newMicBuf.set(micInput[0], this.micBuffer.length);
-    this.micBuffer = newMicBuf;
-
-    // Accumulate TTS input (use actual TTS data or zeros)
+    this.micBuffer = growBuffer(this.micBuffer, micInput[0]);
     var ttsFrame = (hasTTSAudio) ? ttsInput[0] : new Float32Array(frameSize);
-    var newTtsBuf = new Float32Array(this.ttsBuffer.length + frameSize);
-    newTtsBuf.set(this.ttsBuffer, 0);
-    newTtsBuf.set(ttsFrame, this.ttsBuffer.length);
-    this.ttsBuffer = newTtsBuf;
+    this.ttsBuffer = growBuffer(this.ttsBuffer, ttsFrame);
+
 
     // Process accumulated frames
     var outputOffset = 0;

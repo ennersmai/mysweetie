@@ -32,14 +32,14 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.NOISE_FLOOR_MAX = 0.025;        // lowered cap — prevents loud PC fans from making threshold unachievable
 
     // ── Threshold multipliers (relative to noise floor) ──
-    this.ENTER_MULTIPLIER = 1.8;  // RMS must exceed noiseFloor × 1.8 to START speech (lower for Windows mics)
-    this.STAY_MULTIPLIER  = 1.4;  // RMS must stay above noiseFloor × 1.4 to REMAIN in speech
+    this.ENTER_MULTIPLIER = 1.6;  // RMS must exceed noiseFloor × 1.6 to START speech (Enterprise tuned)
+    this.STAY_MULTIPLIER  = 1.2;  // RMS must stay above noiseFloor × 1.2 to REMAIN in speech
     this.MIN_ENTER_THRESHOLD = 0.0045; // Below backend gate - let VAD handle gating
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
-    this.SPEECH_FRAMES_REQUIRED     = 12;  // ~32ms of sustained energy to start — quicker trigger for desktop mics
-    this.SPEECH_FRAMES_DURING_TTS   = 30;  // ~107ms during TTS — extra bar: don't barge-in unless clearly real speech
+    this.SPEECH_FRAMES_REQUIRED     = 10;  // ~27ms of sustained energy to start — faster trigger
+    this.SPEECH_FRAMES_DURING_TTS   = 15;  // ~40ms during TTS — enterprise barge-in (reduced from 107ms)
     this.SILENCE_FRAMES_REQUIRED    = 180; // ~480 ms of silence to end utterance
     this.HANGOVER_LIMIT             = 30;  // ~80 ms forgiveness — quiet frames tolerated mid-speech
 
@@ -56,7 +56,7 @@ class AudioProcessor extends AudioWorkletProcessor {
 
     // ── TTS-aware threshold boosting ──
     this.isTTSPlaying = false;
-    this.TTS_THRESHOLD_MULTIPLIER = 3.0; // raise thresholds 3× during TTS playback
+    this.TTS_THRESHOLD_MULTIPLIER = 2.0; // raise thresholds 2× during TTS playback (Enterprise tuned for barge-in)
 
     // ── Message handler ──
     this.port.onmessage = (event) => {
