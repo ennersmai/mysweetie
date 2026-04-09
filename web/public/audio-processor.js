@@ -32,15 +32,15 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.NOISE_FLOOR_MAX = 0.025;        // lowered cap — prevents loud PC fans from making threshold unachievable
 
     // ── Threshold multipliers (relative to noise floor) ──
-    this.ENTER_MULTIPLIER = 2.5;  // RMS must exceed noiseFloor × 2.5 to START speech
-    this.STAY_MULTIPLIER  = 1.8;  // RMS must stay above noiseFloor × 1.8 to REMAIN in speech (stronger hysteresis)
-    this.MIN_ENTER_THRESHOLD = 0.00501; // Just barely above backend 0.005 noise gate
+    this.ENTER_MULTIPLIER = 1.8;  // RMS must exceed noiseFloor × 1.8 to START speech (lower for Windows mics)
+    this.STAY_MULTIPLIER  = 1.4;  // RMS must stay above noiseFloor × 1.4 to REMAIN in speech
+    this.MIN_ENTER_THRESHOLD = 0.0045; // Below backend gate - let VAD handle gating
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
     this.SPEECH_FRAMES_REQUIRED     = 12;  // ~32ms of sustained energy to start — quicker trigger for desktop mics
     this.SPEECH_FRAMES_DURING_TTS   = 30;  // ~107ms during TTS — extra bar: don't barge-in unless clearly real speech
-    this.SILENCE_FRAMES_REQUIRED    = 150; // ~400 ms of silence to end utterance (quicker silence detection)
+    this.SILENCE_FRAMES_REQUIRED    = 180; // ~480 ms of silence to end utterance
     this.HANGOVER_LIMIT             = 30;  // ~80 ms forgiveness — quiet frames tolerated mid-speech
 
     // ── Impulse / transient rejection ──
