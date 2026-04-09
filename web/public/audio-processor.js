@@ -32,15 +32,15 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.NOISE_FLOOR_MAX = 0.025;        // lowered cap — prevents loud PC fans from making threshold unachievable
 
     // ── Threshold multipliers (relative to noise floor) ──
-    this.ENTER_MULTIPLIER = 3.5;  // RMS must exceed noiseFloor × 3.5 to START speech
-    this.STAY_MULTIPLIER  = 1.8;  // RMS must stay above noiseFloor × 1.8 to REMAIN in speech (hysteresis)
-    this.MIN_ENTER_THRESHOLD = 0.0055; // Just above backend 0.005 noise gate
+    this.ENTER_MULTIPLIER = 2.8;  // RMS must exceed noiseFloor × 2.8 to START speech
+    this.STAY_MULTIPLIER  = 1.5;  // RMS must stay above noiseFloor × 1.5 to REMAIN in speech (hysteresis)
+    this.MIN_ENTER_THRESHOLD = 0.0051; // Just barely above backend 0.005 noise gate
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
     this.SPEECH_FRAMES_REQUIRED     = 12;  // ~32ms of sustained energy to start — quicker trigger for desktop mics
     this.SPEECH_FRAMES_DURING_TTS   = 30;  // ~107ms during TTS — extra bar: don't barge-in unless clearly real speech
-    this.SILENCE_FRAMES_REQUIRED    = 260; // ~700 ms of silence to end utterance
+    this.SILENCE_FRAMES_REQUIRED    = 200; // ~530 ms of silence to end utterance (faster completion)
     this.HANGOVER_LIMIT             = 30;  // ~80 ms forgiveness — quiet frames tolerated mid-speech
 
     // ── Impulse / transient rejection ──
@@ -179,6 +179,7 @@ class AudioProcessor extends AudioWorkletProcessor {
       const framesRequired = this.isTTSPlaying ? this.SPEECH_FRAMES_DURING_TTS : this.SPEECH_FRAMES_REQUIRED;
       if (!this.vadSpeaking && this.speechFrames >= framesRequired) {
         this.vadSpeaking = true;
+        console.log(`🎤 VAD: SPEECH START (frames: ${this.speechFrames}, threshold: ${threshold.toFixed(4)})`);
         this.port.postMessage({ type: 'speech_start' });
       }
     } else {
@@ -195,6 +196,7 @@ class AudioProcessor extends AudioWorkletProcessor {
 
         if (this.vadSpeaking && this.silenceFrames >= this.SILENCE_FRAMES_REQUIRED) {
           this.vadSpeaking = false;
+          console.log(`🔇 VAD: SPEECH END (silence: ${this.silenceFrames} frames)`);
           this.port.postMessage({ type: 'speech_end' });
         }
       }
