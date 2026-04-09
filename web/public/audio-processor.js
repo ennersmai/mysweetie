@@ -25,20 +25,20 @@ class AudioProcessor extends AudioWorkletProcessor {
     // ── Adaptive noise floor ──
     // Tracks the ambient noise level with a slow-attack / fast-release EMA.
     // Threshold = noiseFloor × multiplier.
-    this.noiseFloor = 0.003;             // initial conservative estimate
+    this.noiseFloor = 0.002;             // initial conservative estimate
     this.NOISE_FLOOR_ATTACK = 0.002;     // slow: noise floor rises slowly (prevents speech from raising it)
     this.NOISE_FLOOR_RELEASE = 0.05;     // fast: noise floor drops quickly when environment gets quieter
     this.NOISE_FLOOR_MIN = 0.0005;       // absolute minimum (digital silence is never truly zero)
-    this.NOISE_FLOOR_MAX = 0.05;         // cap so a loud environment doesn't make VAD unusable
+    this.NOISE_FLOOR_MAX = 0.025;        // lowered cap — prevents loud PC fans from making threshold unachievable
 
     // ── Threshold multipliers (relative to noise floor) ──
-    this.ENTER_MULTIPLIER = 5.0;  // RMS must exceed noiseFloor × 5.0 to START speech (raised from 3.5 to reduce false triggers)
-    this.STAY_MULTIPLIER  = 2.5;  // RMS must stay above noiseFloor × 2.5 to REMAIN in speech (hysteresis)
-    this.MIN_ENTER_THRESHOLD = 0.008; // Absolute minimum — prevents false triggers in very quiet environments
+    this.ENTER_MULTIPLIER = 3.0;  // RMS must exceed noiseFloor × 3.0 to START speech
+    this.STAY_MULTIPLIER  = 1.8;  // RMS must stay above noiseFloor × 1.8 to REMAIN in speech (hysteresis)
+    this.MIN_ENTER_THRESHOLD = 0.004; // Absolute minimum — prevents false triggers in very quiet environments
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
-    this.SPEECH_FRAMES_REQUIRED     = 20;  // ~53ms of sustained energy required — prevents echo/tap false triggers
+    this.SPEECH_FRAMES_REQUIRED     = 12;  // ~32ms of sustained energy to start — quicker trigger for desktop mics
     this.SPEECH_FRAMES_DURING_TTS   = 30;  // ~107ms during TTS — extra bar: don't barge-in unless clearly real speech
     this.SILENCE_FRAMES_REQUIRED    = 260; // ~700 ms of silence to end utterance
     this.HANGOVER_LIMIT             = 30;  // ~80 ms forgiveness — quiet frames tolerated mid-speech
@@ -50,7 +50,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // while NOT already speaking, discard it as an impulse.
     this.shortTermEnergy = 0.002;        // fast EMA — tracks recent ~5 frames (13ms)
     this.SHORT_TERM_ALPHA = 0.2;         // α for short-term EMA
-    this.IMPULSE_RATIO = 6.0;            // spike 6× recent average = impulse, not speech
+    this.IMPULSE_RATIO = 9.0;            // spike 9× recent average = impulse, not speech (looser: prevents speech onset from being rejected)
     this.impulseCooldown = 0;            // frames remaining in post-impulse freeze
     this.IMPULSE_COOLDOWN_FRAMES = 12;   // ~32ms freeze after an impulse (suppresses ringing)
 
