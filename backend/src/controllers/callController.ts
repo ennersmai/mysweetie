@@ -130,7 +130,7 @@ export const initiateCall = async (req: AuthRequest, res: Response): Promise<voi
  */
 export const getCallStatus = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { sessionId } = req.params;
+    const sessionId = req.params['sessionId'] as string;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -173,7 +173,7 @@ export const getCallStatus = async (req: AuthRequest, res: Response): Promise<vo
  */
 export const endCall = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { sessionId } = req.params;
+    const sessionId = req.params['sessionId'] as string;
     const userId = req.user?.id;
 
     if (!userId) {

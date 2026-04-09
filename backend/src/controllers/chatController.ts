@@ -5,7 +5,7 @@ import { supabaseAdmin } from '../config/database';
 
 export const getChatHistory = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { conversationId } = req.params;
+    const conversationId = req.params['conversationId'] as string;
     // @ts-ignore
     const userId = req.user.id;
 

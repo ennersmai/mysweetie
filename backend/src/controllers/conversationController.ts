@@ -4,7 +4,7 @@ import { deleteConversation } from '../services/conversationService';
 export const handleDeleteConversation = async (req: Request, res: Response): Promise<void> => {
   // @ts-ignore
   const userId = req.user.id;
-  const { id } = req.params;
+  const id = req.params['id'] as string;
 
   if (!id) {
     res.status(400).json({ error: 'Conversation ID is required.' });
