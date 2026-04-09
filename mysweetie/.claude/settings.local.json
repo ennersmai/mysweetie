@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(ls /c/Users/Mai/Desktop/Mysweetie/mysweetie/.git/*.MERGE*)",
+      "Bash(ls /c/Users/Mai/Desktop/Mysweetie/mysweetie/.git/MERGE*)",
+      "Bash(npm install:*)",
+      "Bash(sed -n '18,30p' /c/Users/Mai/Desktop/Mysweetie/backend/src/controllers/chatController.ts)",
+      "Bash(sed -n '10,20p' /c/Users/Mai/Desktop/Mysweetie/backend/src/controllers/conversationController.ts)",
+      "Bash(sed -n '65,75p' /c/Users/Mai/Desktop/Mysweetie/backend/src/controllers/memoryController.ts)",
+      "Bash(sed -n '1,25p' /c/Users/Mai/Desktop/Mysweetie/backend/src/controllers/chatController.ts)",
+      "Bash(sed -n '1,18p' /c/Users/Mai/Desktop/Mysweetie/backend/src/controllers/conversationController.ts)",
+      "Bash(sed -n '55,75p' /c/Users/Mai/Desktop/Mysweetie/backend/src/controllers/memoryController.ts)"
+    ]
+  }
+}
