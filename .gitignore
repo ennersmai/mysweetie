@@ -56,5 +56,5 @@ pids
 # Vercel
 .vercel
 
-# Package locks for monorepo (keep web/ package-lock.json)
-package-lock.json
+# Package locks - ignore root level only, keep subdirectory lockfiles
+/package-lock.json
