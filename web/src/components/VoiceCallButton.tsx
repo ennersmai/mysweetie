@@ -67,7 +67,7 @@ export default function VoiceCallButton({
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [audioSupported, setAudioSupported] = useState(true);
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
-  const [voiceLevel, setVoiceLevel] = useState(0); // 0-1 for animation
+  const [_voiceLevel, setVoiceLevel] = useState(0); // 0-1 reserved for future use
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
 
