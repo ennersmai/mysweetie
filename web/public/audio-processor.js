@@ -32,9 +32,9 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.NOISE_FLOOR_MAX = 0.025;        // lowered cap — prevents loud PC fans from making threshold unachievable
 
     // ── Threshold multipliers (relative to noise floor) ──
-    this.ENTER_MULTIPLIER = 3.0;  // RMS must exceed noiseFloor × 3.0 to START speech
-    this.STAY_MULTIPLIER  = 1.8;  // RMS must stay above noiseFloor × 1.8 to REMAIN in speech (hysteresis)
-    this.MIN_ENTER_THRESHOLD = 0.004; // Absolute minimum — prevents false triggers in very quiet environments
+    this.ENTER_MULTIPLIER = 4.0;  // RMS must exceed noiseFloor × 4.0 to START speech
+    this.STAY_MULTIPLIER  = 2.0;  // RMS must stay above noiseFloor × 2.0 to REMAIN in speech (hysteresis)
+    this.MIN_ENTER_THRESHOLD = 0.006; // Absolute minimum — must be above backend 0.005 noise gate
 
     // ── Frame counts ──
     // At 128 samples / 48 kHz ≈ 2.67 ms per frame
@@ -50,7 +50,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // while NOT already speaking, discard it as an impulse.
     this.shortTermEnergy = 0.002;        // fast EMA — tracks recent ~5 frames (13ms)
     this.SHORT_TERM_ALPHA = 0.2;         // α for short-term EMA
-    this.IMPULSE_RATIO = 9.0;            // spike 9× recent average = impulse, not speech (looser: prevents speech onset from being rejected)
+    this.IMPULSE_RATIO = 7.0;            // spike 7× recent average = impulse, not speech (balanced: prevents false triggers but allows speech onset)
     this.impulseCooldown = 0;            // frames remaining in post-impulse freeze
     this.IMPULSE_COOLDOWN_FRAMES = 12;   // ~32ms freeze after an impulse (suppresses ringing)
 
