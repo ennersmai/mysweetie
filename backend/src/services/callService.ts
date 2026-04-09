@@ -293,9 +293,11 @@ export class CallService {
         logger.info(`🎵 Received complete audio blob from session ${session.id}: ${data.length} bytes`);
         
         // Store the complete audio file (replaces chunk buffering)
-        if (session.state === CallState.USER_SPEAKING) {
+        // Accept in USER_SPEAKING or AI_PROCESSING to handle race condition where
+        // state changes before binary audio arrives via WebSocket
+        if (session.state === CallState.USER_SPEAKING || session.state === CallState.AI_PROCESSING) {
           session.completeAudioBlob = data;
-          logger.info(`✅ Stored complete audio blob for session ${session.id}`);
+          logger.info(`✅ Stored complete audio blob for session ${session.id} (state: ${session.state})`);
         } else {
           logger.warn(`Received audio blob in unexpected state: ${session.state}`);
         }
